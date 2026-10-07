@@ -623,6 +623,11 @@ PRESETS = {
 # jumps shrink the eyeballs to half size). We don't play that layer yet, so the eyes keep their
 # rest scale.
 EYE_JOINTS = {"LF_eyeSocket", "RT_eyeSocket", "LF_eyeball", "RT_eyeball", "LF_iris", "RT_iris", "LF_pupil", "RT_pupil"}
+# The jump clips (strafe jumps most) stretch the legs up to 1.9 times along the bone, which the
+# user's comparison says never shows in the game: these joints carry flag 0x10, as do the
+# other joints the game drives at run time (arms, spine, cloth), so its leg handling
+# presumably overrides the clips' leg scale. The legs keep their rest scale (our call).
+LEG_JOINTS = {"LF_upleg", "LF_loleg", "RT_upleg", "RT_loleg"}
 
 
 def add_animations(game, w, model, preset):
@@ -674,7 +679,7 @@ def add_animations(game, w, model, preset):
             if node is None:
                 continue
             mapped += 1
-            scales = np.ones_like(clip.scales[:, j]) if g.nodes[node].name in EYE_JOINTS else clip.scales[:, j]
+            scales = np.ones_like(clip.scales[:, j]) if g.nodes[node].name in EYE_JOINTS | LEG_JOINTS else clip.scales[:, j]
             for path, values, kind, fmt in (
                 ("rotation", clip.rotations[:, j], pygltflib.VEC4, "<4f"),
                 ("translation", clip.translations[:, j], pygltflib.VEC3, "<3f"),

@@ -153,9 +153,13 @@ fn on_ready(
 fn follow_attach(rig: Res<ClankRig>, globals: Query<&GlobalTransform>, mut transforms: Query<&mut Transform>) {
     let (Some(root), Some(attach)) = (rig.root, rig.attach) else { return };
     let (Ok(root_global), Ok(attach_global)) = (globals.get(root), globals.get(attach)) else { return };
-    let relative = root_global.affine().inverse() * attach_global.affine();
+    // Only the attach joint's place and turn are matched, not its scale: his backpack clips scale
+    // his a_body to 0.84 (smaller while he rides on Ratchet's back), and undoing that made him
+    // 1.19 times too big.
+    let (_, rotation, translation) = (root_global.affine().inverse() * attach_global.affine()).to_scale_rotation_translation();
     if let Ok(mut t) = transforms.get_mut(root) {
-        *t = Transform::from_matrix(Mat4::from(relative.inverse()));
+        let turn = rotation.inverse();
+        *t = Transform { translation: -(turn * translation), rotation: turn, scale: Vec3::ONE };
     }
 }
 

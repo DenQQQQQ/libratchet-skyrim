@@ -35,6 +35,36 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (late night): Clank's size, and no leg stretch in jumps
+
+The user saw Clank looking too big, and Ratchet's feet stretching far in the strafe jump to his
+right.
+
+### Known (the user's install)
+- **Clank's backpack size:** his backpack clips scale his `a_body` to 0.84, so he's smaller while
+  he rides on Ratchet's back. Since his first commit, the sandbox matched his attach joint to
+  Ratchet's ClankAttach with its scale too, which undid that and drew him 1.19 times too big.
+- **Leg stretch:** many jump clips scale both of Ratchet's leg segments along the bone, as
+  (s, 1/s, 1/s).
+  - The strafe jumps reach s = 1.94, the normal jump 1.73.
+  - They start stretched for the push-off, and some end stretched (a leg reaching down).
+- **Flag 0x10:** `LF/RT_upleg` and `LF/RT_loleg` carry joint flag 0x10. So do `a_body`, the
+  spine, the clavicles and arms, `head_ear` and the scarf's cloth joints: the joints the game
+  drives at run time. Clank has none.
+
+### Built
+- **Clank's attach:** only the attach joint's place and turn are matched, so his own scale stays
+  and he rides at 84%.
+- **The legs keep their rest scale in every clip:** the converter forces it, as it already does
+  for the eyes.
+
+### Derived or assumed
+- **Ignoring the leg scale:** the user's comparison says the stretch never shows in the game. Our
+  guess is that the game's leg handling (foot IK: the 0x10 joints) overrides the clips' leg
+  scale. It wasn't read in RiftApart.exe.
+  - The arms (also 0x10, stretched up to 1.88 in the Hyper-Strike's wind-up) still play their
+    scale.
+
 ## 2026-10-07 (late night): checked against the game: melee on F, strafe-jump flips, the glide
 
 The user played the game to compare, and found:
