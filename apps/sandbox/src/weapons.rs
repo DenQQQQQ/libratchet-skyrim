@@ -414,10 +414,10 @@ fn fire(
 ) {
     let dt = time.delta_secs();
     let (Ok(p), Ok(cam)) = (players.single(), cams.single()) else { return };
-    // Swinging, dashing or throwing the wrench, the gun doesn't fire (a dash suspends the
-    // weapon in the game, and a throw holds the melee grip until the catch).
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash)
-        || wrench.as_ref().is_some_and(|w| w.throwing());
+    // Swinging, dashing, on a wall or throwing the wrench, the gun doesn't fire (a dash suspends
+    // the weapon in the game, a wall stick holsters it until he's off the wall, and a throw
+    // holds the melee grip until the catch).
+    let busy = weapon_away(p.sim.state()) || wrench.as_ref().is_some_and(|w| w.throwing());
     let target = match scripted.target {
         Some(t) if scripted.active => t,
         _ => crosshair_target(cam, &level, &dummies, AIM_RANGE * settings.scale),
@@ -797,9 +797,19 @@ fn blasts(
 }
 
 
-/// The glove is on (and his own right glove off) while the Shatterbomb is out.
-fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, mut vis: Query<&mut Visibility>) {
-    let on = arsenal.slot == Slot::Shatterbomb;
+/// Moves that put the weapon away: melee (the wrench is out), dashes (the game suspends the
+/// weapon) and wall sticks with their jumps (the game holsters it).
+pub fn weapon_away(state: MoveState) -> bool {
+    matches!(
+        state,
+        MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash | MoveState::WallStick | MoveState::WallJump
+    )
+}
+
+/// The glove is on (and his own right glove off) while the Shatterbomb is out, except on a wall.
+fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, players: Query<&Player>, mut vis: Query<&mut Visibility>) {
+    let walled = players.single().is_ok_and(|p| matches!(p.sim.state(), MoveState::WallStick | MoveState::WallJump));
+    let on = arsenal.slot == Slot::Shatterbomb && !walled;
     for (entity, show) in [(glove.holder, on), (glove.bare, !on)] {
         if let Some(e) = entity
             && let Ok(mut v) = vis.get_mut(e)
@@ -810,11 +820,10 @@ fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, mut vis: Query<&mu
 }
 
 /// The gun shows in the hand while the pistol is out, except during melee and wrench throws
-/// (when the wrench is) and dashes (the game suspends the weapon).
+/// (when the wrench is), dashes and on walls (see `weapon_away`).
 fn gun_visibility(arsenal: Res<Arsenal>, players: Query<&Player>, wrench: Option<Res<crate::wrench::Wrench>>, mut vis: Query<&mut Visibility>) {
     let (Some(gun), Ok(p)) = (arsenal.gun, players.single()) else { return };
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash)
-        || wrench.as_ref().is_some_and(|w| w.throwing());
+    let busy = weapon_away(p.sim.state()) || wrench.as_ref().is_some_and(|w| w.throwing());
     if let Ok(mut v) = vis.get_mut(gun) {
         v.set_if_neq(if arsenal.slot == Slot::BurstPistol && !busy { Visibility::Inherited } else { Visibility::Hidden });
     }

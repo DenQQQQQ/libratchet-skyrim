@@ -107,6 +107,12 @@ pub struct CameraRig {
 }
 
 impl CameraRig {
+    /// The camera's right on the ground plane (x, z).
+    pub fn right(&self) -> Vec2 {
+        let yaw = self.fixed.map_or(self.yaw, |(_, yaw, _, _)| yaw);
+        Vec2::new(yaw.cos(), -yaw.sin())
+    }
+
     /// Starts one of the game's camera shakes (`strength` 0..1).
     pub fn add_shake(&mut self, shake: &camera::Shake, strength: f32) {
         if strength > 0.0 {
@@ -397,8 +403,7 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
         // Melee is F, as in the game.
         melee: keys.pressed(KeyCode::KeyF),
-        aim: None,
-        aim_mode: false,
+        ..Default::default()
     }
 }
 
@@ -421,6 +426,7 @@ pub fn simulate(
     let s = settings.scale;
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
     let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, rig.yaw));
+    input.view_right = rig.right();
     // Aiming, or firing a gun (and just after the newest shot): face where the camera looks and
     // strafe, as in the game. While aiming, melee throws the wrench instead of swinging
     // (wrench.rs).

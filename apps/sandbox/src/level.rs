@@ -118,16 +118,16 @@ pub fn spawn_level(
         add(&mut commands, Block::new(Vec2::new(top.x + d, top.z), 0.0, Vec3::new(3.0, 0.2, 3.0)), Color::srgb(0.2, 0.8, 0.4));
     }
 
-    // Wall-jump shaft: two 14 m walls that take wall jumps (teal), 3.4 m apart across Z, with a
-    // ledge on top of the -Z one. Beside it, an ordinary wall of the same height (grey).
+    // Wall-jump shaft: two 13 m walls that take wall jumps (teal), 3.4 m apart across Z, with a
+    // ledge behind the +Z one. Beside it, an ordinary wall of the same height (grey).
     let shaft = spots::WALL_SHAFT;
     const GAP: f32 = 3.4;
     for side in [-1.0, 1.0] {
-        let wall = Block::new(Vec2::new(shaft.x, shaft.z + side * (GAP * 0.5 + 0.4)), 0.0, Vec3::new(6.0, 14.0, 0.8));
+        let wall = Block::new(Vec2::new(shaft.x, shaft.z + side * (GAP * 0.5 + 0.4)), 0.0, Vec3::new(6.0, 13.0, 0.8));
         add(&mut commands, wall.wall_jump(), Color::srgb(0.15, 0.7, 0.75));
     }
-    add(&mut commands, Block::new(Vec2::new(shaft.x, shaft.z - GAP * 0.5 - 2.8), 0.0, Vec3::new(6.0, 14.0, 4.0)), Color::srgb(0.15, 0.6, 0.65));
-    add(&mut commands, Block::new(Vec2::new(shaft.x - 10.0, shaft.z), 0.0, Vec3::new(0.8, 14.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
+    add(&mut commands, Block::new(Vec2::new(shaft.x, shaft.z + GAP * 0.5 + 2.8), 0.0, Vec3::new(6.0, 13.0, 4.0)), Color::srgb(0.15, 0.6, 0.65));
+    add(&mut commands, Block::new(Vec2::new(shaft.x - 10.0, shaft.z), 0.0, Vec3::new(0.8, 13.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
 
     commands.insert_resource(level);
 }

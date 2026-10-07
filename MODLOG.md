@@ -35,56 +35,88 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
-## 2026-10-08: wall jumps
+## 2026-10-07 (near midnight): wall jumps
 
-The user picked wall jumps next.
+The user picked wall jumps next. The first version had several guesses; a research agent then read
+the wall stick and wall jump states in RiftApart.exe, and the second round replaced them.
 
 ### Known (the user's install)
 - **WallStickConfig:** WallStickNoSlideTime 0.3, WallStickGravity -20, WallStickTerminalVelocity
-  -40, WallStickMinGroundHeight 1, WallStickFacingIntoWallThreshold 50, plus camera fields.
+  -40, WallStickMinGroundHeight 1, WallStickFacingIntoWallThreshold 50, and the wall-jump camera's
+  Accel 300, Decel 500 and MaxSpeedYaw 300.
 - **JumpConfigs.WallJumpConfig:** a fixed 2.18 m height, TimeToPeak 0.41, NoInputTime 0.7,
   NoGlideTime 0.7, DoubleJumpTimeStart 0.7, NoFallTime 1.2, momentum weights 0–0.1.
-- **WallJumpSpeeds:** 5 m/s in every direction.
+- **WallJumpSpeeds** says 5 m/s, but nothing in the exe reads it (below).
 - **Animset:** Wall_Jump_Stick (`wall_jump_transition_stick_left/right`, 0.43 s), Wall_Jump_Slide
   (`wall_jump_stick_slide_left/right`, 0.67 s) and Wall_Jump_InAir (`wall_jump_in_air_left/right`,
-  0.2 s).
-- **The jump's first tick (RiftApart.exe, the momentum research):** wall jumps, like ledge, vault
-  and grind jumps, take off at the jump speeds rather than at the speed he had. NoInputTime holds
-  the take-off velocity.
-- **Wall running:** there's a separate wall-running system (WallRunConfig, WallRunJumpConfig,
-  WallRunJumpSpeeds 8, left/right run clips). It isn't done yet.
+  0.2 s). The in-air clip ends exactly in the stick clip's first pose.
+- **Wall running:** a separate system (WallRunConfig, WallRunJumpConfig, WallRunJumpSpeeds 8,
+  left/right run clips). It isn't done yet.
+
+### Read from RiftApart.exe
+- **When he sticks:** every jump, fall, glide and wall jump looks for a wall each frame. He has to
+  be at least WallInteractionMinHeight (0.5) and WallStickMinGroundHeight (1) above the ground.
+  - On the game's wall-jump surfaces (a flag on the collision surface), facing doesn't matter, and
+    he can stick any number of times in one air time.
+  - Plain walls need him facing within 50° of the wall (or pushing the stick into it), once per
+    air time. Here only marked walls stick, so those rules don't come up.
+- **The jump-off's block:** for 0.5 s after a jump-off, no wall within 7.5 m of the take-off point
+  takes him (a 15 × 15 m box along the wall), the opposite wall included. Landing ends it.
+- **On the wall:**
+  - He faces it, holds still for NoSlideTime, then slides (gravity -20, down to -40).
+  - Once he slides below WallStickMinGroundHeight, he lets go and falls.
+  - The weapon is put away on the wall and drawn again after (not between the stick and its jump).
+- **The jump off:**
+  - He goes straight out along the wall's normal at the jump run speed (hero_shared's
+    JumpSpeedConfig RunSpeedMax, 6), as if the stick were pushed all the way. WallJumpSpeeds isn't
+    read.
+  - NoInputTime (0.7 s) holds that velocity. After it, he blends with momentum weights 0–1.4,
+    fixed in the exe (the config's 0–0.1 only apply behind a flag we haven't identified).
+- **The side:**
+  - The camera picks the left or right clips: the right ones when the wall faces against the
+    camera's X axis.
+  - The jump off turns him along the wall, to his left or his right by that side, rather than
+    out from it.
 
 ### Built
 - **libratchet:**
-  - **New states:** `WallStick` and `WallJump`, with Contact carrying the wall the last move ran
-    into (its normal, and whether it takes wall jumps).
-  - **Sticking:** airborne against a wall-jump wall, at least 1 m up and facing within 50° of
-    straight into it, he sticks. He holds for 0.3 s, then slides at 20 m/s² up to 40 m/s, and
-    slides off its edge into a fall.
-  - **Jumping off:** jump straight away from the wall at 5 m/s, unsteerable for 0.7 s, peaking
-    2.18 m up. He turns to face where it goes.
-  - **Events:** `WallStuck` and `WallJumped`, also in the C API (states 10/11, event bits 12/13).
-- **Tuning:** loads the three configs, with the game's values as the defaults.
-- **Tests:** 37 libratchet tests pass. New ones cover sticking, holding, sliding, the jump off,
-  and ordinary walls or low heights not sticking.
+  - **States and events:** `WallStick` and `WallJump`, `WallStuck` and `WallJumped`; in the C API,
+    states 10/11 and event bits 12/13. Contact carries the wall the last move ran into (its normal,
+    and whether it takes wall jumps).
+  - **The rules above:** sticking, the slide, letting go near the ground, and the jump off with
+    its 0.5 s block. Gliding into a wall sticks too.
+  - **The camera:** `Input::view_right` (C: `view_right_x/z`) is the camera's right;
+    `wall_right()` (C: `wall_right` in the step result) says which clips fit.
+  - **Tuning:** loads WallStickConfig and WallJumpConfig, with the game's values as defaults. The
+    unused WallJumpSpeeds is gone.
+  - **Tests:** 41 pass. New ones cover the block, sticking whichever way he faces, plain walls,
+    letting go near the ground, and turning off the wall toward the camera.
 - **Sandbox:**
-  - A wall-jump shaft: two teal 14 m walls 3.4 m apart, a ledge on top, and an ordinary grey wall
-    beside it.
-  - The level's blocks can take wall jumps, and its collision reports the wall it hit.
-  - The six clips, by side; the clip's sounds play.
-  - Pressing 0.2 s after each landing on a wall, each wall jump climbs about 1.9 m; seven clear
-    the shaft.
-- **Demo:** `--demo-part walljump`, shots `70_wall_shaft` … `74_ordinary_wall`.
+  - **The shaft:** two teal 13 m wall-jump walls 3.4 m apart, a ledge behind the +Z one, and a
+    plain grey wall beside them.
+  - **The clips:** the stick clip, then the slide loop once it's over. In the air, the in-air clip
+    for the wall ahead (it ends in that wall's stick pose), then the fall once he's coming down
+    fast.
+  - **The weapons:** the pistol and glove are put away on the wall, with no firing or throwing,
+    and drawn again after.
+- **Demo (`--demo-part walljump`):**
+  - Six wall jumps up the shaft onto the ledge, one press every 0.7 s, about 2 m each. He reaches
+    the other wall in 0.43 s but can't take it before 0.5 s.
+  - Then a stick, slide and let-go, and the plain wall.
+  - Shots `70_wall_shaft` … `74_ordinary_wall` and `73b_wall_slide`; video
+    `recordings/wall_jumps.mp4`.
 
 ### Derived or assumed
-These wait on a research agent reading RiftApart.exe:
-- **Which walls take wall jumps:** we mark them in the level. How the game marks them isn't read
+- **Which walls take wall jumps:** we mark them in the level. The game's surface flag isn't named
   yet.
-- **Facing on the wall:** we have him face the wall.
-- **The left/right clips:** picked by which way he was heading along the wall.
-- **Re-sticking:** no sticking back onto the wall just jumped off.
+- **The camera's X axis:** we take it as its right; the clips agree (he turns toward the camera).
+- **The in-air clip's side:** the wall ahead's (taken as facing back at the one he left), since the
+  clip ends in that wall's stick pose. The exe reads that side from a camera call we haven't
+  identified.
+- **Turning in the air:** from along the wall round to where he's going, at our air turn rate.
 - **Air moves:** sticking gives his double jump and air dash back.
 - **Holding him on the wall:** pressing him into it at 0.5 m/s keeps it reported; that's ours.
+- **The wall-jump camera:** the game turns the camera during wall jumps; we don't yet.
 
 ## 2026-10-07 (late night): Clank's size, and no leg stretch in jumps
 

@@ -439,11 +439,11 @@ pub struct Tuning {
     pub aim_back_speed: f32,
     pub aim_single_jump: JumpParams,
     pub aim_double_jump: JumpParams,
-    /// Wall jumps: sticking to the wall, the jump off it, and its speeds (the game's
-    /// WallStickConfig, WallJumpConfig and WallJumpSpeeds).
+    /// Wall jumps: sticking to the wall and the jump off it (the game's WallStickConfig and
+    /// WallJumpConfig). The jump off goes at the normal jump speeds: hero_traversal's
+    /// WallJumpSpeeds is never read (RiftApart.exe).
     pub wall_stick: WallStickParams,
     pub wall_jump: JumpParams,
-    pub wall_jump_speeds: SpeedParams,
     /// Size multiplier applied by `scaled`; 1.0 means Ratchet-sized.
     pub scale: f32,
     /// Where these values came from, for display.
@@ -540,7 +540,6 @@ impl Default for Tuning {
                 no_input_time: 0.7,
                 ..JumpParams::FALLBACK
             },
-            wall_jump_speeds: SpeedParams { walk_min: 0.0, walk_max: 5.0, run_min: 5.0, run_max: 5.0, walk_run_threshold: 0.5 },
             scale: 1.0,
             source: "generic defaults".into(),
         }
@@ -582,7 +581,6 @@ impl Tuning {
             aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
             wall_stick: wall_stick_from(&traversal["WallStickConfig"], &base.wall_stick),
             wall_jump: jump_from(&jumps["WallJumpConfig"]).unwrap_or(base.wall_jump),
-            wall_jump_speeds: speeds_from(&traversal["WallJumpSpeeds"], &base.wall_jump_speeds),
             source: format!("Rift Apart configs ({})", dir.display()),
             ..base
         })
@@ -612,7 +610,6 @@ impl Tuning {
             aim_double_jump: self.aim_double_jump.scaled(s),
             wall_stick: self.wall_stick.scaled(s),
             wall_jump: self.wall_jump.scaled(s),
-            wall_jump_speeds: self.wall_jump_speeds.scaled(s),
             scale: self.scale * s,
             ..self.clone()
         }

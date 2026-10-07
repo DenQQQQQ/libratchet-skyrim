@@ -34,6 +34,10 @@ pub struct RatchetInput {
     pub aiming: u8,
     pub aim_x: f32,
     pub aim_z: f32,
+    /// The camera's right on the ground plane (zero without one): wall jumps take their side
+    /// from it, as in the game.
+    pub view_right_x: f32,
+    pub view_right_z: f32,
 }
 
 #[repr(C)]
@@ -76,7 +80,7 @@ pub struct RatchetStepResult {
     /// Move the character by `velocity * dt` this tick.
     pub velocity: RatchetVec3,
     /// 0 ground, 1 jump, 2 double jump, 3 fall, 4 glide, 5 dash, 6 air dash, 7 melee,
-    /// 8 Hyper-Strike, 9 Hyper-Strike landing.
+    /// 8 Hyper-Strike, 9 Hyper-Strike landing, 10 wall stick, 11 wall jump.
     pub state: u32,
     /// `RATCHET_EVENT_*` bits for this tick.
     pub events: u32,
@@ -86,6 +90,8 @@ pub struct RatchetStepResult {
     pub landed_fall_speed: f32,
     /// Combo swing (0 = first) in progress, or of this tick's swing/hit event.
     pub melee_swing: u32,
+    /// On a wall or in a wall jump: 1 if the game's right wall clips fit, 0 for the left.
+    pub wall_right: u8,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -196,6 +202,7 @@ pub unsafe extern "C" fn ratchet_step(
         melee: input.melee != 0,
         aim: (input.aiming != 0).then(|| Vec2::new(input.aim_x, input.aim_z)),
         aim_mode: input.aiming == 1,
+        view_right: Vec2::new(input.view_right_x, input.view_right_z),
     };
     let contact = Contact {
         grounded: contact.grounded != 0,
@@ -244,6 +251,7 @@ pub unsafe extern "C" fn ratchet_step(
         facing_yaw: sim.sim.facing_yaw(),
         landed_fall_speed,
         melee_swing,
+        wall_right: sim.sim.wall_right() as u8,
     }
 }
 

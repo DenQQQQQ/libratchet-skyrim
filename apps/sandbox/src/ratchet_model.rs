@@ -261,6 +261,8 @@ pub struct Rig {
     glide_lean_value: f32,
     /// How fast he's turning (rad/s, + to his left).
     turn_rate: f32,
+    /// On a wall: whether the stick clip is over (then the slide loop plays).
+    wall_looping: bool,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -418,6 +420,7 @@ fn on_ready(
         clips: HashMap::new(),
         current_clip: None,
         prev_state: None,
+        wall_looping: false,
         land_timer: 0.0,
         throw_layer: None,
         throw_time: None,
@@ -753,8 +756,16 @@ fn play_clips(
     let v = p.sim.velocity() / settings.scale;
     let speed = Vec2::new(v.x, v.z).length();
     let state = p.sim.state();
-    let airborne = |s: Option<MoveState>| matches!(s, Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash));
+    let airborne = |s: Option<MoveState>| {
+        matches!(s, Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash | MoveState::WallJump))
+    };
     let landed = state == MoveState::Ground && airborne(rig.prev_state);
+    // The game puts the weapon away on the wall and draws it again after (not between the
+    // stick and its jump).
+    let on_wall = |s: Option<MoveState>| matches!(s, Some(MoveState::WallStick | MoveState::WallJump));
+    if on_wall(rig.prev_state) && !on_wall(Some(state)) {
+        rig.draw_pending = true;
+    }
     if landed {
         rig.land_timer = if speed > 0.6 { 0.35 } else { 0.3 };
     }
@@ -884,8 +895,18 @@ fn play_clips(
         rig.glide_looping = false;
     }
     let heli_glide = rig.clips.contains_key(glide_intro) && rig.clips.contains_key(glide_loop);
-    // On a wall: onto it (the stick clip), then sliding once he starts down.
-    let wall_sliding = state == MoveState::WallStick && v.y < -0.1;
+    // On a wall: onto it (the stick clip), then the slide loop once that's over, still or
+    // sliding, as the game does. Left or right is the sim's pick (by the camera, as in the game).
+    let (wall_stick, wall_slide, wall_jump) = if p.sim.wall_right() {
+        ("wall_stick_right", "wall_slide_right", "wall_jump_right")
+    } else {
+        ("wall_stick_left", "wall_slide_left", "wall_jump_left")
+    };
+    if state != MoveState::WallStick {
+        rig.wall_looping = false;
+    } else if rig.current_clip == Some(wall_stick) && rig.clips.get(wall_stick).and_then(|&n| player.animation(n)).is_some_and(|a| a.is_finished()) {
+        rig.wall_looping = true;
+    }
     let want: &'static str = match state {
         MoveState::Ground if rig.land_timer > 0.0 && rig.strafe_landing.is_some() => rig.strafe_landing.unwrap_or("land"),
         MoveState::Ground if gun_aim && speed > 0.6 => strafe,
@@ -911,11 +932,11 @@ fn play_clips(
         MoveState::Melee => MELEE_CLIPS[p.sim.melee_swing().unwrap_or(0).min(MELEE_CLIPS.len() - 1)],
         MoveState::Smash => "smash_intro",
         MoveState::SmashLand => "smash",
-        MoveState::WallStick if p.sim.wall_on_left() => if wall_sliding { "wall_slide_left" } else { "wall_stick_left" },
-        MoveState::WallStick => if wall_sliding { "wall_slide_right" } else { "wall_stick_right" },
-        MoveState::WallJump if v.y < 0.0 => "fall",
-        MoveState::WallJump if p.sim.wall_on_left() => "wall_jump_left",
-        MoveState::WallJump => "wall_jump_right",
+        MoveState::WallStick if rig.wall_looping => wall_slide,
+        MoveState::WallStick => wall_stick,
+        // The in-air clip holds its last pose (the stick) until he reaches the wall, or falls.
+        MoveState::WallJump if v.y < -5.0 => "fall",
+        MoveState::WallJump => wall_jump,
     };
     let want = match carried(want) {
         c if carrying && rig.clips.contains_key(c) => c,

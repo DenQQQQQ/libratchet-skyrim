@@ -159,9 +159,9 @@ fn held_wrench(
     wrench.show = if in_melee { SHOW_AFTER } else { (wrench.show - time.delta_secs()).max(0.0) };
     wrench.throw_anim = (wrench.throw_anim - time.delta_secs()).max(0.0);
     let out = arsenal.is_none();
-    // A dash puts the weapon away for its length (as in the game).
-    let dashing = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash);
-    let want = wrench.flight.is_none() && !dashing && (out || wrench.show > 0.0);
+    // A dash puts the weapon away for its length, and a wall until he's off it (as in the game).
+    let away = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash | MoveState::WallStick | MoveState::WallJump);
+    let want = wrench.flight.is_none() && !away && (out || wrench.show > 0.0);
     if let Some(held) = wrench.held
         && let Ok(mut v) = visibility.get_mut(held)
     {
@@ -233,7 +233,10 @@ fn start_throw(
         }
     }
     let busy = wrench.flight.is_some() || wrench.releasing.is_some();
-    if !requested || busy || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand) {
+    if !requested
+        || busy
+        || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::WallStick | MoveState::WallJump)
+    {
         return;
     }
     let dir = if from_script { p.sim.facing_dir() } else { Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos()) };

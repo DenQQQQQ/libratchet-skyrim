@@ -27,6 +27,8 @@ typedef struct RatchetInput {
     uint8_t aiming;       /* face (aim_x, aim_z) and strafe: 1 = aim mode (aim button held: slower,
                              aim-mode jumps), 2 = strafing while firing from the hip (normal speeds) */
     float aim_x, aim_z;
+    float view_right_x, view_right_z; /* the camera's right on the ground plane (zero without one):
+                                         wall jumps take their side from it */
 } RatchetInput;
 
 typedef struct RatchetContact {
@@ -79,6 +81,7 @@ typedef struct RatchetStepResult {
     float facing_yaw;        /* radians, atan2(x, z) */
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
+    uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
 } RatchetStepResult;
 
 typedef struct RatchetSwingInfo {

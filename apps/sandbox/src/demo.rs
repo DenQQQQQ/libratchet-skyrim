@@ -677,23 +677,37 @@ fn wall_jumps() -> Vec<Act> {
         hold(0.5, Vec2::ZERO, false),
         hold(0.1, z, false),
         hold(0.25, z, true),
-        hold(0.35, z, false),
+        hold(0.15, z, false),
         Act::Shot("71_wall_stick"),
     ];
-    // Each jump presses 0.2 s after landing on the wall (before it starts sliding); the next wall
-    // comes 0.8 s later, about 1.9 m higher. The seventh clears the top onto the ledge.
-    for i in 0..7 {
-        acts.extend([hold(0.2, Vec2::ZERO, false), hold(0.05, Vec2::ZERO, true), hold(0.3, Vec2::ZERO, false)]);
+    // Each jump presses about 0.2 s after landing on the wall (before it starts sliding). He
+    // reaches the other wall in about 0.43 s but can't take it until the jump-off's 0.5 s block
+    // is over, so the next press comes 0.7 s after this one, about 2 m higher. The sixth clears
+    // the top onto the ledge.
+    for i in 0..6 {
+        acts.extend([hold(0.15, Vec2::ZERO, false), hold(0.05, Vec2::ZERO, true), hold(0.3, Vec2::ZERO, false)]);
         if i == 1 {
             acts.push(Act::Shot("72_wall_jump"));
         }
-        acts.push(hold(0.25, Vec2::ZERO, false));
+        acts.push(hold(0.2, Vec2::ZERO, false));
     }
     acts.extend([
         // On the ledge.
         hold(1.0, Vec2::ZERO, false),
         Act::Shot("73_wall_shaft_top"),
         hold(0.6, Vec2::ZERO, false),
+        // Left on the wall: a double jump onto it, held until he slides down to a metre above
+        // the floor and lets go.
+        Act::Teleport(shaft + Vec3::new(0.0, 0.0, -1.2)),
+        hold(0.12, z, false),
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.1, z, false),
+        hold(0.15, z, true),
+        hold(0.05, z, false),
+        hold(0.15, z, true),
+        hold(0.45, Vec2::ZERO, false),
+        Act::Shot("73b_wall_slide"),
+        hold(1.3, Vec2::ZERO, false),
         // An ordinary wall: he only bumps into it.
         Act::Teleport(shaft + Vec3::new(-7.5, 0.0, 0.0)),
         hold(0.12, -Vec2::X, false),
@@ -898,7 +912,7 @@ fn run_script(
             Act::CloseUp(on) => rig.close_up = on,
             Act::Watch { focus, yaw, pitch, distance } => rig.fixed = Some((focus, yaw, pitch, distance)),
             Act::Hold { secs, dir, jump, dash, melee } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, aim: None, aim_mode: false });
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, ..Default::default() });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

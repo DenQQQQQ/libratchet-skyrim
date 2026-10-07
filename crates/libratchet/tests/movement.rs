@@ -12,15 +12,18 @@ struct Flat {
     pos: Vec3,
     contact: Contact,
     floor: bool,
-    /// A wall that takes wall jumps at this x, facing -X (none if `None`).
+    /// A wall at this x (none if `None`), facing -X (`wall_facing` -1, he's on its -X side) or
+    /// +X (1); `wall_sticky` if it takes wall jumps.
     wall_x: Option<f32>,
+    wall_facing: f32,
+    wall_sticky: bool,
     time: f32,
     events: Vec<(f32, Event)>,
 }
 
 impl Flat {
     fn new(tuning: Tuning) -> Self {
-        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, time: 0.0, events: vec![] }
+        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, wall_facing: -1.0, wall_sticky: true, time: 0.0, events: vec![] }
     }
 
     /// No floor: the character starts in the air and falls.
@@ -32,7 +35,7 @@ impl Flat {
     }
 
     fn tick(&mut self, jump: bool, stick: Vec2) {
-        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false, aim: None, aim_mode: false });
+        self.tick_with(Input { move_dir: stick, jump, ..Default::default() });
     }
 
     fn tick_with(&mut self, input: Input) {
@@ -46,10 +49,10 @@ impl Flat {
         }
         let mut wall = None;
         if let Some(x) = self.wall_x
-            && self.pos.x >= x
+            && (self.pos.x - x) * self.wall_facing <= 0.0
         {
             self.pos.x = x;
-            wall = Some(WallContact { normal: Vec2::new(-1.0, 0.0), sticky: true });
+            wall = Some(WallContact { normal: Vec2::new(self.wall_facing, 0.0), sticky: self.wall_sticky });
         }
         self.contact = Contact {
             grounded,
@@ -316,12 +319,12 @@ fn ground_dash_covers_its_distance_including_braking() {
             h.tick(false, fwd);
         }
         let start = h.pos.z;
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, ..Default::default() });
         assert_eq!(h.r.state(), MoveState::Dash);
         let mut peak: f32 = 0.0;
         let mut ticks = 1;
         while h.r.state() == MoveState::Dash && ticks < 240 {
-            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
+            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, ..Default::default() });
             peak = peak.max(h.r.velocity().z);
             ticks += 1;
         }
@@ -342,16 +345,16 @@ fn air_dash_is_flat_and_once_per_air_time() {
     let fwd = Vec2::new(0.0, 1.0);
     h.rise(true);
     let start = h.pos;
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, ..Default::default() });
     assert_eq!(h.r.state(), MoveState::AirDash);
     while h.r.state() == MoveState::AirDash {
         assert!((h.pos.y - start.y).abs() < 0.05, "air dash changed height to {}", h.pos.y);
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false, aim: None, aim_mode: false });
+        h.tick_with(Input { move_dir: fwd, jump: false, ..Default::default() });
     }
     let travelled = h.pos.z - start.z;
     assert!((travelled - t.air_dash.distance).abs() < 0.3, "air dash went {travelled} m");
     // A second press in the same air time does nothing.
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, ..Default::default() });
     assert_ne!(h.r.state(), MoveState::AirDash);
     assert_eq!(h.count(|e| *e == Event::AirDashed), 1);
     // After landing it's available again.
@@ -360,7 +363,7 @@ fn air_dash_is_flat_and_once_per_air_time() {
     }
     assert_eq!(h.r.state(), MoveState::Ground);
     h.jump(0.2, 0.25);
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, ..Default::default() });
     assert_eq!(h.r.state(), MoveState::AirDash);
 }
 
@@ -810,7 +813,7 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     }
     assert!(h.pos.y < stuck_at - 0.05, "didn't slide");
     assert_eq!(h.r.state(), MoveState::WallStick);
-    // The jump goes straight away from the wall at the wall jump's speed, and the stick can't
+    // The jump goes straight away from the wall at the jump run speed, and the stick can't
     // steer it back for NoInputTime.
     let take_off = h.pos;
     h.tick(true, toward);
@@ -820,10 +823,82 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     while h.time - start < t.wall_jump.no_input_time - 2.0 * DT {
         h.tick(true, toward);
         peak = peak.max(h.pos.y);
-        assert!(close(h.r.velocity().x, -t.wall_jump_speeds.run_max, 0.05), "x speed {} at {:.2} s", h.r.velocity().x, h.time - start);
+        assert!(close(h.r.velocity().x, -t.air_speeds.run_max, 0.05), "x speed {} at {:.2} s", h.r.velocity().x, h.time - start);
     }
     assert!(close(peak - take_off.y, t.wall_jump.height_min, 0.08), "peaked {:.2} m up", peak - take_off.y);
     assert!(h.pos.x < take_off.x - 3.0, "only {:.2} m from the wall", take_off.x - h.pos.x);
+}
+
+#[test]
+fn the_opposite_wall_takes_him_only_after_the_jump_offs_block() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.wall_x = Some(1.0);
+    h.pos = Vec3::new(0.0, 3.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None };
+    while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    assert_eq!(h.r.state(), MoveState::WallStick, "never stuck");
+    // The shaft's other wall, 1.5 m behind him: he reaches it well within the block.
+    h.wall_x = Some(-0.5);
+    h.wall_facing = 1.0;
+    h.tick(true, Vec2::ZERO);
+    assert_eq!(h.r.state(), MoveState::WallJump);
+    let start = h.time;
+    let mut reached = None;
+    while h.r.state() == MoveState::WallJump && h.time - start < 1.0 {
+        h.tick(true, Vec2::ZERO);
+        if reached.is_none() && h.contact.wall.is_some() {
+            reached = Some(h.time - start);
+        }
+    }
+    let reached = reached.expect("never reached the other wall");
+    let stuck = h.time - start;
+    assert!(reached < 0.4, "reached it after {reached:.2} s");
+    assert_eq!(h.r.state(), MoveState::WallStick);
+    assert!((0.48..0.55).contains(&stuck), "stuck {stuck:.2} s after the jump-off");
+}
+
+#[test]
+fn a_wall_jump_turns_off_the_wall_toward_the_camera() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.wall_x = Some(1.0);
+    h.pos = Vec3::new(0.9, 3.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None };
+    // The camera looks along +Z from -Z, so the wall (at +X) is on its left.
+    let view_right = Vec2::new(-1.0, 0.0);
+    let input = |jump| Input { move_dir: Vec2::new(1.0, 0.0), jump, view_right, ..Default::default() };
+    while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+        h.tick_with(input(false));
+    }
+    assert_eq!(h.r.state(), MoveState::WallStick, "never stuck");
+    assert!(!h.r.wall_right(), "a wall on the left takes the left clips");
+    h.tick_with(Input { jump: true, view_right, ..Default::default() });
+    assert_eq!(h.r.state(), MoveState::WallJump);
+    // The jump's clip is for the wall ahead, on the right; he faces the camera, then turns.
+    assert!(h.r.wall_right());
+    let facing = |h: &Flat| Vec2::new(h.r.facing_yaw().sin(), h.r.facing_yaw().cos());
+    assert!(facing(&h).dot(Vec2::new(0.0, -1.0)) > 0.95, "faces {:?}", facing(&h));
+    for _ in 0..24 {
+        h.tick_with(Input { jump: true, view_right, ..Default::default() });
+    }
+    assert!(facing(&h).dot(Vec2::new(-1.0, 0.0)) > 0.99, "faces {:?}", facing(&h));
+}
+
+#[test]
+fn on_a_wall_jump_wall_he_sticks_facing_any_way() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.wall_x = Some(1.0);
+    h.pos = Vec3::new(0.95, 3.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None };
+    // Backing into it while aiming away from it.
+    for _ in 0..10 {
+        h.tick_with(Input { move_dir: Vec2::new(1.0, 0.0), aim: Some(Vec2::new(-1.0, 0.0)), ..Default::default() });
+    }
+    assert_eq!(h.count(|e| *e == Event::WallStuck), 1);
 }
 
 #[test]
@@ -839,14 +914,33 @@ fn ordinary_walls_and_low_heights_dont_stick() {
         h.tick(false, toward);
     }
     assert_eq!(h.count(|e| *e == Event::WallStuck), 0);
-    // Facing away from the wall: no stick either.
+    // A plain wall, high up and running into it: no stick either.
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
-    h.pos = Vec3::new(0.95, 3.0, 0.0);
+    h.wall_sticky = false;
+    h.pos = Vec3::new(0.9, 3.0, 0.0);
     h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None };
-    h.tick_with(Input { move_dir: Vec2::new(1.0, 0.0), aim: Some(Vec2::new(-1.0, 0.0)), ..Default::default() });
-    for _ in 0..10 {
-        h.tick_with(Input { move_dir: Vec2::new(1.0, 0.0), aim: Some(Vec2::new(-1.0, 0.0)), ..Default::default() });
+    for _ in 0..30 {
+        h.tick(false, toward);
     }
+    assert!(h.contact.wall.is_some(), "never reached the wall");
     assert_eq!(h.count(|e| *e == Event::WallStuck), 0);
+}
+
+#[test]
+fn sliding_down_near_the_ground_lets_go() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.wall_x = Some(1.0);
+    h.pos = Vec3::new(0.9, 2.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(2.0), hit_ceiling: false, wall: None };
+    while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    assert_eq!(h.r.state(), MoveState::WallStick, "never stuck");
+    while h.r.state() == MoveState::WallStick && h.time < 5.0 {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert_eq!(h.r.state(), MoveState::Fall);
+    assert!(h.pos.y < t.wall_stick.min_ground_height && h.pos.y > t.wall_stick.min_ground_height - 0.2, "let go at {:.2} m", h.pos.y);
 }
