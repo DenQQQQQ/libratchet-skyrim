@@ -380,6 +380,22 @@ PRESETS = {
             "land": "neutral_jump_single_land_hero_ratchet",
             "dash": "dash_n_hero_ratchet",
             "air_dash": "dash_air_n_hero_ratchet",
+            # The other directions (the Dash and Air_Dash drivers' eight clips), clockwise from
+            # ahead, for dashing while strafing.
+            "dash_ne": "dash_ne_hero_ratchet",
+            "dash_e": "dash_e_hero_ratchet",
+            "dash_se": "dash_se_hero_ratchet",
+            "dash_s": "dash_s_hero_ratchet",
+            "dash_sw": "dash_sw_hero_ratchet",
+            "dash_w": "dash_w_hero_ratchet",
+            "dash_nw": "dash_nw_hero_ratchet",
+            "air_dash_ne": "dash_air_ne_hero_ratchet",
+            "air_dash_e": "dash_air_e_hero_ratchet",
+            "air_dash_se": "dash_air_se_hero_ratchet",
+            "air_dash_s": "dash_air_s_hero_ratchet",
+            "air_dash_sw": "dash_air_sw_hero_ratchet",
+            "air_dash_w": "dash_air_w_hero_ratchet",
+            "air_dash_nw": "dash_air_nw_hero_ratchet",
             # OmniWrench: the 3-hit combo, Hyper-Strike (intro in the air, then the slam) and
             # the throw. The wrench model has matching clips (preset "wrench").
             "melee_1": "weapon_wrench_hit_1_hero_ratchet",
@@ -451,6 +467,24 @@ PRESETS = {
             "wrench_strafe_walk_sw": "strafe_wrench_walk_sw_hero_ratchet",
             "wrench_strafe_walk_w": "strafe_wrench_walk_w_hero_ratchet",
             "wrench_strafe_walk_nw": "strafe_wrench_walk_nw_hero_ratchet",
+            # Holding the OmniWrench (the animset's picks for kGripStyleMelee, and for most moves
+            # with the glove grip, kGripStyleThrown): idle, walk, run with its turn leans, the
+            # jumps and the landings.
+            "wrench_idle": "weapon_wrench_idle_hero_ratchet",
+            "wrench_walk": "walk_forward_wrench_hero_ratchet",
+            "wrench_run": "weapon_wrench_run_hero_ratchet",
+            "wrench_run_lean_left": "weapon_wrench_run_lean_left_hero_ratchet",
+            "wrench_run_lean_right": "weapon_wrench_run_lean_right_hero_ratchet",
+            "wrench_jump": "jump_single_wrench_hero_ratchet",
+            "wrench_double_jump": "jump_double_wrench_hero_ratchet",
+            "wrench_land": "jump_single_land_wrench_hero_ratchet",
+            "wrench_land_walk": "jump_single_land_walk_wrench_hero_ratchet",
+            "wrench_land_run": "jump_single_land_run_wrench_hero_ratchet",
+            # Gliding with the wrench in hand, and with the glove (an empty hand).
+            "wrench_glide": "helipack_wrench_glide_loop_hero_ratchet",
+            "glove_glide": "helipack_glove_hand_glide_loop",
+            # The glove's hand pose (the GloveAdditive driver), layered while the glove is on.
+            "glove_hand": "weapon_glove_hand_partial",
         },
     },
     "burstpistol": {
@@ -501,7 +535,18 @@ PRESETS = {
             "melee_3": "weapon_wrench_hit_3_wpn_wrench",
             "smash_intro": "weapon_wrench_hit_smash_intro_wpn_wrench",
             "smash": "weapon_wrench_hit_smash_wpn_wrench",
+            # Its own clip while Ratchet just holds it (every scale back to 1: the third
+            # hit shrinks the back hammer away).
+            "idle": "idle_wpn_wrench",
         },
+    },
+    "shatterbomb_glove": {
+        # The glove Ratchet wears on his right hand while the Shatterbomb is out (its weapon
+        # config's GloveModelOverride), skinned to his skeleton.
+        "model": "characters/hero/hero_ratchet/bangle_set/hero_ratchet_bangle_glove_rt_magnamissile/hero_ratchet_bangle_glove_magnamissile.model",
+        "out": "shatterbomb_glove.glb",
+        "clip_dir": "characters/hero/hero_ratchet/animations/",
+        "clips": {},
     },
     "clank": {
         # His colour maps are dark: in the game the silver comes from metallic reflections.

@@ -35,6 +35,99 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (night): playtest fixes: the wrench in hand, the Shatterbomb's glove, dashes
+
+The user's playtest found five problems:
+- the wrench could swing (and Hyper-Strike) while it was thrown;
+- the wrench didn't show while walking with it selected, and the Shatterbomb showed nothing;
+- half of the wrench's head vanished after the combo;
+- dashing while aiming looked wrong;
+- a dash and then a jump gave a huge speed boost.
+
+Two research subagents read the game (jump momentum in RiftApart.exe; the dash clips and their
+rules). The Ghidra MCP server timed out at Claude Code's 30 s startup limit (it takes about
+23 s warm: Python imports, Ghidra's JVM, the project), so the agents used a read-only pyghidra
+helper that doesn't lock the project.
+
+### Known (the user's install)
+- **Grips.** Ratchet's animset picks clips by grip style:
+  - With the wrench (kGripStyleMelee) and with grenades (kGripStyleThrown), standing, walking,
+    running, jumping and landing use the wrench-carrying clips. These are `weapon_wrench_idle`,
+    `walk_forward_wrench`, `weapon_wrench_run` with its turn leans, `jump_single_wrench`,
+    `jump_double_wrench` and the three wrench landings.
+  - Gliding uses `helipack_wrench_glide_loop`, or `helipack_glove_hand_glide_loop` with the
+    glove.
+  - Standing while aiming with the glove uses `weapon_glove_idle`.
+- **The Shatterbomb's glove.** Its weapon config's GloveModelOverride names a glove model
+  (`hero_ratchet_bangle_glove_magnamissile`).
+  - It's skinned to Ratchet's skeleton: his right forearm, wrist and fingers.
+  - The animset's GloveAdditive driver layers `weapon_glove_hand_partial` over it, a held pose of
+    the hand's 21 joints.
+- **The wrench's own clips.**
+  - Its third-hit clip holds the back hammer at 3% scale for the whole swing (a static scale in
+    the clip).
+  - Between swings it holds `idle_wpn_wrench`, its rest pose with every scale at 1. We never
+    played that, so after a combo the back hammer stayed shrunk.
+- **Pose clips.** Some clips have no sample data, only the base state (a held pose).
+  - They have base records for their real joints only (the header's joint count at 0x20), not
+    for the 0xFFFFFFFF padding hash that ends the hash list.
+  - The wrench's Hyper-Strike clips have the same short base, with samples.
+- **Melee while the wrench is out (RiftApart.exe):** the melee component doesn't start melee
+  while the weapon is thrown.
+- **Dashing (RiftApart.exe and the animset).** The Dash and Air_Dash drivers each have eight
+  clips, `dash_{n,ne,e,se,s,sw,w,nw}` and `dash_air_*`. They're picked by the dash direction
+  relative to Ratchet's facing (the same Strafe_Angle that strafing uses).
+  - Strafing when the dash starts (aiming or firing), he keeps facing the camera through the
+    whole dash, so the dash goes sideways or back relative to him.
+  - Otherwise he faces the dash direction and plays the forward clip.
+  - Both the clip and the strafing flag are set once, when the dash starts.
+  - Without stick input the dash goes ahead (the aim, while strafing).
+  - The dash suspends the weapon: no aim poses, no firing.
+  - A ground dash can be jumped out of from 0.1 s.
+
+### Built
+- **Converter:**
+  - the wrench-carrying set, the glove's hand pose, the wrench's idle and Hyper-Strike clips;
+  - pose clips and short base states decode now (`riftapart_anim.decode`);
+  - the glove model (`shatterbomb_glove.glb`);
+  - the eight-way dashes.
+- **Melee while thrown:** melee does nothing while the wrench is out of the hand (thrown, or
+  leaving it). A press held through the catch doesn't swing either.
+- **The wrench in hand:**
+  - It's in his hand whenever it's the weapon out; with another weapon, only during melee, as
+    before.
+  - It plays its own clip with each swing and the Hyper-Strike, and its idle pose in between,
+    so the back hammer is back after the third hit.
+- **Wrench-carrying clips:** with the wrench or the Shatterbomb out, the moves use the
+  wrench-carrying clips. The run's turn leans work for both runs, and the idle fidgets play with
+  the wrench in hand.
+- **The glove:** with the Shatterbomb out he wears its glove.
+  - The glove's meshes are skinned to his own joints, matched by name (the converter's
+    `_scaled` nodes where he has them).
+  - His own right glove mesh hides, and the hand-pose layer goes on.
+- **Dashes (sim):**
+  - a dash started while strafing keeps him facing the aim (snapped every tick);
+  - a stick under 0.07 counts as no input;
+  - jumping out of a ground dash waits for 0.1 s.
+- **Dashes (sandbox):** each dash plays the clip for its direction. No firing, no aim layers,
+  and the pistol and wrench are put away for its length; a cooked grenade waits.
+- **Tests:** 33 libratchet tests pass (new: the strafing dash, jumping out of a dash).
+- **Demo:** `--demo-part carry`, shots `50_wrench_idle` … `5b_dash_back_aiming`.
+
+### Derived or assumed
+- **The wrench with the glove on:** we assume it isn't in his hand outside melee. The glove-hand
+  clips and the hand pose suggest an empty hand, but the game's rule wasn't found.
+- **The glove's hand pose** plays as an override of those 21 joints (20 times the move clips'
+  weight); how the game blends its GloveAdditive track wasn't read.
+- **The wrench during fidgets:** its fidget clips are in the game's path list but not in the PC
+  build, so it holds its idle pose through his fidgets.
+- **Glove grip, missing animset entries:** the double jump and the fall use the wrench versions,
+  since the animset has no thrown-grip entry for them.
+- **Steering a dash:** the game lets the stick steer a dash's direction while it runs; ours
+  doesn't steer yet.
+- **The ground dash's movement:** the game moves it by the clip's root motion stretched to the
+  config distance. Ours is still the accelerate-and-brake profile from the overnight entry.
+
 ## 2026-10-07: the game's sounds
 
 The user asked for sounds next. A research subagent worked out the game's audio and wrote the

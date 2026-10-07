@@ -11,17 +11,22 @@ use crate::combat::{Dummy, Hits, dummy_contains, hit};
 use crate::level::{Level, ground_distance};
 use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, MouseMelee, Player, Settings, simulate};
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::gltf::Gltf;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot, WorldInstanceReady};
 use libarsenal::{Aim, Projectile, Weapon, WeaponParams};
 use libratchet::MoveState;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
 pub const PISTOL_FILE: &str = "burstpistol.glb";
 pub const GRENADE_FILE: &str = "shatterbomb.glb";
+/// The glove Ratchet wears while the Shatterbomb is out (its weapon config's GloveModelOverride).
+pub const GLOVE_FILE: &str = "shatterbomb_glove.glb";
 /// How far the crosshair ray looks for something to aim at.
 const AIM_RANGE: f32 = 80.0;
 /// Without the converter's ratchet.json, a grenade leaves the hand this long into the throw
@@ -103,6 +108,13 @@ struct WeaponShakes {
     blast: Option<(Shake, f32, f32)>,
 }
 
+/// The Shatterbomb's glove on Ratchet's right hand, and his own right glove, which it replaces.
+#[derive(Resource, Default)]
+struct Glove {
+    holder: Option<Entity>,
+    bare: Option<Entity>,
+}
+
 #[derive(Resource)]
 struct WeaponModels {
     pistol: Option<Handle<Gltf>>,
@@ -136,6 +148,7 @@ struct ArcGizmos;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<ScriptedArsenal>()
+        .init_resource::<Glove>()
         .init_gizmo_group::<ArcGizmos>()
         .add_systems(Startup, |mut store: ResMut<GizmoConfigStore>| {
             let (config, _) = store.config_mut::<ArcGizmos>();
@@ -144,7 +157,7 @@ pub fn plugin(app: &mut App) {
         })
         .add_systems(Startup, setup.after(crate::setup))
         .add_systems(FixedUpdate, (fire, fly_bolts, fly_grenades).chain().after(simulate))
-        .add_systems(Update, (controls, gun_clips, gun_visibility, blasts, throw_arc).chain());
+        .add_systems(Update, (controls, gun_clips, gun_visibility, glove_visibility, blasts, throw_arc).chain());
 }
 
 fn load_weapon(settings: &Settings, file: &str, base: WeaponParams) -> (WeaponParams, String) {
@@ -241,6 +254,37 @@ fn on_gun_ready(
             _ => {}
         }
     }
+}
+
+/// Puts the Shatterbomb's glove on Ratchet (under his model, hidden until the Shatterbomb is
+/// out). Its meshes are skinned to his own joints, matched by name (the converter's
+/// `<joint>_scaled` nodes where he has them, as his own skin does), so it moves with his hand.
+/// `bare` is his right glove mesh, which it replaces.
+pub fn spawn_glove(commands: &mut Commands, assets: &AssetServer, model: Entity, joints: HashMap<String, Entity>, bare: Option<Entity>) {
+    let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(GLOVE_FILE));
+    let holder = commands.spawn((Name::new("Shatterbomb glove"), Transform::default(), Visibility::Hidden)).id();
+    commands.entity(model).add_child(holder);
+    let glove = commands
+        .spawn((WorldAssetRoot(scene), Transform::default()))
+        .observe(
+            move |ev: On<WorldInstanceReady>, children: Query<&Children>, names: Query<&Name>, mut skins: Query<&mut SkinnedMesh>, mut commands: Commands| {
+                commands.entity(ev.entity).insert(Visibility::Inherited);
+                for e in children.iter_descendants(ev.entity) {
+                    let Ok(mut skin) = skins.get_mut(e) else { continue };
+                    for joint in skin.joints.iter_mut() {
+                        let Ok(name) = names.get(*joint) else { continue };
+                        if let Some(&his) = joints.get(&format!("{name}_scaled")).or_else(|| joints.get(name.as_str())) {
+                            *joint = his;
+                        }
+                    }
+                    // Its bounds are where the glove's own skeleton rests, not where his hand is.
+                    commands.entity(e).insert(NoFrustumCulling);
+                }
+            },
+        )
+        .id();
+    commands.entity(holder).add_child(glove);
+    commands.insert_resource(Glove { holder: Some(holder), bare });
 }
 
 /// Number keys pick the weapon; right mouse aims (with any weapon, as in the game, where aim + melee
@@ -359,7 +403,8 @@ fn fire(
 ) {
     let dt = time.delta_secs();
     let (Ok(p), Ok(cam)) = (players.single(), cams.single()) else { return };
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
+    // Swinging or dashing, the gun doesn't fire (a dash suspends the weapon in the game).
+    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash);
     let target = match scripted.target {
         Some(t) if scripted.active => t,
         _ => crosshair_target(cam, &level, &dummies, AIM_RANGE * settings.scale),
@@ -446,7 +491,8 @@ fn fire(
         Slot::Shatterbomb => {
             // Holding the fire button winds the throw up (and shows the arc); it goes on release.
             // The weapon decides (rate, ammo); the grenade itself is spawned at release.
-            let shots = arsenal.grenade.step(dt, trigger, &aim);
+            // Busy, a throw being wound up waits (it would go on release otherwise).
+            let shots = if busy { Vec::new() } else { arsenal.grenade.step(dt, trigger, &aim) };
             arsenal.cooking = arsenal.grenade.cooking();
             if !shots.is_empty() && arsenal.pending.is_none() {
                 // The whole-body throw standing still, the upper-body one on the move or in the
@@ -744,10 +790,23 @@ fn blasts(
 }
 
 
-/// The gun shows in the hand while the pistol is out (not during melee, when the wrench is).
+/// The glove is on (and his own right glove off) while the Shatterbomb is out.
+fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, mut vis: Query<&mut Visibility>) {
+    let on = arsenal.slot == Slot::Shatterbomb;
+    for (entity, show) in [(glove.holder, on), (glove.bare, !on)] {
+        if let Some(e) = entity
+            && let Ok(mut v) = vis.get_mut(e)
+        {
+            v.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+}
+
+/// The gun shows in the hand while the pistol is out, except during melee (when the wrench is)
+/// and dashes (the game suspends the weapon).
 fn gun_visibility(arsenal: Res<Arsenal>, players: Query<&Player>, mut vis: Query<&mut Visibility>) {
     let (Some(gun), Ok(p)) = (arsenal.gun, players.single()) else { return };
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
+    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash);
     if let Ok(mut v) = vis.get_mut(gun) {
         v.set_if_neq(if arsenal.slot == Slot::BurstPistol && !busy { Visibility::Inherited } else { Visibility::Hidden });
     }

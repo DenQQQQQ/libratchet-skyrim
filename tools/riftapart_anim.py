@@ -148,7 +148,12 @@ def _unpack_rows(data, n_keys, row_bytes, widths):
 def decode(name, sections):
     """sections: {tag: raw bytes}. Returns a Clip, or None if this clip kind isn't supported."""
     b = sections.get(BUILT)
-    if b is None or any(t not in sections for t in (HASHES, BASE, ELEMS, DATA)):
+    if b is None or any(t not in sections for t in (HASHES, BASE)):
+        return None
+    # A pose: no sample sections, just the base state, held for the clip's length (e.g. a
+    # prop's rest pose, or a hand pose layered over the body).
+    pose = ELEMS not in sections and DATA not in sections
+    if not pose and (ELEMS not in sections or DATA not in sections):
         return None
     flags = struct.unpack_from("<I", b, 0x08)[0]
     if flags & 0x2011 == 0:
@@ -162,9 +167,19 @@ def decode(name, sections):
     hraw = sections[HASHES]
     n_joints = len(hraw) // 4
     hashes = list(struct.unpack_from(f"<{n_joints}I", hraw))
+    if pose:
+        # Poses have base records for their real joints only (the header's joint count), not
+        # for the 0xFFFFFFFF padding hash that ends the list.
+        n_joints = min(n_joints, struct.unpack_from("<H", b, 0x20)[0])
+        hashes = hashes[:n_joints]
     base = sections[BASE]
     if len(base) < n_joints * 16:
-        return None  # a smaller base-state layout we don't read yet (some prop clips)
+        # Some prop clips have no base record for the padding hash either: the header's joint
+        # count says how many there are.
+        n_joints = min(n_joints, struct.unpack_from("<H", b, 0x20)[0])
+        hashes = hashes[:n_joints]
+        if len(base) < n_joints * 16:
+            return None
     b16 = np.frombuffer(base[: n_joints * 16], np.int16).reshape(n_joints, 8).astype(np.float64)
     pos_exp = np.frombuffer(base[: n_joints * 16], np.uint8).reshape(n_joints, 16)[:, 15].astype(np.float64)
 
@@ -176,6 +191,14 @@ def decode(name, sections):
         for k, dest in enumerate((v[6], v[7])):
             if dest // 48 < n_joints:
                 static_scale[dest // 48] = (v[k], v[2 + k], v[4 + k])
+
+    if pose:
+        rot = b16[None, :, :4]
+        norm = np.linalg.norm(rot, axis=2, keepdims=True)
+        rot = np.where(norm > 0, rot / np.maximum(norm, 1e-9), np.array([0, 0, 0, 1.0]))
+        pos = b16[None, :, 4:7] * (2.0 ** -pos_exp)[None, :, None]
+        held = np.zeros(max(frames, 2), np.int64)
+        return Clip(name, fps, max(frames, 2), hashes, rot[held], pos[held], (static_scale / 4096.0)[None][held], bool(flags & 0x40))
 
     el = sections[ELEMS]
     offs = np.array(struct.unpack_from(f"<{n_el}I", el, 0), np.int64)

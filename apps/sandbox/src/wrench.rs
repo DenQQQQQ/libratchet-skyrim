@@ -1,5 +1,6 @@
 //! The OmniWrench, when `riftapart-assets/wrench.glb` exists: held in Ratchet's right hand
-//! (`RT_handle_bound`, the game's gun-attach locator) while he swings (playing its own squash-and-stretch clips in time with his), and thrown
+//! (`RT_handle_bound`, the game's gun-attach locator) while it's the weapon out, and with any
+//! weapon while he swings (playing its own squash-and-stretch clips in time with his), and thrown
 //! with aim + melee like the game (right mouse held, then E or left mouse), or Q, the game's
 //! one-button "Melee Throw" shortcut (libratchet's `WrenchThrow`), knocking back the first dummy
 //! it meets.
@@ -18,8 +19,11 @@ use std::f32::consts::FRAC_PI_2;
 use std::time::Duration;
 
 pub const MODEL_FILE: &str = "wrench.glb";
-const CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
-/// The wrench stays in hand this long after a swing or a catch.
+/// Its own clips: the three swings, the Hyper-Strike (in the air, then the slam), and the pose it
+/// holds in between, which also puts back what a swing scaled away (the third hit shrinks the back
+/// hammer to nothing).
+const CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3", "smash_intro", "smash", "idle"];
+/// With another weapon out, the wrench stays in hand this long after a swing or a catch.
 const SHOW_AFTER: f32 = 0.35;
 /// Ratchet's throw animation (until the catch).
 const THROW_ANIM: f32 = 1.4;
@@ -38,8 +42,8 @@ pub struct Wrench {
     held: Option<Entity>,
     player: Option<Entity>,
     clips: HashMap<&'static str, AnimationNodeIndex>,
-    /// The swing whose clip is playing.
-    playing: Option<usize>,
+    /// The clip playing (see CLIPS).
+    playing: Option<&'static str>,
     show: f32,
     /// The thrown copy's holder and its flight.
     thrown: Option<Entity>,
@@ -59,6 +63,11 @@ impl Wrench {
     /// The held wrench's holder (it carries the wrench model's transform), for its effects.
     pub fn held(&self) -> Option<Entity> {
         self.held
+    }
+
+    /// Thrown, or on its way out of the hand: melee does nothing then, as in the game.
+    pub fn out_of_hand(&self) -> bool {
+        self.flight.is_some() || self.releasing.is_some()
     }
 }
 
@@ -127,10 +136,12 @@ fn setup_clips(
     commands.entity(player).insert((AnimationGraphHandle(graphs.add(graph)), AnimationTransitions::new()));
 }
 
-/// Shows the held wrench during melee (and briefly after), hidden while it's thrown; starts the
-/// wrench's clip with each of Ratchet's swings.
+/// Shows the held wrench while it's the weapon out, and during melee (and briefly after) with
+/// another one; hidden while it's thrown. Plays the wrench's clip for each of Ratchet's swings,
+/// and its idle in between.
 fn held_wrench(
     time: Res<Time>,
+    arsenal: Option<Res<crate::weapons::Arsenal>>,
     mut wrench: ResMut<Wrench>,
     players: Query<&Player>,
     mut visibility: Query<&mut Visibility>,
@@ -140,20 +151,29 @@ fn held_wrench(
     let in_melee = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
     wrench.show = if in_melee { SHOW_AFTER } else { (wrench.show - time.delta_secs()).max(0.0) };
     wrench.throw_anim = (wrench.throw_anim - time.delta_secs()).max(0.0);
-    let want = wrench.flight.is_none() && wrench.show > 0.0;
+    let out = arsenal.as_ref().is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
+    // A dash puts the weapon away for its length (as in the game).
+    let dashing = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash);
+    let want = wrench.flight.is_none() && !dashing && (out || wrench.show > 0.0);
     if let Some(held) = wrench.held
         && let Ok(mut v) = visibility.get_mut(held)
     {
         v.set_if_neq(if want { Visibility::Inherited } else { Visibility::Hidden });
     }
-    let swing = p.sim.melee_swing();
-    if swing != wrench.playing {
-        wrench.playing = swing;
-        if let (Some(i), Some(player)) = (swing, wrench.player)
-            && let Some(&node) = CLIPS.get(i).and_then(|c| wrench.clips.get(c))
-            && let Ok((mut player, mut transitions)) = anim.get_mut(player)
-        {
-            transitions.play(&mut player, node, Duration::from_millis(50));
+    let clip = match p.sim.state() {
+        MoveState::Smash => "smash_intro",
+        MoveState::SmashLand => "smash",
+        _ => p.sim.melee_swing().and_then(|i| CLIPS[..3].get(i).copied()).unwrap_or("idle"),
+    };
+    if wrench.playing != Some(clip)
+        && let Some(entity) = wrench.player
+        && let Some(&node) = wrench.clips.get(clip)
+        && let Ok((mut player, mut transitions)) = anim.get_mut(entity)
+    {
+        wrench.playing = Some(clip);
+        let active = transitions.play(&mut player, node, Duration::from_millis(if clip == "idle" { 150 } else { 50 }));
+        if clip == "idle" {
+            active.repeat();
         }
     }
 }

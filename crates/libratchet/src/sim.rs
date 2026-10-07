@@ -116,6 +116,8 @@ const MOVING_TURN: (f32, f32, f32) = (-4.0, -25.0, 26.18);
 const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
 /// Closer than this (radians), the turn snaps onto its target (RiftApart.exe).
 const TURN_SNAP: f32 = 0.005;
+/// A dash on the ground can be jumped out of from this long after it starts (RiftApart.exe).
+const DASH_JUMP_AFTER: f32 = 0.1;
 
 #[derive(Clone, Debug)]
 pub struct Ratchet {
@@ -143,6 +145,9 @@ pub struct Ratchet {
     dash_speed: f32,
     dash_travelled: f32,
     dash_braking: bool,
+    /// Seconds into the dash, and whether he was strafing (aiming or firing) when it started.
+    dash_time: f32,
+    dash_strafe: bool,
     air_dash_used: bool,
     prev_melee: bool,
     /// Seconds since the last melee press nothing used yet.
@@ -194,6 +199,8 @@ impl Ratchet {
             dash_speed: 0.0,
             dash_travelled: 0.0,
             dash_braking: false,
+            dash_time: 0.0,
+            dash_strafe: false,
             air_dash_used: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
@@ -266,6 +273,16 @@ impl Ratchet {
         (self.state == MoveState::Melee).then_some(self.swing)
     }
 
+    /// Whether the current (or last) dash started while strafing: he faces the aim through it.
+    pub fn dash_strafing(&self) -> bool {
+        self.dash_strafe
+    }
+
+    /// Where the current (or last) dash goes, on the ground plane (x, z).
+    pub fn dash_dir(&self) -> Vec2 {
+        self.dash_dir
+    }
+
     /// Seconds into the current swing, Hyper-Strike or Hyper-Strike landing.
     pub fn melee_time(&self) -> f32 {
         self.swing_time
@@ -324,7 +341,8 @@ impl Ratchet {
                 }
             }
             MoveState::Dash => {
-                if pressed {
+                self.dash_time += dt;
+                if pressed && self.dash_time >= DASH_JUMP_AFTER {
                     // Jumping out of a dash keeps its speed.
                     self.start_jump(dt, MoveState::Jump, position);
                 } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
@@ -645,14 +663,16 @@ impl Ratchet {
     }
 
     fn start_dash(&mut self, kind: MoveState, stick: Vec2) {
-        // Dash where the stick points, or straight ahead without input.
-        let dir = stick.normalize_or_zero();
-        self.dash_dir = if dir == Vec2::ZERO { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) } else { dir };
+        // Dash where the stick points, or straight ahead without input (RiftApart.exe: below
+        // the moving threshold; ahead is the aim while strafing).
+        let ahead = self.aiming.unwrap_or(Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()));
+        self.dash_dir = if stick.length() > MOVE_STICK { stick.normalize() } else { ahead };
         let current = Vec2::new(self.velocity.x, self.velocity.z).dot(self.dash_dir).max(0.0);
         let params = self.dash_params(kind);
         self.dash_speed = if params.accel > 0.0 { current } else { params.max_speed };
         self.dash_travelled = 0.0;
         self.dash_braking = false;
+        self.dash_time = 0.0;
         self.extending = false;
         self.state = kind;
         if kind == MoveState::AirDash {
@@ -661,8 +681,13 @@ impl Ratchet {
         } else {
             self.events.push(Event::Dashed);
         }
-        // Face the dash direction right away.
-        self.facing_yaw = self.dash_dir.x.atan2(self.dash_dir.y);
+        // Strafing when it starts, he keeps facing the aim through the dash, which then goes
+        // sideways or back relative to him; otherwise he faces where it goes, right away
+        // (RiftApart.exe; see `turn`).
+        self.dash_strafe = self.aiming.is_some();
+        if !self.dash_strafe {
+            self.facing_yaw = self.dash_dir.x.atan2(self.dash_dir.y);
+        }
     }
 
     fn dash_params(&self, kind: MoveState) -> DashParams {
@@ -837,6 +862,16 @@ impl Ratchet {
     /// a quarter second, standing it's nearly a snap. In the air and during moves, a plain turn
     /// rate (ours).
     fn turn(&mut self, dt: f32) {
+        // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
+        // started, else where the dash goes (RiftApart.exe).
+        if matches!(self.state, MoveState::Dash | MoveState::AirDash) {
+            let toward = if self.dash_strafe { self.aiming } else { Some(self.dash_dir) };
+            if let Some(d) = toward {
+                self.facing_yaw = d.x.atan2(d.y);
+            }
+            self.turn_omega = 0.0;
+            return;
+        }
         let flat = Vec2::new(self.velocity.x, self.velocity.z);
         let moving = self.stick.length() > MOVE_STICK;
         let target = match self.aiming {

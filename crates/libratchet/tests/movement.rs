@@ -662,3 +662,45 @@ fn aimed_jumps_use_the_aim_mode_heights() {
     }
     assert!(close(apex, t.aim_single_jump.height_max, 0.02), "aimed jump peaked at {apex}");
 }
+
+#[test]
+fn a_dash_while_strafing_keeps_facing_the_aim() {
+    let (ahead, right) = (Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0));
+    // Aiming ahead, a dash to the right: he keeps facing the aim and goes sideways.
+    let mut h = Flat::new(Tuning::default());
+    for _ in 0..30 {
+        h.tick_with(aim_input(Vec2::ZERO, ahead, false));
+    }
+    let start = h.pos;
+    h.tick_with(Input { dash: true, ..aim_input(right, ahead, false) });
+    assert_eq!(h.r.state(), MoveState::Dash);
+    assert!(h.r.dash_strafing());
+    while h.r.state() == MoveState::Dash {
+        assert!(h.r.facing_yaw().abs() < 1e-3, "turned to {}", h.r.facing_yaw());
+        h.tick_with(aim_input(right, ahead, false));
+    }
+    assert!(h.pos.x - start.x < -5.0, "went {:?}", h.pos - start);
+    // Not aiming, the same dash turns him to face where it goes.
+    let mut h = Flat::new(Tuning::default());
+    h.tick_with(Input { move_dir: right, dash: true, ..Default::default() });
+    assert!(!h.r.dash_strafing());
+    assert!(close(h.r.facing_yaw(), right.x.atan2(right.y), 1e-3));
+}
+
+#[test]
+fn a_dash_can_be_jumped_out_of_from_a_tenth_of_a_second() {
+    let fwd = Vec2::new(0.0, 1.0);
+    let mut h = Flat::new(Tuning::default());
+    h.tick_with(Input { move_dir: fwd, dash: true, ..Default::default() });
+    for _ in 0..5 {
+        h.tick(false, fwd);
+    }
+    h.tick(true, fwd);
+    assert_eq!(h.r.state(), MoveState::Dash, "jumped out 0.05 s in");
+    while h.time < 0.11 {
+        h.tick(false, fwd);
+    }
+    assert_eq!(h.r.state(), MoveState::Dash);
+    h.tick(true, fwd);
+    assert_eq!(h.r.state(), MoveState::Jump);
+}

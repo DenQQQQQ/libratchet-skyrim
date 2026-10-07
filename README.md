@@ -50,13 +50,14 @@ pip install pygltflib pillow numpy texture2ddecoder lz4
 python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
 ```
 
-That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatterbomb.glb` and
-`testdummy.glb` (the game's test-dummy robot, which the combat dummies wear).
-The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
-double jump, fall, glide, land, dash, air-dash, wrench and gun clips, Clank rides on his back
-(backpack idle, heli-pack while gliding), and the OmniWrench and the Burst Pistol appear in his
-hand. Without them, you get a capsule
-with Lombax ears. Never share the `.glb` files: they're game data.
+That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatterbomb.glb`,
+`shatterbomb_glove.glb` and `testdummy.glb` (the game's test-dummy robot, which the combat dummies
+wear). The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
+double jump, fall, glide, land, dash (in eight directions), air-dash, wrench and gun clips, with
+the game's wrench-carrying versions while the wrench or the Shatterbomb is out. Clank rides on his
+back (backpack idle, heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
+hand, and the Shatterbomb's glove on it. Without them, you get a capsule with Lombax ears. Never
+share the `.glb` files: they're game data.
 
 The weapon effects (muzzle flashes, bolts, impacts, shells, the Shatterbomb's blast) use the
 game's own effect textures, meshes and colours, exported the same way into
@@ -111,8 +112,9 @@ peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face` to play one section (combat: the combo's timing,
-aiming and throwing mid-jump, a Shatterbomb on the walk; face: his face through a jump).
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry` to play one section (combat: the
+combo's timing, aiming and throwing mid-jump, a Shatterbomb on the walk; face: his face through a
+jump; carry: the wrench in hand, the Shatterbomb's glove, dashing while aiming).
 
 ## Tests
 

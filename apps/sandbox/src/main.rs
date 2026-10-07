@@ -408,13 +408,14 @@ pub fn simulate(
     mouse: Res<ButtonInput<MouseButton>>,
     mouse_melee: Res<MouseMelee>,
     arsenal: Option<Res<weapons::Arsenal>>,
+    wrench: Option<Res<wrench::Wrench>>,
     rig: Res<CameraRig>,
     scripted: Res<ScriptedInput>,
     level: Res<Level>,
     settings: Res<Settings>,
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
-    (mut cues, mut was_gliding): (MessageWriter<sound::SoundCue>, Local<bool>),
+    (mut cues, mut was_gliding, mut melee_held): (MessageWriter<sound::SoundCue>, Local<bool>, Local<bool>),
 ) {
     let dt = time.delta_secs();
     let Ok(mut p) = players.single_mut() else { return };
@@ -431,8 +432,14 @@ pub fn simulate(
         input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
         input.aim_mode = aiming;
     }
-    if aiming {
+    // Melee does nothing while the wrench is out of the hand (thrown, or leaving it), as in the
+    // game, and a press held through the catch doesn't swing when it's back.
+    let blocked = aiming || wrench.as_ref().is_some_and(|w| w.out_of_hand());
+    if input.melee && (blocked || *melee_held) {
+        *melee_held = true;
         input.melee = false;
+    } else if !input.melee {
+        *melee_held = false;
     }
 
     let before = p.feet;

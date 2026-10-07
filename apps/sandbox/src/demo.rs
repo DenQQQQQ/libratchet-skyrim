@@ -62,6 +62,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("combat") => [vec![hold(1.5, Vec2::ZERO, false)], combat()].concat(),
         Some("face") => [vec![hold(1.5, Vec2::ZERO, false)], face()].concat(),
         Some("sounds") => [vec![hold(1.5, Vec2::ZERO, false)], sound_tour()].concat(),
+        Some("carry") => [vec![hold(1.5, Vec2::ZERO, false)], carry()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -459,6 +460,101 @@ fn combat() -> Vec<Act> {
         hold(0.4, Vec2::ZERO, false),
         Act::Slot(Slot::Wrench),
         Act::Follow { yaw: 0.9, pitch: 0.2, distance: 9.0 },
+    ]);
+    acts
+}
+
+/// The weapon in hand: the wrench carried while it's out (standing, walking, running, a jump), the
+/// whole wrench back after the combo (the third hit shrinks its back hammer away), melee presses
+/// doing nothing while it's thrown, and the Shatterbomb's glove on his right hand.
+fn carry() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let arena = spots::ARENA;
+    let x = Vec2::X;
+    let start = arena + Vec3::new(-1.5, 0.0, 0.0);
+    let lane = arena + Vec3::new(-8.0, 0.0, 6.0);
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::CloseUp(true),
+        Act::Slot(Slot::Wrench),
+        Act::Teleport(lane),
+        hold(0.12, x, false),
+        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
+        hold(1.2, Vec2::ZERO, false),
+        Act::Shot("50_wrench_idle"),
+        hold(1.0, x * 0.3, false),
+        Act::Shot("51_wrench_walk"),
+        hold(0.4, x * 0.3, false),
+        hold(1.0, x, false),
+        Act::Shot("52_wrench_run"),
+        hold(0.25, x, true),
+        hold(0.1, x, false),
+        Act::Shot("53_wrench_jump"),
+        hold(0.8, x, false),
+        hold(1.0, Vec2::ZERO, false),
+        // The combo (mashed), then the wrench as it rests: whole again.
+        Act::Teleport(start),
+        hold(0.12, x, false),
+        Act::Follow { yaw: 0.9, pitch: 0.2, distance: 4.0 },
+        hold(0.6, Vec2::ZERO, false),
+    ];
+    for i in 0..9 {
+        acts.push(swing());
+        acts.push(hold(0.1 - 2.0 * TICK, Vec2::ZERO, false));
+        if i == 6 {
+            acts.push(Act::Shot("54_third_hit"));
+        }
+    }
+    acts.extend([
+        hold(1.0, Vec2::ZERO, false),
+        Act::Shot("55_after_the_combo"),
+        hold(0.6, Vec2::ZERO, false),
+        // Thrown: melee presses while it's out do nothing.
+        Act::Throw,
+        hold(0.3, Vec2::ZERO, false),
+        swing(),
+        hold(0.2, Vec2::ZERO, false),
+        Act::Shot("56_melee_while_thrown"),
+        swing(),
+        hold(1.6, Vec2::ZERO, false),
+        // The Shatterbomb: its glove goes on his right hand.
+        Act::Slot(Slot::Shatterbomb),
+        Act::Teleport(lane),
+        hold(0.12, x, false),
+        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
+        hold(1.2, Vec2::ZERO, false),
+        Act::Shot("57_glove_idle"),
+        Act::Wide { name: "57b_glove_close", focus: lane + Vec3::new(0.1, 0.75, 0.0), yaw: 1.7, pitch: 0.1, distance: 1.4, secs: 0.8 },
+        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
+        hold(1.0, x, false),
+        Act::Shot("58_glove_run"),
+        hold(0.6, x, false),
+        hold(0.8, Vec2::ZERO, false),
+        // Dashing while aiming: he keeps facing the aim, dashing to his right, then back (the
+        // game's directional dashes); the pistol is put away for each.
+        Act::Slot(Slot::BurstPistol),
+        Act::Teleport(lane + Vec3::new(4.0, 0.0, -3.0)),
+        hold(0.12, x, false),
+        Act::Follow { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.15, distance: 5.0 },
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+        dash(Vec2::Y),
+        hold(0.15, Vec2::ZERO, false),
+        Act::Shot("5a_dash_right_aiming"),
+        hold(0.9, Vec2::ZERO, false),
+        dash(-x),
+        hold(0.15, Vec2::ZERO, false),
+        Act::Shot("5b_dash_back_aiming"),
+        hold(0.9, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        // Standing a while with the wrench: his fidgets, with the wrench in hand.
+        Act::Slot(Slot::Wrench),
+        Act::Teleport(lane),
+        hold(0.12, x, false),
+        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 3.5 },
+        hold(9.0, Vec2::ZERO, false),
+        Act::Shot("59_wrench_fidget"),
+        hold(1.5, Vec2::ZERO, false),
     ]);
     acts
 }
