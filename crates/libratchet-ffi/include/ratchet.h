@@ -34,6 +34,10 @@ typedef struct RatchetContact {
     uint8_t hit_ceiling;
     uint8_t has_ground_distance;
     float ground_distance; /* feet to ground, metres */
+    uint8_t has_wall;      /* the last move ran into a wall */
+    uint8_t wall_sticky;   /* that wall takes wall jumps */
+    float wall_normal_x;   /* out of the wall, on the ground plane */
+    float wall_normal_z;
 } RatchetContact;
 
 enum {
@@ -47,6 +51,8 @@ enum {
     RATCHET_STATE_MELEE = 7,      /* a combo swing; see melee_swing */
     RATCHET_STATE_SMASH = 8,      /* Hyper-Strike: hop, then slam down */
     RATCHET_STATE_SMASH_LAND = 9, /* on the ground after the slam */
+    RATCHET_STATE_WALL_STICK = 10, /* stuck to a wall-jump wall, then sliding down */
+    RATCHET_STATE_WALL_JUMP = 11,  /* the jump off it */
 };
 
 enum {
@@ -62,6 +68,8 @@ enum {
     RATCHET_EVENT_MELEE_HIT = 1u << 9,     /* the swing connects now: check for hits */
     RATCHET_EVENT_SMASH_STARTED = 1u << 10,
     RATCHET_EVENT_SMASH_IMPACT = 1u << 11, /* the slam hit the ground: see ratchet_smash_info */
+    RATCHET_EVENT_WALL_STUCK = 1u << 12,   /* stuck to a wall that takes wall jumps */
+    RATCHET_EVENT_WALL_JUMPED = 1u << 13,  /* jumped off it */
 };
 
 typedef struct RatchetStepResult {

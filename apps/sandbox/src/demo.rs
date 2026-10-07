@@ -66,6 +66,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("dashjump") => [vec![hold(1.5, Vec2::ZERO, false)], dash_jumps()].concat(),
         Some("throwswitch") => [vec![hold(1.5, Vec2::ZERO, false)], throw_switch()].concat(),
         Some("strafejump") => [vec![hold(1.5, Vec2::ZERO, false)], strafe_jumps()].concat(),
+        Some("walljump") => [vec![hold(1.5, Vec2::ZERO, false)], wall_jumps()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -658,6 +659,52 @@ fn strafe_jumps() -> Vec<Act> {
     ]);
     acts.extend((1..=16).map(|i| hold(0.05, Vec2::from_angle(0.1 * i as f32).rotate(x), true)));
     acts.extend([Act::Shot("6d_glide_lean"), hold(1.5, Vec2::from_angle(1.6).rotate(x), true), hold(3.0, x, false)]);
+    acts
+}
+
+/// Wall jumps up the shaft (two walls that take wall jumps, 3.4 m apart, 14 m tall): onto the
+/// first wall from a running jump, then back and forth up to the ledge on top; then a jump at an
+/// ordinary wall, which he only bumps into. Filmed from the shaft's open side.
+fn wall_jumps() -> Vec<Act> {
+    let shaft = spots::WALL_SHAFT;
+    // The walls face each other across Z.
+    let z = Vec2::Y;
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::Teleport(shaft + Vec3::new(0.0, 0.0, -1.2)),
+        hold(0.12, z, false),
+        Act::Follow { yaw: std::f32::consts::FRAC_PI_2, pitch: 0.1, distance: 9.0 },
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.1, z, false),
+        hold(0.25, z, true),
+        hold(0.35, z, false),
+        Act::Shot("71_wall_stick"),
+    ];
+    // Each jump presses 0.2 s after landing on the wall (before it starts sliding); the next wall
+    // comes 0.8 s later, about 1.9 m higher. The seventh clears the top onto the ledge.
+    for i in 0..7 {
+        acts.extend([hold(0.2, Vec2::ZERO, false), hold(0.05, Vec2::ZERO, true), hold(0.3, Vec2::ZERO, false)]);
+        if i == 1 {
+            acts.push(Act::Shot("72_wall_jump"));
+        }
+        acts.push(hold(0.25, Vec2::ZERO, false));
+    }
+    acts.extend([
+        // On the ledge.
+        hold(1.0, Vec2::ZERO, false),
+        Act::Shot("73_wall_shaft_top"),
+        hold(0.6, Vec2::ZERO, false),
+        // An ordinary wall: he only bumps into it.
+        Act::Teleport(shaft + Vec3::new(-7.5, 0.0, 0.0)),
+        hold(0.12, -Vec2::X, false),
+        Act::Watch { focus: shaft + Vec3::new(-9.0, 2.0, 0.0), yaw: 0.0, pitch: 0.12, distance: 12.0 },
+        hold(0.4, Vec2::ZERO, false),
+        hold(0.1, -Vec2::X, false),
+        hold(0.25, -Vec2::X, true),
+        hold(0.35, -Vec2::X, false),
+        Act::Shot("74_ordinary_wall"),
+        hold(1.0, Vec2::ZERO, false),
+    ]);
     acts
 }
 

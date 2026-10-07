@@ -495,7 +495,12 @@ pub fn simulate(
         }
     }
     p.feet = feet;
-    p.contact = Contact { grounded, ground_distance, hit_ceiling: moved.hit_ceiling };
+    p.contact = Contact {
+        grounded,
+        ground_distance,
+        hit_ceiling: moved.hit_ceiling,
+        wall: moved.wall.map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump }),
+    };
 
     // Jump measurements for the HUD.
     let jumped = p.sim.events().iter().any(|e| matches!(e, MoveEvent::Jumped));
@@ -620,6 +625,8 @@ fn state_color(state: MoveState) -> Color {
         MoveState::AirDash => Color::srgb(0.2, 1.0, 0.45),
         MoveState::Melee => Color::srgb(0.95, 0.95, 0.95),
         MoveState::Smash | MoveState::SmashLand => Color::srgb(1.0, 0.45, 0.6),
+        MoveState::WallStick => Color::srgb(0.1, 0.75, 0.75),
+        MoveState::WallJump => Color::srgb(0.6, 1.0, 0.85),
     }
 }
 

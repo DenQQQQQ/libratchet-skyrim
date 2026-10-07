@@ -37,11 +37,22 @@ pub struct Contact {
     pub ground_distance: Option<f32>,
     /// The last move bumped into something above.
     pub hit_ceiling: bool,
+    /// The wall the last move ran into, if any.
+    pub wall: Option<WallContact>,
+}
+
+/// A wall the character ran into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallContact {
+    /// Out of the wall, on the ground plane (x, z), unit length.
+    pub normal: Vec2,
+    /// The wall takes wall jumps (the game marks such walls; ordinary ones don't).
+    pub sticky: bool,
 }
 
 impl Default for Contact {
     fn default() -> Self {
-        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false }
+        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false, wall: None }
     }
 }
 
@@ -60,6 +71,10 @@ pub enum MoveState {
     Smash,
     /// On the ground right after a Hyper-Strike lands.
     SmashLand,
+    /// Stuck to a wall that takes wall jumps: holding still, then sliding down it.
+    WallStick,
+    /// The jump off a wall.
+    WallJump,
 }
 
 impl MoveState {
@@ -75,6 +90,8 @@ impl MoveState {
             MoveState::Melee => "melee",
             MoveState::Smash => "hyper-strike",
             MoveState::SmashLand => "hyper-strike landing",
+            MoveState::WallStick => "wall stick",
+            MoveState::WallJump => "wall jump",
         }
     }
 }
@@ -84,6 +101,10 @@ impl MoveState {
 pub enum Event {
     Jumped,
     DoubleJumped,
+    /// Stuck to a wall that takes wall jumps.
+    WallStuck,
+    /// Jumped off a wall.
+    WallJumped,
     LeftGround,
     GlideStarted,
     GlideEnded,
@@ -118,6 +139,9 @@ const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
 const TURN_SNAP: f32 = 0.005;
 /// A dash on the ground can be jumped out of from this long after it starts (RiftApart.exe).
 const DASH_JUMP_AFTER: f32 = 0.1;
+/// Stuck to a wall, he's pressed into it at this speed so the host keeps reporting the wall
+/// (ours; the wall stops him).
+const WALL_PUSH: f32 = 0.5;
 
 #[derive(Clone, Debug)]
 pub struct Ratchet {
@@ -160,6 +184,13 @@ pub struct Ratchet {
     jump_first: bool,
     jump_carry: bool,
     jump_held: Vec2,
+    /// This jump's first tick goes at the jump speeds, not the take-off speed (wall jumps).
+    jump_keep_base: bool,
+    /// The wall he's stuck to or last jumped off (out of it), how long he's been on it, and
+    /// whether it's on his left (for the animation).
+    wall_normal: Vec2,
+    wall_time: f32,
+    wall_on_left: bool,
     prev_melee: bool,
     /// Seconds since the last melee press nothing used yet.
     since_melee_press: f32,
@@ -220,6 +251,10 @@ impl Ratchet {
             jump_first: false,
             jump_carry: false,
             jump_held: Vec2::ZERO,
+            jump_keep_base: false,
+            wall_normal: Vec2::ZERO,
+            wall_time: 0.0,
+            wall_on_left: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
             combo_next: 0,
@@ -391,13 +426,14 @@ impl Ratchet {
                     self.air_dash(dt);
                 }
             }
-            MoveState::Jump | MoveState::DoubleJump => {
+            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump => {
                 let params = self.params(self.state).clone();
                 self.air_time += dt;
                 self.extend_jump(input.jump, &params, position);
                 self.jump_air(dt, stick, &params);
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
-                if pressed && self.can_midair_jump(&params, position, contact) {
+                if self.try_wall_stick(contact) {
+                } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
@@ -413,7 +449,8 @@ impl Ratchet {
                 self.air_time += dt;
                 self.air_steer(dt, stick);
                 self.fall_under(dt, &params);
-                if pressed && self.can_midair_jump(&params, position, contact) {
+                if self.try_wall_stick(contact) {
+                } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
@@ -422,6 +459,17 @@ impl Ratchet {
                     self.air_dash(dt);
                 } else if self.can_glide(input.jump, &params, contact) {
                     self.enter_glide();
+                }
+            }
+            MoveState::WallStick => {
+                self.wall_time += dt;
+                if pressed {
+                    self.start_wall_jump(dt, position);
+                } else if self.wall_time > dt && contact.wall.is_none_or(|w| !w.sticky) {
+                    // Slid off the wall's edge.
+                    self.enter_fall();
+                } else {
+                    self.wall_slide(dt);
                 }
             }
             MoveState::Glide => {
@@ -621,6 +669,7 @@ impl Ratchet {
             MoveState::DoubleJump => &self.tuning.double_jump,
             MoveState::Fall => &self.tuning.fall,
             MoveState::Glide => &self.tuning.glide,
+            MoveState::WallJump => &self.tuning.wall_jump,
             _ if self.jump_aimed => &self.tuning.aim_single_jump,
             _ => &self.tuning.single_jump,
         }
@@ -676,6 +725,7 @@ impl Ratchet {
         self.jump_dir = if self.jump_stick >= MOVE_STICK { self.stick.normalize() } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) };
         self.jump_first = true;
         self.jump_carry = true;
+        self.jump_keep_base = false;
         let g = params.gravity_for(h_min);
         self.state = kind;
         self.air_time = 0.0;
@@ -830,6 +880,67 @@ impl Ratchet {
         self.events.push(Event::GlideStarted);
     }
 
+    /// Airborne against a wall that takes wall jumps, high enough above the ground and facing
+    /// into it: he sticks to it (the game's WallStickConfig: at least WallStickMinGroundHeight
+    /// up, facing within WallStickFacingIntoWallThreshold degrees). Not back onto the wall he
+    /// just jumped off.
+    fn try_wall_stick(&mut self, contact: &Contact) -> bool {
+        let Some(wall) = contact.wall.filter(|w| w.sticky && w.normal.length_squared() > 0.5) else {
+            return false;
+        };
+        let p = &self.tuning.wall_stick;
+        if contact.ground_distance.is_some_and(|d| d < p.min_ground_height) {
+            return false;
+        }
+        let facing = Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos());
+        if facing.dot(-wall.normal) < p.facing_threshold.to_radians().cos() {
+            return false;
+        }
+        if self.state == MoveState::WallJump && self.wall_normal.dot(wall.normal) > 0.9 {
+            return false;
+        }
+        // Which side the wall is on, by where he was heading along it (ours).
+        let along = Vec2::new(self.velocity.x, self.velocity.z);
+        let right = Vec2::new(-self.facing_yaw.cos(), self.facing_yaw.sin());
+        self.wall_on_left = along.dot(right) > 0.0;
+        self.wall_normal = wall.normal;
+        self.wall_time = 0.0;
+        self.state = MoveState::WallStick;
+        self.velocity = Vec3::ZERO;
+        self.extending = false;
+        // On the wall, his air moves are back.
+        self.midair_jumps = 0;
+        self.air_dash_used = false;
+        self.events.push(Event::WallStuck);
+        true
+    }
+
+    /// Holding on for WallStickNoSlideTime, then sliding down at WallStickGravity up to
+    /// WallStickTerminalVelocity, pressed against the wall.
+    fn wall_slide(&mut self, dt: f32) {
+        let p = &self.tuning.wall_stick;
+        let vy = if self.wall_time < p.no_slide_time { 0.0 } else { (self.velocity.y - p.slide_gravity * dt).max(-p.slide_terminal) };
+        let push = -self.wall_normal * WALL_PUSH * self.tuning.scale;
+        self.velocity = Vec3::new(push.x, vy, push.y);
+    }
+
+    /// The jump off a wall: the WallJumpConfig jump, straight away from the wall at the wall jump's
+    /// speed, which it keeps for NoInputTime; he turns to face where it goes.
+    fn start_wall_jump(&mut self, dt: f32, position: Vec3) {
+        self.velocity = Vec3::ZERO;
+        self.start_jump(dt, MoveState::WallJump, position);
+        self.jump_dir = self.wall_normal;
+        self.jump_stick = 1.0;
+        self.jump_keep_base = true;
+        self.facing_yaw = self.wall_normal.x.atan2(self.wall_normal.y);
+        self.events.push(Event::WallJumped);
+    }
+
+    /// Whether the wall he's stuck to (or last jumped off) is on his left.
+    pub fn wall_on_left(&self) -> bool {
+        self.wall_on_left
+    }
+
     fn enter_fall(&mut self) {
         self.state = MoveState::Fall;
         self.air_time = 0.0;
@@ -888,7 +999,7 @@ impl Ratchet {
             (stick.length().min(1.0), stick.normalize_or_zero())
         };
         let dir = if push < 0.01 { if self.jump_carry { self.jump_dir } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) } } else { dir };
-        let speeds = self.tuning.air_speeds.clone();
+        let speeds = if self.state == MoveState::WallJump { self.tuning.wall_jump_speeds.clone() } else { self.tuning.air_speeds.clone() };
         let (m, speed) = if push <= MOVE_STICK {
             (1.0, if self.jump_carry { v_last.length().min(speeds.run_max) } else { 0.0 })
         } else {
@@ -899,7 +1010,8 @@ impl Ratchet {
         };
         let base = dir.normalize_or_zero() * speed;
         let v = if self.jump_first {
-            self.jump_held = base.normalize_or_zero() * self.jump_takeoff_speed.max(v_last.length());
+            // Wall jumps (like the game's ledge, vault and grind jumps) go at the jump speeds.
+            self.jump_held = if self.jump_keep_base { base } else { base.normalize_or_zero() * self.jump_takeoff_speed.max(v_last.length()) };
             self.jump_held
         } else if !steerable {
             self.jump_held
@@ -935,6 +1047,12 @@ impl Ratchet {
     fn turn(&mut self, dt: f32) {
         // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
         // started, else where the dash goes (RiftApart.exe).
+        // On a wall he faces it.
+        if self.state == MoveState::WallStick {
+            self.facing_yaw = (-self.wall_normal.x).atan2(-self.wall_normal.y);
+            self.turn_omega = 0.0;
+            return;
+        }
         if matches!(self.state, MoveState::Dash | MoveState::AirDash) {
             let toward = if self.dash_strafe { self.aiming } else { Some(self.dash_dir) };
             if let Some(d) = toward {

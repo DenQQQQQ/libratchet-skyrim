@@ -65,7 +65,8 @@ const CLIP_STATES: &[&str] = &[
     "strafe_double_jump_s", "strafe_double_jump_w", "wrench_strafe_double_jump_n", "wrench_strafe_double_jump_e",
     "wrench_strafe_double_jump_s", "wrench_strafe_double_jump_w", "strafe_land_n", "strafe_land_e", "strafe_land_s", "strafe_land_w",
     "strafe_land_idle", "wrench_strafe_land_n", "wrench_strafe_land_e", "wrench_strafe_land_s", "wrench_strafe_land_w",
-    "wrench_strafe_land_idle",
+    "wrench_strafe_land_idle", "wall_stick_left", "wall_stick_right", "wall_slide_left", "wall_slide_right", "wall_jump_left",
+    "wall_jump_right",
 ];
 /// Dashes by direction relative to where he faces (clockwise from ahead), on the ground and in
 /// the air: the game's Dash and Air_Dash drivers have one clip per direction.
@@ -159,7 +160,7 @@ const LOOPING: &[&str] = &[
     "pistol_idle", "pistol_run", "walk", "glove_idle", "wrench_aim_idle", "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e",
     "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
-    "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol",
+    "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol", "wall_slide_left", "wall_slide_right",
 ];
 /// Played at the rate that keeps the feet planted.
 const SPEED_MATCHED: &[&str] = &["run", "walk", "pistol_run", "land_walk", "land_run", "wrench_run", "wrench_walk", "wrench_land_walk", "wrench_land_run"];
@@ -883,6 +884,8 @@ fn play_clips(
         rig.glide_looping = false;
     }
     let heli_glide = rig.clips.contains_key(glide_intro) && rig.clips.contains_key(glide_loop);
+    // On a wall: onto it (the stick clip), then sliding once he starts down.
+    let wall_sliding = state == MoveState::WallStick && v.y < -0.1;
     let want: &'static str = match state {
         MoveState::Ground if rig.land_timer > 0.0 && rig.strafe_landing.is_some() => rig.strafe_landing.unwrap_or("land"),
         MoveState::Ground if gun_aim && speed > 0.6 => strafe,
@@ -908,6 +911,11 @@ fn play_clips(
         MoveState::Melee => MELEE_CLIPS[p.sim.melee_swing().unwrap_or(0).min(MELEE_CLIPS.len() - 1)],
         MoveState::Smash => "smash_intro",
         MoveState::SmashLand => "smash",
+        MoveState::WallStick if p.sim.wall_on_left() => if wall_sliding { "wall_slide_left" } else { "wall_stick_left" },
+        MoveState::WallStick => if wall_sliding { "wall_slide_right" } else { "wall_stick_right" },
+        MoveState::WallJump if v.y < 0.0 => "fall",
+        MoveState::WallJump if p.sim.wall_on_left() => "wall_jump_left",
+        MoveState::WallJump => "wall_jump_right",
     };
     let want = match carried(want) {
         c if carrying && rig.clips.contains_key(c) => c,
@@ -1206,7 +1214,7 @@ fn target_pose(state: MoveState, speed: f32, vy: f32, run_max: f32, phase: f32, 
             tail_lift: -0.2,
             tail_sway: 0.15 * sway,
         },
-        MoveState::Dash | MoveState::AirDash | MoveState::Melee | MoveState::Smash | MoveState::SmashLand => Pose {
+        MoveState::Dash | MoveState::AirDash | MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::WallStick | MoveState::WallJump => Pose {
             hip: [-0.7, 0.8],
             knee: [0.9, 0.6],
             arm_drop: 1.1,

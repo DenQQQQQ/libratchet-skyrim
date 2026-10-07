@@ -14,8 +14,8 @@ back how to move.
   [docs/skyrim-plan.md](docs/skyrim-plan.md).
 
 Moves so far: run/walk, variable-height jump, double jump, glide, ground dash (Phantom Dash),
-air dash, and the OmniWrench: 3-hit combo, Hyper-Strike (melee in the air) and the wrench
-throw. Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
+air dash, wall jumps (on the teal walls of the wall-jump shaft), and the OmniWrench: 3-hit
+combo, Hyper-Strike (melee in the air) and the wrench throw. Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
 over-the-shoulder camera).
 
 Unofficial fan project, not affiliated with Insomniac Games, Sony, or Bethesda. Built with an AI
@@ -91,7 +91,7 @@ cargo run -p sandbox
 | Key | Action |
 |---|---|
 | WASD | Move (camera-relative) |
-| Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide |
+| Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide. On a wall-jump wall (jump or fall at it, facing it, at least 1 m up), press to jump off it |
 | Shift | Dash (on the ground or once in the air) |
 | 1 / 2 | Burst Pistol / Shatterbomb (not while the wrench is thrown). The wrench isn't one to pick: as in the game, melee swings it whatever gun is out |
 | Left mouse | Fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
@@ -112,12 +112,12 @@ peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump` to
-play one section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump|walljump`
+to play one section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the
 walk; face: his face through a jump; carry: the weapon in hand, the whole wrench after the
 combo, the Shatterbomb's glove, dashing while aiming; dashjump: jumps out of a dash beside a
 running jump; throwswitch: switching weapons around a wrench throw; strafejump: the strafe-jump
-flips and a long glide).
+flips and a long glide; walljump: up the wall-jump shaft, and an ordinary wall).
 
 ## Tests
 

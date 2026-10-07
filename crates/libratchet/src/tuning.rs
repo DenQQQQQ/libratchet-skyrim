@@ -184,6 +184,31 @@ impl SpeedParams {
     }
 }
 
+/// Sticking to a wall that takes wall jumps (the game's WallStickConfig).
+#[derive(Clone, Debug, PartialEq)]
+pub struct WallStickParams {
+    /// Seconds he holds still on the wall before sliding down it.
+    pub no_slide_time: f32,
+    /// Sliding down: acceleration (m/s², down) and top speed.
+    pub slide_gravity: f32,
+    pub slide_terminal: f32,
+    /// He sticks only at least this high above the ground.
+    pub min_ground_height: f32,
+    /// He sticks only facing within this many degrees of straight into the wall.
+    pub facing_threshold: f32,
+}
+
+impl WallStickParams {
+    fn scaled(&self, s: f32) -> WallStickParams {
+        WallStickParams {
+            slide_gravity: self.slide_gravity * s,
+            slide_terminal: self.slide_terminal * s,
+            min_ground_height: self.min_ground_height * s,
+            ..self.clone()
+        }
+    }
+}
+
 /// A dash: speed up to `max_speed` at `accel`, and once `distance` is covered slow down at
 /// `decel`. Shaped like Rift Apart's DodgeConfig / AirDashConfig.
 #[derive(Clone, Debug, PartialEq)]
@@ -414,6 +439,11 @@ pub struct Tuning {
     pub aim_back_speed: f32,
     pub aim_single_jump: JumpParams,
     pub aim_double_jump: JumpParams,
+    /// Wall jumps: sticking to the wall, the jump off it, and its speeds (the game's
+    /// WallStickConfig, WallJumpConfig and WallJumpSpeeds).
+    pub wall_stick: WallStickParams,
+    pub wall_jump: JumpParams,
+    pub wall_jump_speeds: SpeedParams,
     /// Size multiplier applied by `scaled`; 1.0 means Ratchet-sized.
     pub scale: f32,
     /// Where these values came from, for display.
@@ -496,6 +526,21 @@ impl Default for Tuning {
                 momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
             },
+            // The game's wall-jump values (hero_traversal), as defaults.
+            wall_stick: WallStickParams { no_slide_time: 0.3, slide_gravity: 20.0, slide_terminal: 40.0, min_ground_height: 1.0, facing_threshold: 50.0 },
+            wall_jump: JumpParams {
+                height_min: 2.18,
+                height_max: 2.18,
+                time_to_peak: 0.41,
+                button_min_hold: 0.05,
+                button_max_hold: 0.2,
+                no_glide_time: 0.7,
+                double_jump_time_start: 0.7,
+                momentum_weight_max: 0.1,
+                no_input_time: 0.7,
+                ..JumpParams::FALLBACK
+            },
+            wall_jump_speeds: SpeedParams { walk_min: 0.0, walk_max: 5.0, run_min: 5.0, run_max: 5.0, walk_run_threshold: 0.5 },
             scale: 1.0,
             source: "generic defaults".into(),
         }
@@ -535,6 +580,9 @@ impl Tuning {
             aim_back_speed: f(&speeds["AimSpeedConfig"], "RunSpeedBackwardMax").unwrap_or(base.aim_back_speed),
             aim_single_jump: jump_from(&jumps["AimModeSingleJumpConfig"]).unwrap_or(base.aim_single_jump),
             aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
+            wall_stick: wall_stick_from(&traversal["WallStickConfig"], &base.wall_stick),
+            wall_jump: jump_from(&jumps["WallJumpConfig"]).unwrap_or(base.wall_jump),
+            wall_jump_speeds: speeds_from(&traversal["WallJumpSpeeds"], &base.wall_jump_speeds),
             source: format!("Rift Apart configs ({})", dir.display()),
             ..base
         })
@@ -562,9 +610,26 @@ impl Tuning {
             aim_back_speed: self.aim_back_speed * s,
             aim_single_jump: self.aim_single_jump.scaled(s),
             aim_double_jump: self.aim_double_jump.scaled(s),
+            wall_stick: self.wall_stick.scaled(s),
+            wall_jump: self.wall_jump.scaled(s),
+            wall_jump_speeds: self.wall_jump_speeds.scaled(s),
             scale: self.scale * s,
             ..self.clone()
         }
+    }
+}
+
+/// WallStickConfig: the gravity and terminal velocity are given as negative (down) speeds.
+fn wall_stick_from(v: &Value, base: &WallStickParams) -> WallStickParams {
+    if !v.is_object() {
+        return base.clone();
+    }
+    WallStickParams {
+        no_slide_time: f(v, "WallStickNoSlideTime").unwrap_or(base.no_slide_time),
+        slide_gravity: f(v, "WallStickGravity").map(f32::abs).unwrap_or(base.slide_gravity),
+        slide_terminal: f(v, "WallStickTerminalVelocity").map(f32::abs).unwrap_or(base.slide_terminal),
+        min_ground_height: f(v, "WallStickMinGroundHeight").unwrap_or(base.min_ground_height),
+        facing_threshold: f(v, "WallStickFacingIntoWallThreshold").unwrap_or(base.facing_threshold),
     }
 }
 

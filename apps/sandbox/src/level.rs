@@ -11,12 +11,18 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 pub struct Block {
     pub min: Vec3,
     pub max: Vec3,
+    /// Its sides take wall jumps (the game marks such walls; ordinary walls don't).
+    pub wall_jump: bool,
 }
 
 impl Block {
     fn new(center_xz: Vec2, bottom: f32, size: Vec3) -> Block {
         let min = Vec3::new(center_xz.x - size.x * 0.5, bottom, center_xz.y - size.z * 0.5);
-        Block { min, max: min + size }
+        Block { min, max: min + size, wall_jump: false }
+    }
+
+    fn wall_jump(self) -> Block {
+        Block { wall_jump: true, ..self }
     }
 }
 
@@ -35,6 +41,8 @@ pub mod spots {
     pub const TOWER_TOP: Vec3 = Vec3::new(-30.0, 12.0, 60.0);
     /// Open ground with target dummies for the wrench (they stand along +X from here).
     pub const ARENA: Vec3 = Vec3::new(25.0, 0.0, 30.0);
+    /// The middle of the wall-jump shaft's floor: its two walls face each other across Z.
+    pub const WALL_SHAFT: Vec3 = Vec3::new(-20.0, 0.0, 20.0);
 }
 
 const FLOOR: f32 = 300.0;
@@ -48,7 +56,7 @@ pub fn spawn_level(
     let mut level = Level::default();
 
     // Floor: one big block with a 1 m checker so distances can be read off screenshots.
-    level.blocks.push(Block { min: Vec3::new(-FLOOR, -1.0, -FLOOR), max: Vec3::new(FLOOR, 0.0, FLOOR) });
+    level.blocks.push(Block { min: Vec3::new(-FLOOR, -1.0, -FLOOR), max: Vec3::new(FLOOR, 0.0, FLOOR), wall_jump: false });
     let checker = images.add(checker_image());
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(FLOOR * 2.0, FLOOR * 2.0))),
@@ -110,6 +118,17 @@ pub fn spawn_level(
         add(&mut commands, Block::new(Vec2::new(top.x + d, top.z), 0.0, Vec3::new(3.0, 0.2, 3.0)), Color::srgb(0.2, 0.8, 0.4));
     }
 
+    // Wall-jump shaft: two 14 m walls that take wall jumps (teal), 3.4 m apart across Z, with a
+    // ledge on top of the -Z one. Beside it, an ordinary wall of the same height (grey).
+    let shaft = spots::WALL_SHAFT;
+    const GAP: f32 = 3.4;
+    for side in [-1.0, 1.0] {
+        let wall = Block::new(Vec2::new(shaft.x, shaft.z + side * (GAP * 0.5 + 0.4)), 0.0, Vec3::new(6.0, 14.0, 0.8));
+        add(&mut commands, wall.wall_jump(), Color::srgb(0.15, 0.7, 0.75));
+    }
+    add(&mut commands, Block::new(Vec2::new(shaft.x, shaft.z - GAP * 0.5 - 2.8), 0.0, Vec3::new(6.0, 14.0, 4.0)), Color::srgb(0.15, 0.6, 0.65));
+    add(&mut commands, Block::new(Vec2::new(shaft.x - 10.0, shaft.z), 0.0, Vec3::new(0.8, 14.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
+
     commands.insert_resource(level);
 }
 
@@ -137,12 +156,22 @@ fn checker_image() -> Image {
     image
 }
 
+/// A wall the character ran into: the way it faces (out of the wall, on the ground plane) and
+/// whether it takes wall jumps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallHit {
+    pub normal: Vec2,
+    pub wall_jump: bool,
+}
+
 /// Result of moving the character's box through the level.
 pub struct MoveResult {
     pub feet: Vec3,
     pub grounded: bool,
     pub hit_ceiling: bool,
     pub hit_wall: bool,
+    /// The wall it ran into, if any (the last one, when two).
+    pub wall: Option<WallHit>,
 }
 
 /// Moves a box (feet position, half width, height) by `delta`, one axis at a time, stopping at
@@ -153,6 +182,7 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
     let mut grounded = false;
     let mut hit_ceiling = false;
     let mut hit_wall = false;
+    let mut wall = None;
 
     // Vertical.
     let target_y = p.y + delta.y;
@@ -193,6 +223,8 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
                 continue;
             }
             hit_wall = true;
+            let out = -d.signum();
+            wall = Some(WallHit { normal: if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) }, wall_jump: b.wall_jump });
             next[axis] = if d > 0.0 { b.min[axis] - half_w - SKIN } else { b.max[axis] + half_w + SKIN };
         }
         p = next;
@@ -203,7 +235,7 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
         grounded = level.blocks.iter().any(|b| overlaps_xz(b, p, half_w) && (p.y - b.max.y).abs() <= 1e-3);
     }
 
-    MoveResult { feet: p, grounded, hit_ceiling, hit_wall }
+    MoveResult { feet: p, grounded, hit_ceiling, hit_wall, wall }
 }
 
 /// Distance from the feet straight down to the nearest top surface.

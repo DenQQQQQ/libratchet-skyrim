@@ -5,7 +5,7 @@
 //! boundary (Skyrim: Z up, about 70 units per metre).
 
 use libratchet::glam::{Vec2, Vec3};
-use libratchet::{Contact, Event, Input, MoveState, Ratchet, ThrowStatus, Tuning, WrenchThrow};
+use libratchet::{Contact, Event, Input, MoveState, Ratchet, ThrowStatus, Tuning, WallContact, WrenchThrow};
 use std::ffi::{CStr, c_char};
 use std::path::Path;
 
@@ -44,6 +44,12 @@ pub struct RatchetContact {
     /// 1 if `ground_distance` is valid.
     pub has_ground_distance: u8,
     pub ground_distance: f32,
+    /// 1 if the last move ran into a wall; its normal (out of the wall, x/z) and whether it
+    /// takes wall jumps.
+    pub has_wall: u8,
+    pub wall_sticky: u8,
+    pub wall_normal_x: f32,
+    pub wall_normal_z: f32,
 }
 
 pub const RATCHET_EVENT_JUMPED: u32 = 1 << 0;
@@ -61,6 +67,8 @@ pub const RATCHET_EVENT_MELEE_HIT: u32 = 1 << 9;
 pub const RATCHET_EVENT_SMASH_STARTED: u32 = 1 << 10;
 /// The Hyper-Strike hit the ground: apply the slam around the character.
 pub const RATCHET_EVENT_SMASH_IMPACT: u32 = 1 << 11;
+pub const RATCHET_EVENT_WALL_STUCK: u32 = 1 << 12;
+pub const RATCHET_EVENT_WALL_JUMPED: u32 = 1 << 13;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -114,6 +122,8 @@ fn state_code(s: MoveState) -> u32 {
         MoveState::Melee => 7,
         MoveState::Smash => 8,
         MoveState::SmashLand => 9,
+        MoveState::WallStick => 10,
+        MoveState::WallJump => 11,
     }
 }
 
@@ -191,6 +201,10 @@ pub unsafe extern "C" fn ratchet_step(
         grounded: contact.grounded != 0,
         ground_distance: (contact.has_ground_distance != 0).then_some(contact.ground_distance),
         hit_ceiling: contact.hit_ceiling != 0,
+        wall: (contact.has_wall != 0).then(|| WallContact {
+            normal: Vec2::new(contact.wall_normal_x, contact.wall_normal_z).normalize_or_zero(),
+            sticky: contact.wall_sticky != 0,
+        }),
     };
     let v = sim.sim.step(dt, &input, &contact, Vec3::new(position.x, position.y, position.z));
     let mut events = 0;
@@ -219,6 +233,8 @@ pub unsafe extern "C" fn ratchet_step(
             }
             Event::SmashStarted => RATCHET_EVENT_SMASH_STARTED,
             Event::SmashImpact { .. } => RATCHET_EVENT_SMASH_IMPACT,
+            Event::WallStuck => RATCHET_EVENT_WALL_STUCK,
+            Event::WallJumped => RATCHET_EVENT_WALL_JUMPED,
         };
     }
     RatchetStepResult {
@@ -364,7 +380,7 @@ mod tests {
             saw_jump |= r.events & RATCHET_EVENT_JUMPED != 0;
             pos.y = (pos.y + r.velocity.y / 120.0).max(0.0);
             apex = apex.max(pos.y);
-            contact = RatchetContact { grounded: (pos.y <= 0.0) as u8, has_ground_distance: 1, ground_distance: pos.y, hit_ceiling: 0 };
+            contact = RatchetContact { grounded: (pos.y <= 0.0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
         }
         unsafe { ratchet_free(sim) };
         assert!(saw_jump);

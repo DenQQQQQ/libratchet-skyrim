@@ -521,6 +521,14 @@ PRESETS = {
             "wrench_strafe_land_s": "strafe_wrench_jump_land_s_hero_ratchet",
             "wrench_strafe_land_w": "strafe_wrench_jump_land_w_hero_ratchet",
             "wrench_strafe_land_idle": "strafe_wrench_jump_idle_land_hero_ratchet",
+            # Wall jumps (the Wall_Jump_Stick, Wall_Jump_Slide and Wall_Jump_InAir drivers): onto
+            # the wall, sliding down it, and the jump off, each for a wall on either side.
+            "wall_stick_left": "wall_jump_transition_stick_left_hero_ratchet",
+            "wall_stick_right": "wall_jump_transition_stick_right_hero_ratchet",
+            "wall_slide_left": "wall_jump_stick_slide_left_hero_ratchet",
+            "wall_slide_right": "wall_jump_stick_slide_right_hero_ratchet",
+            "wall_jump_left": "wall_jump_in_air_left_hero_ratchet",
+            "wall_jump_right": "wall_jump_in_air_right_hero_ratchet",
             # The glove's hand pose (the GloveAdditive driver), layered while the glove is on.
             "glove_hand": "weapon_glove_hand_partial",
             # Drawing a weapon (the Weapon_Draw driver, additive): the whole-body draw standing,

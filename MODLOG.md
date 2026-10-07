@@ -35,6 +35,57 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08: wall jumps
+
+The user picked wall jumps next.
+
+### Known (the user's install)
+- **WallStickConfig:** WallStickNoSlideTime 0.3, WallStickGravity -20, WallStickTerminalVelocity
+  -40, WallStickMinGroundHeight 1, WallStickFacingIntoWallThreshold 50, plus camera fields.
+- **JumpConfigs.WallJumpConfig:** a fixed 2.18 m height, TimeToPeak 0.41, NoInputTime 0.7,
+  NoGlideTime 0.7, DoubleJumpTimeStart 0.7, NoFallTime 1.2, momentum weights 0–0.1.
+- **WallJumpSpeeds:** 5 m/s in every direction.
+- **Animset:** Wall_Jump_Stick (`wall_jump_transition_stick_left/right`, 0.43 s), Wall_Jump_Slide
+  (`wall_jump_stick_slide_left/right`, 0.67 s) and Wall_Jump_InAir (`wall_jump_in_air_left/right`,
+  0.2 s).
+- **The jump's first tick (RiftApart.exe, the momentum research):** wall jumps, like ledge, vault
+  and grind jumps, take off at the jump speeds rather than at the speed he had. NoInputTime holds
+  the take-off velocity.
+- **Wall running:** there's a separate wall-running system (WallRunConfig, WallRunJumpConfig,
+  WallRunJumpSpeeds 8, left/right run clips). It isn't done yet.
+
+### Built
+- **libratchet:**
+  - **New states:** `WallStick` and `WallJump`, with Contact carrying the wall the last move ran
+    into (its normal, and whether it takes wall jumps).
+  - **Sticking:** airborne against a wall-jump wall, at least 1 m up and facing within 50° of
+    straight into it, he sticks. He holds for 0.3 s, then slides at 20 m/s² up to 40 m/s, and
+    slides off its edge into a fall.
+  - **Jumping off:** jump straight away from the wall at 5 m/s, unsteerable for 0.7 s, peaking
+    2.18 m up. He turns to face where it goes.
+  - **Events:** `WallStuck` and `WallJumped`, also in the C API (states 10/11, event bits 12/13).
+- **Tuning:** loads the three configs, with the game's values as the defaults.
+- **Tests:** 37 libratchet tests pass. New ones cover sticking, holding, sliding, the jump off,
+  and ordinary walls or low heights not sticking.
+- **Sandbox:**
+  - A wall-jump shaft: two teal 14 m walls 3.4 m apart, a ledge on top, and an ordinary grey wall
+    beside it.
+  - The level's blocks can take wall jumps, and its collision reports the wall it hit.
+  - The six clips, by side; the clip's sounds play.
+  - Pressing 0.2 s after each landing on a wall, each wall jump climbs about 1.9 m; seven clear
+    the shaft.
+- **Demo:** `--demo-part walljump`, shots `70_wall_shaft` … `74_ordinary_wall`.
+
+### Derived or assumed
+These wait on a research agent reading RiftApart.exe:
+- **Which walls take wall jumps:** we mark them in the level. How the game marks them isn't read
+  yet.
+- **Facing on the wall:** we have him face the wall.
+- **The left/right clips:** picked by which way he was heading along the wall.
+- **Re-sticking:** no sticking back onto the wall just jumped off.
+- **Air moves:** sticking gives his double jump and air dash back.
+- **Holding him on the wall:** pressing him into it at 0.5 m/s keeps it reported; that's ours.
+
 ## 2026-10-07 (late night): Clank's size, and no leg stretch in jumps
 
 The user saw Clank looking too big, and Ratchet's feet stretching far in the strafe jump to his
