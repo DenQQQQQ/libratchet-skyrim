@@ -14,7 +14,9 @@ const TICK: f32 = 1.0 / 120.0;
 #[derive(Clone)]
 enum Act {
     /// Hold this input for `secs`. Direction is world-space (x, z).
-    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool },
+    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool },
+    /// Throw the wrench (straight ahead).
+    Throw,
     Teleport(Vec3),
     ClearTrail,
     Scale(f32),
@@ -45,11 +47,70 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>) {
 }
 
 fn hold(secs: f32, dir: Vec2, jump: bool) -> Act {
-    Act::Hold { secs, dir, jump, dash: false }
+    Act::Hold { secs, dir, jump, dash: false, melee: false }
 }
 
 fn dash(dir: Vec2) -> Act {
-    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true }
+    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true, melee: false }
+}
+
+/// A melee press (a swing on the ground, a Hyper-Strike in the air).
+fn swing() -> Act {
+    Act::Hold { secs: 2.0 * TICK, dir: Vec2::ZERO, jump: false, dash: false, melee: true }
+}
+
+/// The OmniWrench in the arena: the 3-hit combo into the first dummies, a Hyper-Strike into the
+/// ring further on, and a throw at the far one. Ratchet faces +X.
+fn wrench_moves() -> Vec<Act> {
+    let arena = spots::ARENA;
+    let x = Vec2::X;
+    vec![
+        Act::ClearTrail,
+        Act::Teleport(arena + Vec3::new(-1.0, 0.0, 0.0)),
+        Act::Follow { yaw: 0.75, pitch: 0.2, distance: 5.0 },
+        hold(0.12, x, false),
+        hold(0.9, Vec2::ZERO, false),
+        Act::Shot("13_wrench_ready"),
+        hold(0.1, Vec2::ZERO, false),
+        // Swing 1 hits at about 0.05 s; a press during each swing queues the next.
+        swing(),
+        hold(0.07, Vec2::ZERO, false),
+        Act::Shot("14_melee_1"),
+        swing(),
+        hold(0.18, Vec2::ZERO, false),
+        Act::Shot("15_melee_2"),
+        swing(),
+        hold(0.42, Vec2::ZERO, false),
+        Act::Shot("16_melee_3"),
+        hold(1.2, Vec2::ZERO, false),
+        // Hyper-Strike: jump, melee at the top, slam down among the ring of dummies.
+        Act::Teleport(arena + Vec3::new(8.0, 0.0, 0.0)),
+        hold(0.12, x, false),
+        hold(0.5, Vec2::ZERO, false),
+        Act::Follow { yaw: 1.1, pitch: 0.18, distance: 6.0 },
+        hold(0.35, Vec2::ZERO, true),
+        hold(0.05, Vec2::ZERO, false),
+        swing(),
+        hold(0.14, Vec2::ZERO, false),
+        Act::Shot("17_hyper_strike_hop"),
+        hold(0.2, Vec2::ZERO, false),
+        Act::Shot("18_hyper_strike_slam"),
+        hold(1.0, Vec2::ZERO, false),
+        // Throw at the far dummy, 10 m ahead.
+        Act::Teleport(arena + Vec3::new(12.0, 0.0, 4.0)),
+        hold(0.12, x, false),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Follow { yaw: -2.0, pitch: 0.22, distance: 5.5 },
+        hold(0.3, Vec2::ZERO, false),
+        Act::Throw,
+        hold(0.25, Vec2::ZERO, false),
+        Act::Shot("19_wrench_throw"),
+        hold(0.3, Vec2::ZERO, false),
+        Act::Follow { yaw: -1.3, pitch: 0.25, distance: 9.0 },
+        hold(0.05, Vec2::ZERO, false),
+        Act::Shot("20_wrench_hit"),
+        hold(2.0, Vec2::ZERO, false),
+    ]
 }
 
 /// Ground dash, then jump + air dash, heading +X.
@@ -183,6 +244,7 @@ fn script() -> Vec<Act> {
     acts.extend(dashes());
     acts.push(Act::Wide { name: "04_dashes", focus: lane + Vec3::new(14.0, 1.5, 0.0), yaw: 0.0, pitch: 0.06, distance: 24.0, secs: 1.5 });
     acts.extend(close_ups());
+    acts.extend(wrench_moves());
     acts
 }
 
@@ -191,6 +253,7 @@ fn run_script(
     time: Res<Time>,
     mut demo: ResMut<Demo>,
     mut scripted: ResMut<ScriptedInput>,
+    mut throw: ResMut<crate::wrench::ScriptedThrow>,
     mut rig: ResMut<CameraRig>,
     mut settings: ResMut<Settings>,
     mut players: Query<&mut Player>,
@@ -225,8 +288,9 @@ fn run_script(
                 rig.fixed = None;
                 rig.focus = p.feet;
             }
-            Act::Hold { secs, dir, jump, dash } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash });
+            Act::Throw => throw.0 = true,
+            Act::Hold { secs, dir, jump, dash, melee } => {
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

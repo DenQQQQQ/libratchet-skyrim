@@ -74,6 +74,8 @@ def decode(name, sections):
     n_joints = len(hraw) // 4
     hashes = list(struct.unpack_from(f"<{n_joints}I", hraw))
     base = sections[BASE]
+    if len(base) < n_joints * 16:
+        return None  # a smaller base-state layout we don't read yet (some prop clips)
     b16 = np.frombuffer(base[: n_joints * 16], np.int16).reshape(n_joints, 8).astype(np.float64)
     pos_exp = np.frombuffer(base[: n_joints * 16], np.uint8).reshape(n_joints, 16)[:, 15].astype(np.float64)
 

@@ -35,6 +35,93 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (evening): the OmniWrench
+
+The user asked for the wrench next. The sandbox now has the 3-hit combo, the Hyper-Strike and
+the throw, with Ratchet's own clips and the wrench model in his hand. Target dummies in a new
+arena take the hits.
+
+### Known (configs from the user's install)
+- **Combo** (`configs\equipment\wpn_wrench_melee.config`): three hits of 20 damage each,
+  knocking a standard enemy back 2.5, 2 and 4 m.
+- **Hyper-Strike** (melee in the air):
+  - It hops by `MeleeSmashJumpConfig` (1 m in 0.242 s, in `hero_traversal`).
+  - It needs 0.33 m of room below (`MeleeSmashMinHeight`, `hero_shared`).
+  - It comes down at 1000 m/s² (`MeleeSmashDescendGravity`), capped at 70 m/s.
+  - The slam does 50 damage in a 3 m radius.
+- **Throw** (`wpn_wrench_weapon.config`, `WeaponWrenchPrius`):
+  - Out at 30 m/s, up to 15 m.
+  - Back at up to 60 m/s with a "jerk" of 60.
+  - Spins at 1800°/s and does 30 damage.
+- **Where the wrench goes:** the game mounts weapons on the `igLoc_RT_gunAttach` locator. It
+  sits on Ratchet's `RT_handle_bound` joint with no offset, and the wrench's origin is its
+  grip.
+  - Not `prop_attach`: that joint moves backward as Ratchet lunges, so it marks where the
+    swing started.
+
+### Read from RiftApart.exe
+- **Root motion** (clip section `E08AA35F`, sampled by the game's motion-data function):
+  - byte 0 = format (0 = 16-byte keys), byte 2 = key count;
+  - keys start at `0x7c + int32 @0x3c`;
+  - each key = int16 quaternion / 32768, then int16 xyz × 2^-n, with n in byte 14.
+- **Sanity check:** Ratchet's run clip covers 5.5 m/s, and his configured run speed is
+  5.75 m/s.
+- **The swings lunge 0.79, 1.10 and 1.60 m.** libratchet moves him by that curve over each
+  swing.
+
+### Derived or assumed
+- **Hit times:** 0.05, 0.12 and 0.35 s. That's the moment the wrench moves fastest near each
+  swing's biggest lunge, computed by `tools/extract_riftapart_configs.py` into
+  `hero_melee_clips.json`. The game's own hit timing hasn't been found.
+- **Combo timing (ours):**
+  - A press during a swing queues the next one, 0.1 s after the hit.
+  - Moving, jumping or dashing cuts a swing from 0.25 s after the hit.
+  - Pressing on after the third hit starts over.
+- **Hyper-Strike motion:** it drifts forward by the intro clip's root motion while rising, then
+  slams straight down.
+- **Throw path:** out at a constant speed, then home on the hand with the jerk-limited speed.
+  A dummy or a wall turns it back.
+- **Sandbox only:**
+  - The swing reaches 1.8 m.
+  - Knockbacks slide at 20 m/s² deceleration, so a hit travels its configured distance.
+  - The slam pushes dummies 3 m.
+- **Not decoded:** the wrench's own Hyper-Strike clips use a smaller base-state layout, so the
+  wrench doesn't squash and stretch during the slam.
+- **Dash data point:** the dash clip's root motion covers 5.96 m, while `DodgeConfig.Distance`
+  is 7. That bears on assumption 9.
+
+### Built
+- **libratchet:**
+  - New states `Melee`, `Smash`, `SmashLand`.
+  - Events `MeleeSwing`, `MeleeHit`, `SmashStarted`, `SmashImpact`.
+  - `Input.melee`.
+  - `WrenchThrow` for the throw.
+  - `MeleeParams`/`SwingParams`/`ThrowParams` in `Tuning`, filled from the configs when they're
+    present.
+- **C API:**
+  - `melee` input, states 7–9 and event bits 8–11.
+  - `ratchet_swing_info`, `ratchet_smash_info`.
+  - `ratchet_wrench_throw`/`_step`/`_free`.
+- **Converter:** Ratchet's six wrench clips, plus `wrench.glb` (the model with its three swing
+  clips).
+- **Sandbox:**
+  - Left mouse/E melee, right mouse/Q throw.
+  - The wrench shows in his hand while swinging.
+  - Target dummies, camera shake on the slam, a HUD line.
+  - Demo shots `13_wrench_ready` … `20_wrench_hit`.
+  - Videos `recordings/omniwrench_demo.mp4` and `omniwrench_combo_slowmo.mp4`.
+
+### Tested
+- `cargo test --workspace`: 24 libratchet tests, including the following:
+  - lunge distance and hit timing;
+  - combo order and looping;
+  - move-cancel timing;
+  - the Hyper-Strike hop, slam and minimum height;
+  - the throw's round trip and early return;
+  - the real configs (3 swings, 1000 m/s² slam).
+- 3 C API tests.
+- The C++ smoke test (MSVC) now also swings and throws through the header.
+
 ## 2026-10-07 (late afternoon): Clank's head size and heli-pack
 
 The user compared Clank with a screenshot from the game: his head was too big and the
@@ -158,3 +245,8 @@ current vertical speed (we replace), and the dash, which looks animation-driven 
 13. Clank's rotors spin at 22 rad/s. The blur discs are translucent grey. The heli looks
     (4–6) are only on while the heli-pack is out. Looks 1–3 (body without arms, left arm,
     right arm) aren't used.
+14. Swing hit times come from the wrench's fastest moment near each lunge peak.
+15. Combo chaining is 0.1 s after the hit; cancelling is 0.25 s after the hit.
+16. The Hyper-Strike drifts forward only while rising, then drops straight down.
+17. The thrown wrench flies out at constant speed, then returns with the configured jerk and
+    top speed.

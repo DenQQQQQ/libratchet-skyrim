@@ -6,7 +6,9 @@
 
 mod sim;
 mod tuning;
+mod wrench;
 
 pub use glam;
 pub use sim::{Contact, Event, Input, MoveState, Ratchet};
-pub use tuning::{DashParams, JumpParams, SpeedParams, Tuning};
+pub use tuning::{DashParams, JumpParams, MeleeParams, SpeedParams, SwingParams, ThrowParams, Tuning};
+pub use wrench::{ThrowStatus, WrenchThrow};

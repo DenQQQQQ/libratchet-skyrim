@@ -2,7 +2,7 @@
 //! RiftApart.exe (see MODLOG.md): apex heights and timing, the double-jump cap, glide limits.
 
 use libratchet::glam::{Vec2, Vec3};
-use libratchet::{Contact, Event, Input, MoveState, Ratchet, Tuning};
+use libratchet::{Contact, Event, Input, MoveState, Ratchet, ThrowStatus, Tuning, WrenchThrow};
 
 const DT: f32 = 1.0 / 120.0;
 
@@ -30,7 +30,7 @@ impl Flat {
     }
 
     fn tick(&mut self, jump: bool, stick: Vec2) {
-        self.tick_with(Input { move_dir: stick, jump, dash: false });
+        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false });
     }
 
     fn tick_with(&mut self, input: Input) {
@@ -306,12 +306,12 @@ fn ground_dash_covers_its_distance_including_braking() {
             h.tick(false, fwd);
         }
         let start = h.pos.z;
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: true });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
         assert_eq!(h.r.state(), MoveState::Dash);
         let mut peak: f32 = 0.0;
         let mut ticks = 1;
         while h.r.state() == MoveState::Dash && ticks < 240 {
-            h.tick_with(Input { move_dir: fwd, jump: false, dash: true });
+            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
             peak = peak.max(h.r.velocity().z);
             ticks += 1;
         }
@@ -332,16 +332,16 @@ fn air_dash_is_flat_and_once_per_air_time() {
     let fwd = Vec2::new(0.0, 1.0);
     h.rise(true);
     let start = h.pos;
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
     assert_eq!(h.r.state(), MoveState::AirDash);
     while h.r.state() == MoveState::AirDash {
         assert!((h.pos.y - start.y).abs() < 0.05, "air dash changed height to {}", h.pos.y);
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: false });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false });
     }
     let travelled = h.pos.z - start.z;
     assert!((travelled - t.air_dash.distance).abs() < 0.3, "air dash went {travelled} m");
     // A second press in the same air time does nothing.
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
     assert_ne!(h.r.state(), MoveState::AirDash);
     assert_eq!(h.count(|e| *e == Event::AirDashed), 1);
     // After landing it's available again.
@@ -350,6 +350,173 @@ fn air_dash_is_flat_and_once_per_air_time() {
     }
     assert_eq!(h.r.state(), MoveState::Ground);
     h.jump(0.2, 0.25);
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
     assert_eq!(h.r.state(), MoveState::AirDash);
+}
+
+fn melee_press() -> Input {
+    Input { melee: true, ..Default::default() }
+}
+
+/// Runs one swing from a press to its end; returns how far it lunged (facing +Z).
+fn one_swing(h: &mut Flat) -> f32 {
+    let start = h.pos;
+    h.tick_with(melee_press());
+    while h.r.state() == MoveState::Melee && h.time < 10.0 {
+        h.tick(false, Vec2::ZERO);
+    }
+    h.pos.z - start.z
+}
+
+#[test]
+fn a_swing_lunges_by_its_root_motion_and_hits_once() {
+    let t = Tuning::default();
+    let w = t.melee.combo[0].clone();
+    let mut h = Flat::new(t.clone());
+    let lunged = one_swing(&mut h);
+    assert!(close(lunged, *w.lunge.last().unwrap(), 0.03), "lunged {lunged} m");
+    assert!(close(h.time, w.duration, 2.0 * DT), "swing lasted {} s", h.time);
+    let hits: Vec<f32> = h.events.iter().filter(|(_, e)| matches!(e, Event::MeleeHit { index: 0 })).map(|(t, _)| *t).collect();
+    assert_eq!(hits.len(), 1);
+    assert!(close(hits[0], w.hit_time, 2.0 * DT), "hit at {} s", hits[0]);
+    assert_eq!(h.r.state(), MoveState::Ground);
+}
+
+#[test]
+fn mashing_melee_runs_the_combo_in_order_and_starts_over() {
+    let mut h = Flat::new(Tuning::default());
+    for i in 0..480 {
+        // A press every 0.1 s.
+        h.tick_with(Input { melee: i % 12 == 0, ..Default::default() });
+    }
+    let swings: Vec<usize> = h.events.iter().filter_map(|(_, e)| if let Event::MeleeSwing { index } = e { Some(*index) } else { None }).collect();
+    assert!(swings.len() >= 4, "swings {swings:?}");
+    assert_eq!(&swings[..4], &[0, 1, 2, 0]);
+    // A swing only hands over to the next one after its own hit.
+    assert!(h.count(|e| matches!(e, Event::MeleeHit { .. })) + 1 >= swings.len());
+}
+
+#[test]
+fn moving_cuts_a_swing_short_after_the_hit() {
+    let t = Tuning::default();
+    let w = t.melee.combo[0].clone();
+    let mut h = Flat::new(t.clone());
+    h.tick_with(melee_press());
+    let mut left = None;
+    while h.time < w.duration && left.is_none() {
+        h.tick(false, Vec2::new(1.0, 0.0));
+        if h.r.state() != MoveState::Melee {
+            left = Some(h.time);
+        }
+    }
+    let left = left.expect("moving should cancel the swing");
+    assert!(close(left, w.hit_time + t.melee.cancel_delay, 2.0 * DT), "cancelled at {left} s");
+}
+
+#[test]
+fn hyper_strike_hops_then_slams_down() {
+    let t = Tuning::default();
+    let m = t.melee.clone();
+    let mut h = Flat::new(t.clone());
+    h.rise(true);
+    let (y0, start) = (h.pos.y, h.time);
+    h.tick_with(melee_press());
+    assert_eq!(h.r.state(), MoveState::Smash);
+    let mut top = h.pos.y;
+    while h.r.state() == MoveState::Smash && h.time - start < 3.0 {
+        h.tick(false, Vec2::ZERO);
+        top = top.max(h.pos.y);
+    }
+    assert!(close(top - y0, m.smash_hop.height_min, 0.05), "hopped {} m", top - y0);
+    assert_eq!(h.r.state(), MoveState::SmashLand);
+    let impact = h.events.iter().find_map(|(_, e)| if let Event::SmashImpact { fall_speed } = e { Some(*fall_speed) } else { None });
+    assert!(impact.expect("no impact event") > 20.0, "slammed at only {impact:?} m/s");
+    let airborne = h.time - start;
+    assert!(airborne < m.smash_hop.time_to_peak + 0.25, "took {airborne} s to come down");
+    for _ in 0..((m.smash_land_time / DT) as usize + 2) {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert_eq!(h.r.state(), MoveState::Ground);
+}
+
+#[test]
+fn no_hyper_strike_right_above_the_floor() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.tick(true, Vec2::ZERO);
+    h.tick(false, Vec2::ZERO);
+    assert!(h.pos.y > 0.0 && h.pos.y < t.melee.smash_min_height);
+    h.tick_with(melee_press());
+    assert_ne!(h.r.state(), MoveState::Smash);
+}
+
+#[test]
+fn thrown_wrench_goes_out_and_comes_back() {
+    let p = Tuning::default().melee.throw;
+    let mut w = WrenchThrow::new(&p, Vec3::ZERO, Vec3::Z);
+    let (mut far, mut t) = (0.0f32, 0.0);
+    while w.step(DT, Vec3::ZERO, false) == ThrowStatus::Flying {
+        t += DT;
+        far = far.max(w.position().z);
+        assert!(t < 5.0, "never came back");
+    }
+    assert!(close(far, p.max_distance, 0.01), "went {far} m");
+    let out = p.max_distance / p.out_speed;
+    assert!(t > out && t < out + 2.5, "round trip took {t} s");
+}
+
+#[test]
+fn thrown_wrench_turns_back_when_it_hits_something() {
+    let p = Tuning::default().melee.throw;
+    let mut w = WrenchThrow::new(&p, Vec3::ZERO, Vec3::X);
+    for _ in 0..10 {
+        w.step(DT, Vec3::ZERO, false);
+    }
+    w.step(DT, Vec3::ZERO, true);
+    assert!(w.returning());
+    assert!(w.position().x < p.max_distance * 0.5);
+}
+
+#[test]
+fn loads_wrench_configs_when_present() {
+    let dir = std::env::var("RIFTAPART_CONFIGS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../riftapart-configs"));
+    if !dir.join("hero_melee_clips.json").exists() {
+        eprintln!("skipping: no hero_melee_clips.json in {}", dir.display());
+        return;
+    }
+    let t = Tuning::from_riftapart_configs(&dir).expect("configs should parse");
+    let m = &t.melee;
+    for (i, w) in m.combo.iter().enumerate() {
+        eprintln!(
+            "swing {}: {:.2} s, hit at {:.2} s, lunge {:.2} m, damage {}, knockback {} m",
+            i + 1,
+            w.duration,
+            w.hit_time,
+            w.lunge.last().copied().unwrap_or(0.0),
+            w.damage,
+            w.knockback
+        );
+        assert!(w.hit_time > 0.0 && w.hit_time < w.duration && !w.lunge.is_empty());
+    }
+    eprintln!(
+        "hyper-strike: hop {} m in {} s, then {} m/s² (min height {} m), lands for {:.2} s, {} damage in {} m; \
+         throw {} m/s out to {} m, back at up to {} m/s",
+        m.smash_hop.height_min,
+        m.smash_hop.time_to_peak,
+        m.smash_gravity,
+        m.smash_min_height,
+        m.smash_land_time,
+        m.smash_damage,
+        m.smash_radius,
+        m.throw.out_speed,
+        m.throw.max_distance,
+        m.throw.return_max_speed
+    );
+    assert_eq!(m.combo.len(), 3);
+    assert!(m.smash_gravity > 100.0);
+    let mut h = Flat::new(t.clone());
+    let lunged = one_swing(&mut h);
+    assert!(close(lunged, *m.combo[0].lunge.last().unwrap(), 0.03), "lunged {lunged} m");
 }

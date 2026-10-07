@@ -49,7 +49,11 @@ struct ModelRoot;
 struct ModelGltf(Handle<Gltf>);
 
 /// Clip names baked into ratchet.glb by the converter (one per move).
-const CLIP_STATES: &[&str] = &["idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash"];
+const CLIP_STATES: &[&str] = &[
+    "idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash", "melee_1", "melee_2", "melee_3", "smash_intro", "smash",
+    "throw",
+];
+const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
 const LOOPING: &[&str] = &["idle", "run", "fall", "glide"];
 
 struct Bone {
@@ -171,6 +175,13 @@ fn on_ready(
     {
         crate::clank::spawn(&mut commands, &assets, attach);
     }
+    // The OmniWrench goes in his right hand: the game mounts weapons on the igLoc_RT_gunAttach
+    // locator, which sits on RT_handle_bound with no offset (the wrench's origin is its grip).
+    if let (Some(dir), Some(&hand)) = (settings.model_dir.as_ref(), by_name.get("RT_handle_bound"))
+        && dir.join(crate::wrench::MODEL_FILE).exists()
+    {
+        crate::wrench::spawn(&mut commands, &assets, hand);
+    }
 
     let mut bones = HashMap::new();
     for &name in BONES {
@@ -244,6 +255,7 @@ fn play_clips(
     time: Res<Time>,
     settings: Res<Settings>,
     rig: Option<ResMut<Rig>>,
+    wrench: Res<crate::wrench::Wrench>,
     players: Query<&Player>,
     mut anim: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
@@ -264,6 +276,7 @@ fn play_clips(
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
 
     let want: &'static str = match state {
+        MoveState::Ground if wrench.throw_anim > 0.0 && speed <= 0.6 => "throw",
         MoveState::Ground if speed > 0.6 => "run",
         MoveState::Ground if rig.land_timer > 0.0 => "land",
         MoveState::Ground => "idle",
@@ -274,12 +287,23 @@ fn play_clips(
         MoveState::Glide => "glide",
         MoveState::Dash => "dash",
         MoveState::AirDash => "air_dash",
+        MoveState::Melee => MELEE_CLIPS[p.sim.melee_swing().unwrap_or(0).min(MELEE_CLIPS.len() - 1)],
+        MoveState::Smash => "smash_intro",
+        MoveState::SmashLand => "smash",
     };
     let want = if rig.clips.contains_key(want) { want } else { "idle" };
     if rig.current_clip != Some(want)
         && let Some(&node) = rig.clips.get(want)
     {
-        let fade = if want == "land" || rig.current_clip == Some("land") { 90 } else { 160 };
+        // Wrench moves cut in quickly.
+        let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash"));
+        let fade = if quick(Some(want)) || quick(rig.current_clip) {
+            60
+        } else if want == "land" || rig.current_clip == Some("land") {
+            90
+        } else {
+            160
+        };
         let active = transitions.play(&mut player, node, Duration::from_millis(fade));
         if LOOPING.contains(&want) {
             active.repeat();
@@ -376,7 +400,7 @@ fn target_pose(state: MoveState, speed: f32, vy: f32, run_max: f32, phase: f32, 
             tail_lift: -0.2,
             tail_sway: 0.15 * sway,
         },
-        MoveState::Dash | MoveState::AirDash => Pose {
+        MoveState::Dash | MoveState::AirDash | MoveState::Melee | MoveState::Smash | MoveState::SmashLand => Pose {
             hip: [-0.7, 0.8],
             knee: [0.9, 0.6],
             arm_drop: 1.1,

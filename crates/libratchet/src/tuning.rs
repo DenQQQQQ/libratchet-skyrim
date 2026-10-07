@@ -164,6 +164,165 @@ impl DashParams {
     }
 }
 
+/// One swing of the wrench combo, shaped by its animation in the game: how long it lasts, when
+/// the wrench connects, and the forward lunge (the clip's root motion).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwingParams {
+    pub duration: f32,
+    /// Seconds into the swing when the wrench connects.
+    pub hit_time: f32,
+    /// Forward distance from where the swing started, one sample every `1 / lunge_rate` s.
+    /// Empty: no lunge.
+    pub lunge: Vec<f32>,
+    pub lunge_rate: f32,
+    /// For hosts: damage, and how far it knocks a standard enemy back.
+    pub damage: f32,
+    pub knockback: f32,
+}
+
+impl SwingParams {
+    /// Forward distance covered `t` seconds into the swing.
+    pub fn lunge_at(&self, t: f32) -> f32 {
+        let Some(&last) = self.lunge.last() else { return 0.0 };
+        let x = (t * self.lunge_rate).max(0.0);
+        let i = x.floor() as usize;
+        if i + 1 >= self.lunge.len() {
+            return last;
+        }
+        lerp(self.lunge[i], self.lunge[i + 1], x - i as f32)
+    }
+
+    /// A swing that lunges `distance` at an even speed over its first `lunge_time` seconds.
+    fn even(duration: f32, hit_time: f32, distance: f32, lunge_time: f32, damage: f32, knockback: f32) -> SwingParams {
+        let rate = 30.0;
+        let n = ((lunge_time * rate).ceil() as usize).max(1);
+        SwingParams {
+            duration,
+            hit_time,
+            lunge: (0..=n).map(|k| distance * k as f32 / n as f32).collect(),
+            lunge_rate: rate,
+            damage,
+            knockback,
+        }
+    }
+
+    fn scaled(&self, s: f32) -> SwingParams {
+        SwingParams { lunge: self.lunge.iter().map(|d| d * s).collect(), knockback: self.knockback * s, ..self.clone() }
+    }
+}
+
+/// The OmniWrench throw: out along the aim, then back to the hand. Shaped like Rift Apart's
+/// `WeaponWrenchPrius`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThrowParams {
+    pub out_speed: f32,
+    pub max_distance: f32,
+    pub return_max_speed: f32,
+    /// How quickly the return speeds up: its acceleration grows by this much per second (m/s³).
+    pub return_jerk: f32,
+    /// Degrees per second.
+    pub spin_speed: f32,
+    /// For hosts.
+    pub damage: f32,
+    pub damage_radius: f32,
+    /// The wrench is caught once it's this close to the hand (ours, not from the game).
+    pub catch_radius: f32,
+}
+
+impl ThrowParams {
+    fn scaled(&self, s: f32) -> ThrowParams {
+        ThrowParams {
+            out_speed: self.out_speed * s,
+            max_distance: self.max_distance * s,
+            return_max_speed: self.return_max_speed * s,
+            return_jerk: self.return_jerk * s,
+            damage_radius: self.damage_radius * s,
+            catch_radius: self.catch_radius * s,
+            ..self.clone()
+        }
+    }
+}
+
+/// OmniWrench melee: the ground combo and the Hyper-Strike (melee in the air: a hop, then a
+/// slam straight down).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeleeParams {
+    /// The ground combo in order. Pressing on after the last swing starts it over.
+    pub combo: Vec<SwingParams>,
+    /// A press during a swing queues the next one, which starts this long after the hit.
+    /// (Ours: the game's value isn't known.)
+    pub chain_delay: f32,
+    /// This long after the hit, moving, jumping or dashing cuts the rest of the swing.
+    /// (Ours: the game's value isn't known.)
+    pub cancel_delay: f32,
+    /// Hyper-Strike: melee in the air hops like this jump...
+    pub smash_hop: JumpParams,
+    /// ...when at least this far above the ground...
+    pub smash_min_height: f32,
+    /// ...then slams down at this gravity (m/s²), no faster than the hop's terminal velocity.
+    pub smash_gravity: f32,
+    /// Forward drift during the hop (the intro animation's root motion).
+    pub smash_intro: SwingParams,
+    /// Seconds spent on the ground after the slam.
+    pub smash_land_time: f32,
+    /// For hosts: the slam's damage and radius.
+    pub smash_damage: f32,
+    pub smash_radius: f32,
+    pub throw: ThrowParams,
+}
+
+impl Default for MeleeParams {
+    fn default() -> Self {
+        MeleeParams {
+            combo: vec![
+                SwingParams::even(0.7, 0.1, 0.6, 0.15, 10.0, 2.0),
+                SwingParams::even(0.6, 0.12, 0.8, 0.25, 10.0, 2.0),
+                SwingParams::even(0.9, 0.3, 1.2, 0.45, 15.0, 3.5),
+            ],
+            chain_delay: 0.1,
+            cancel_delay: 0.25,
+            smash_hop: JumpParams {
+                height_min: 0.8,
+                height_max: 0.8,
+                time_to_peak: 0.25,
+                terminal_velocity: 60.0,
+                ..JumpParams::FALLBACK
+            },
+            smash_min_height: 0.4,
+            smash_gravity: 800.0,
+            smash_intro: SwingParams::even(0.45, 0.0, 1.0, 0.4, 0.0, 0.0),
+            smash_land_time: 0.6,
+            smash_damage: 25.0,
+            smash_radius: 2.5,
+            throw: ThrowParams {
+                out_speed: 25.0,
+                max_distance: 14.0,
+                return_max_speed: 50.0,
+                return_jerk: 60.0,
+                spin_speed: 1500.0,
+                damage: 15.0,
+                damage_radius: 0.5,
+                catch_radius: 0.6,
+            },
+        }
+    }
+}
+
+impl MeleeParams {
+    fn scaled(&self, s: f32) -> MeleeParams {
+        MeleeParams {
+            combo: self.combo.iter().map(|w| w.scaled(s)).collect(),
+            smash_hop: self.smash_hop.scaled(s),
+            smash_min_height: self.smash_min_height * s,
+            smash_gravity: self.smash_gravity * s,
+            smash_intro: self.smash_intro.scaled(s),
+            smash_radius: self.smash_radius * s,
+            throw: self.throw.scaled(s),
+            ..self.clone()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tuning {
     pub ground_speeds: SpeedParams,
@@ -186,6 +345,8 @@ pub struct Tuning {
     pub ground_dash: DashParams,
     /// Dash in the air (once per air time).
     pub air_dash: DashParams,
+    /// OmniWrench combo, Hyper-Strike and throw.
+    pub melee: MeleeParams,
     /// Size multiplier applied by `scaled`; 1.0 means Ratchet-sized.
     pub scale: f32,
     /// Where these values came from, for display.
@@ -241,6 +402,7 @@ impl Default for Tuning {
             max_midair_jumps: 1,
             ground_dash: DashParams { distance: 6.5, max_speed: 28.0, accel: 100.0, decel: 50.0 },
             air_dash: DashParams { distance: 6.5, max_speed: 12.0, accel: 0.0, decel: 0.0 },
+            melee: MeleeParams::default(),
             scale: 1.0,
             source: "generic defaults".into(),
         }
@@ -248,8 +410,9 @@ impl Default for Tuning {
 }
 
 impl Tuning {
-    /// Builds tuning from the JSON files written by the extractor:
-    /// `hero_traversal.json` and `hero_shared.json` in `dir`.
+    /// Builds tuning from the JSON files written by the extractor: `hero_traversal.json` and
+    /// `hero_shared.json` in `dir`, plus the wrench files when present (`wpn_wrench_melee.json`,
+    /// `wpn_wrench_weapon.json`, `hero_melee_clips.json`); melee falls back to the defaults.
     pub fn from_riftapart_configs(dir: &Path) -> Result<Tuning, String> {
         let traversal = read_json(&dir.join("hero_traversal.json"))?;
         let shared = read_json(&dir.join("hero_shared.json"))?;
@@ -271,6 +434,7 @@ impl Tuning {
             max_midair_jumps: traversal["MaximumMidairJumps"].as_u64().unwrap_or(1) as u32,
             ground_dash: dash_from(&traversal["DodgeConfig"], &base.ground_dash),
             air_dash: dash_from(&traversal["AirDashConfig"], &base.air_dash),
+            melee: melee_from(dir, &traversal, &shared, &base.melee),
             source: format!("Rift Apart configs ({})", dir.display()),
             ..base
         })
@@ -293,6 +457,7 @@ impl Tuning {
             glide: self.glide.scaled(s),
             ground_dash: self.ground_dash.scaled(s),
             air_dash: self.air_dash.scaled(s),
+            melee: self.melee.scaled(s),
             scale: self.scale * s,
             ..self.clone()
         }
@@ -340,6 +505,70 @@ fn dash_from(v: &Value, base: &DashParams) -> DashParams {
         accel: f(v, "Acceleration").unwrap_or(0.0),
         decel: f(v, "Deceleration").unwrap_or(0.0),
     }
+}
+
+/// Melee from the wrench configs and the clip analysis; anything missing keeps `base`.
+fn melee_from(dir: &Path, traversal: &Value, shared: &Value, base: &MeleeParams) -> MeleeParams {
+    let mut m = base.clone();
+    if let Ok(hop) = jump_from(&traversal["JumpConfigs"]["MeleeSmashJumpConfig"]) {
+        m.smash_hop = hop;
+    }
+    let smash = &shared["MeleeSmash"];
+    m.smash_min_height = f(smash, "MeleeSmashMinHeight").unwrap_or(m.smash_min_height);
+    m.smash_gravity = f(smash, "MeleeSmashDescendGravity").unwrap_or(m.smash_gravity);
+
+    if let Ok(clips) = read_json(&dir.join("hero_melee_clips.json")) {
+        let swings: Vec<SwingParams> = clips["Combo"]
+            .as_array()
+            .map(|c| c.iter().enumerate().filter_map(|(i, s)| swing_from(s, base.combo.get(i).unwrap_or(&base.combo[0]))).collect())
+            .unwrap_or_default();
+        if !swings.is_empty() {
+            m.combo = swings;
+        }
+        if let Some(intro) = swing_from(&clips["SmashIntro"], &base.smash_intro) {
+            m.smash_intro = intro;
+        }
+        m.smash_land_time = f(&clips["SmashLand"], "Duration").unwrap_or(m.smash_land_time);
+    }
+
+    let attacks = read_json(&dir.join("wpn_wrench_melee.json")).map(|v| v["MeleeAttackList"].clone()).unwrap_or(Value::Null);
+    let attack = |index: &str| attacks.as_array().and_then(|a| a.iter().find(|x| x["Index"] == index)).cloned();
+    for (i, swing) in m.combo.iter_mut().enumerate() {
+        if let Some(a) = attack(&format!("kMeleeAttack{}", i + 1)) {
+            swing.damage = f(&a, "Damage").unwrap_or(swing.damage);
+            swing.knockback = f(&a, "OverrideKnockbackDist").unwrap_or(swing.knockback);
+        }
+    }
+    if let Some(a) = attack("kMeleeSmashSlam") {
+        m.smash_damage = f(&a, "Damage").unwrap_or(m.smash_damage);
+        m.smash_radius = f(&a, "AOE").unwrap_or(m.smash_radius);
+    }
+
+    if let Ok(weapon) = read_json(&dir.join("wpn_wrench_weapon.json")) {
+        let p = &weapon["Prius"]["Obj"];
+        let t = &mut m.throw;
+        t.out_speed = f(p, "ThrowOutInitialSpeed").unwrap_or(t.out_speed);
+        t.max_distance = f(p, "ThrowMaxDistance").unwrap_or(t.max_distance);
+        t.return_max_speed = f(p, "ThrowReturnMaxSpeed").unwrap_or(t.return_max_speed);
+        t.return_jerk = f(p, "ThrowReturnJerk").unwrap_or(t.return_jerk);
+        t.spin_speed = f(p, "ThrowSpinSpeed").unwrap_or(t.spin_speed);
+        t.damage = f(&p["ThrowDamageInfo"], "DamageAmount").unwrap_or(t.damage);
+        t.damage_radius = f(&p["ThrowDamageInfo"], "DamageRadius").unwrap_or(t.damage_radius);
+    }
+    m
+}
+
+/// A swing's timing and lunge from `hero_melee_clips.json`; damage and knockback stay `base`'s.
+fn swing_from(v: &Value, base: &SwingParams) -> Option<SwingParams> {
+    let duration = f(v, "Duration")?;
+    let lunge: Vec<f32> = v["Lunge"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|x| x as f32).collect()).unwrap_or_default();
+    Some(SwingParams {
+        duration,
+        hit_time: f(v, "HitTime").unwrap_or(base.hit_time.min(duration)),
+        lunge,
+        lunge_rate: f(v, "Rate").unwrap_or(30.0),
+        ..base.clone()
+    })
 }
 
 fn speeds_from(v: &Value, base: &SpeedParams) -> SpeedParams {

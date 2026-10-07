@@ -12,7 +12,8 @@ back how to move.
   [docs/skyrim-plan.md](docs/skyrim-plan.md).
 
 Moves so far: run/walk, variable-height jump, double jump, glide, ground dash (Phantom Dash),
-air dash.
+air dash, and the OmniWrench: 3-hit combo, Hyper-Strike (melee in the air) and the wrench
+throw.
 
 Unofficial fan project, not affiliated with Insomniac Games, Sony, or Bethesda. Built with an AI
 coding agent (Claude Code).
@@ -25,11 +26,14 @@ copy** of the game, and the library reads them at runtime:
 
 ```bash
 git clone https://github.com/Tkachov/ALERT
+pip install numpy
 python tools/extract_riftapart_configs.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
 ```
 
-That writes JSON into `riftapart-configs/` (gitignored). Without it, the sandbox uses generic
-default values and says so on screen.
+That writes JSON into `riftapart-configs/` (gitignored): the movement configs, the wrench's
+melee and throw configs, and `hero_melee_clips.json` (each swing's length, hit time and lunge,
+read from Ratchet's wrench animations). Without it, the sandbox uses generic default values and
+says so on screen.
 
 ### Ratchet's model, textures and animations (optional)
 
@@ -41,10 +45,11 @@ pip install pygltflib pillow numpy texture2ddecoder lz4
 python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
 ```
 
-That makes `ratchet.glb` and `clank.glb`. The sandbox picks them up automatically: Ratchet plays
-Rift Apart's own idle, run, jump, double jump, fall, glide, land, dash and air-dash clips, and
-Clank rides on his back (backpack idle, heli-pack while gliding). Without them, you get a
-capsule with Lombax ears. Never share the `.glb` files: they're game data.
+That makes `ratchet.glb`, `clank.glb` and `wrench.glb`. The sandbox picks them up
+automatically: Ratchet plays Rift Apart's own idle, run, jump, double jump, fall, glide, land,
+dash, air-dash and wrench clips, Clank rides on his back (backpack idle, heli-pack while
+gliding), and the OmniWrench appears in his hand when he swings. Without them, you get a capsule
+with Lombax ears. Never share the `.glb` files: they're game data.
 
 ## Run the sandbox
 
@@ -57,6 +62,8 @@ cargo run -p sandbox
 | WASD | Move (camera-relative) |
 | Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide |
 | Shift | Dash (on the ground or once in the air) |
+| Left mouse / E | OmniWrench: press again during a swing for the next hit (3-hit combo); in the air it's the Hyper-Strike |
+| Right mouse / Q | Throw the wrench along the camera; it comes back to your hand |
 | Ctrl | Walk |
 | Mouse | Camera (click to grab the mouse, Esc to free it); scroll to zoom |
 | Tab | Toggle Ratchet-sized / Dragonborn-sized (all distances ×1.55, same timing) |

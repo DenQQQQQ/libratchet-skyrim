@@ -10,9 +10,11 @@
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
 
 mod clank;
+mod combat;
 mod demo;
 mod level;
 mod ratchet_model;
+mod wrench;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
@@ -81,6 +83,8 @@ pub struct CameraRig {
     focus: Vec3,
     /// When set, the camera looks at this fixed spot instead of following (demo wide shots).
     fixed: Option<(Vec3, f32, f32, f32)>,
+    /// Seconds of camera shake left (Hyper-Strike landings).
+    pub shake: f32,
 }
 
 #[derive(Resource, Default)]
@@ -92,6 +96,11 @@ pub struct Trail {
 /// Input from the demo script; overrides the keyboard when set.
 #[derive(Resource, Default)]
 pub struct ScriptedInput(pub Option<MoveInput>);
+
+/// Left mouse is melee only for presses that start with the mouse already grabbed (the click
+/// that grabs it doesn't swing).
+#[derive(Resource, Default)]
+pub struct MouseMelee(bool);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -131,13 +140,14 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.9)))
     .insert_resource(Settings { base, scale, configs_dir, load_note, model_dir })
-    .insert_resource(CameraRig { yaw: 0.6, pitch: 0.35, distance: 7.0, focus: spots::SPAWN, fixed: None })
+    .insert_resource(CameraRig { yaw: 0.6, pitch: 0.35, distance: 7.0, focus: spots::SPAWN, fixed: None, shake: 0.0 })
     .init_resource::<Trail>()
     .init_resource::<ScriptedInput>()
+    .init_resource::<MouseMelee>()
     .add_systems(Startup, (level::spawn_level, setup).chain())
     .add_systems(FixedUpdate, simulate)
     .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud).chain());
@@ -241,7 +251,8 @@ fn setup(
     commands.spawn((
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
-             Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab mouse, Esc to free it",
+             Left mouse / E wrench (in the air: Hyper-Strike)  |  Right mouse / Q throw the wrench  |  Tab Ratchet/Dragonborn size  |  R reload tuning\n\
+             T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it",
         ),
         TextFont::from_font_size(13.0),
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
@@ -250,7 +261,7 @@ fn setup(
     ));
 }
 
-fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
+fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, mouse_melee: bool, yaw: f32) -> MoveInput {
     let mut forward = 0.0;
     let mut side = 0.0;
     if keys.pressed(KeyCode::KeyW) {
@@ -274,12 +285,15 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
         move_dir: dir * if walk { 0.45 } else { 1.0 },
         jump: keys.pressed(KeyCode::Space),
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
+        melee: keys.pressed(KeyCode::KeyE) || (mouse_melee && mouse.pressed(MouseButton::Left)),
     }
 }
 
-fn simulate(
+pub fn simulate(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mouse_melee: Res<MouseMelee>,
     rig: Res<CameraRig>,
     scripted: Res<ScriptedInput>,
     level: Res<Level>,
@@ -291,7 +305,7 @@ fn simulate(
     let Ok(mut p) = players.single_mut() else { return };
     let s = settings.scale;
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
-    let input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, rig.yaw));
+    let input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0, rig.yaw));
 
     let before = p.feet;
     let contact = p.contact;
@@ -394,6 +408,7 @@ fn cursor_grab(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     scripted: Res<ScriptedInput>,
+    mut mouse_melee: ResMut<MouseMelee>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     let Ok(mut c) = cursor.single_mut() else { return };
@@ -401,8 +416,12 @@ fn cursor_grab(
         return;
     }
     if mouse.just_pressed(MouseButton::Left) {
+        mouse_melee.0 = c.grab_mode != CursorGrabMode::None;
         c.grab_mode = CursorGrabMode::Locked;
         c.visible = false;
+    }
+    if mouse.just_released(MouseButton::Left) {
+        mouse_melee.0 = false;
     }
     if keys.just_pressed(KeyCode::Escape) {
         c.grab_mode = CursorGrabMode::None;
@@ -433,6 +452,8 @@ fn state_color(state: MoveState) -> Color {
         MoveState::Glide => Color::srgb(0.2, 0.9, 1.0),
         MoveState::Dash => Color::srgb(0.55, 0.35, 1.0),
         MoveState::AirDash => Color::srgb(0.2, 1.0, 0.45),
+        MoveState::Melee => Color::srgb(0.95, 0.95, 0.95),
+        MoveState::Smash | MoveState::SmashLand => Color::srgb(1.0, 0.45, 0.6),
     }
 }
 
@@ -470,7 +491,11 @@ fn camera_follow(
     let target = p.feet + Vec3::Y * 0.9 * settings.scale;
     let k = 1.0 - (-10.0 * time.delta_secs()).exp();
     rig.focus = rig.focus.lerp(target, k);
-    let offset = Vec3::new(rig.yaw.sin() * rig.pitch.cos(), rig.pitch.sin(), rig.yaw.cos() * rig.pitch.cos()) * rig.distance;
+    // A short 20 Hz wobble, fading out (like the game's melee-impact shake).
+    rig.shake = (rig.shake - time.delta_secs()).max(0.0);
+    let wobble = (time.elapsed_secs() * 20.0 * std::f32::consts::TAU).sin() * (rig.shake / 0.25).min(1.0);
+    let (yaw, pitch) = (rig.yaw + wobble * 0.012, rig.pitch + wobble * 0.004);
+    let offset = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()) * rig.distance;
     *cam = Transform::from_translation(rig.focus + offset).looking_at(rig.focus, Vec3::Y);
 }
 
@@ -489,7 +514,7 @@ fn draw_trail(trail: Res<Trail>, mut gizmos: Gizmos) {
     }
 }
 
-fn update_hud(settings: Res<Settings>, players: Query<&Player>, mut hud: Query<&mut Text, With<HudText>>) {
+fn update_hud(settings: Res<Settings>, hits: Res<combat::Hits>, players: Query<&Player>, mut hud: Query<&mut Text, With<HudText>>) {
     let (Ok(p), Ok(mut text)) = (players.single(), hud.single_mut()) else { return };
     let v = p.sim.velocity();
     let size = if (settings.scale - 1.0).abs() < 0.01 { "Ratchet-sized".to_string() } else { format!("{:.2}x, Dragonborn-sized", settings.scale) };
@@ -503,7 +528,9 @@ fn update_hud(settings: Res<Settings>, players: Query<&Player>, mut hud: Query<&
          state: {:<12} speed {:.2} m/s   vertical {:+.2} m/s   above ground {ground}\n\
          last jump: {last}\n\
          config: jump tap {:.2} m in {:.2} s, held up to {:.2} m  |  double +{:.2} m (max total {})  |  glide falls {:.1} m/s, moves {:.2} m/s  |  run {:.2} m/s\n\
-         dash {:.1} m up to {:.1} m/s  |  air dash {:.1} m at {:.1} m/s",
+         dash {:.1} m up to {:.1} m/s  |  air dash {:.1} m at {:.1} m/s\n\
+         wrench: swings {}  |  Hyper-Strike hop {:.2} m, slam at {:.0} m/s², {:.1} m wide  |  throw {:.0} m/s out to {:.0} m
+         dummies hit: {}  {}",
         settings.load_note,
         p.sim.state().name(),
         Vec2::new(v.x, v.z).length(),
@@ -520,5 +547,18 @@ fn update_hud(settings: Res<Settings>, players: Query<&Player>, mut hud: Query<&
         t.ground_dash.max_speed,
         t.air_dash.distance,
         t.air_dash.max_speed,
+        t.melee
+            .combo
+            .iter()
+            .map(|w| format!("{:.2} s (hit {:.2} s, lunge {:.2} m)", w.duration, w.hit_time, w.lunge.last().copied().unwrap_or(0.0)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        t.melee.smash_hop.height_min,
+        t.melee.smash_gravity,
+        t.melee.smash_radius,
+        t.melee.throw.out_speed,
+        t.melee.throw.max_distance,
+        hits.count,
+        if hits.last.is_empty() { String::new() } else { format!("(last: {})", hits.last) },
     );
 }

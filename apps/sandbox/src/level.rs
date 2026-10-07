@@ -33,6 +33,8 @@ pub mod spots {
     pub const DEMO_LANE: Vec3 = Vec3::new(-45.0, 0.0, 100.0);
     /// Top of the glide tower.
     pub const TOWER_TOP: Vec3 = Vec3::new(-30.0, 12.0, 60.0);
+    /// Open ground with target dummies for the wrench (they stand along +X from here).
+    pub const ARENA: Vec3 = Vec3::new(25.0, 0.0, 30.0);
 }
 
 const FLOOR: f32 = 300.0;

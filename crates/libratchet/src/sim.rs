@@ -6,7 +6,7 @@
 //!
 //! Coordinates: Y up, metres. Facing yaw is `atan2(x, z)`, so yaw 0 faces +Z.
 
-use crate::tuning::{DashParams, JumpParams, Tuning};
+use crate::tuning::{DashParams, JumpParams, SwingParams, Tuning};
 use glam::{Vec2, Vec3};
 
 /// What the player is asking for this tick.
@@ -19,6 +19,8 @@ pub struct Input {
     pub jump: bool,
     /// Dash button is down.
     pub dash: bool,
+    /// Melee (wrench) button is down.
+    pub melee: bool,
 }
 
 /// What the host's collision found on the last move.
@@ -46,6 +48,12 @@ pub enum MoveState {
     Glide,
     Dash,
     AirDash,
+    /// A wrench swing on the ground (see [`Ratchet::melee_swing`] for which one).
+    Melee,
+    /// Hyper-Strike in the air: the hop, then the slam down.
+    Smash,
+    /// On the ground right after a Hyper-Strike lands.
+    SmashLand,
 }
 
 impl MoveState {
@@ -58,6 +66,9 @@ impl MoveState {
             MoveState::Glide => "glide",
             MoveState::Dash => "dash",
             MoveState::AirDash => "air dash",
+            MoveState::Melee => "melee",
+            MoveState::Smash => "hyper-strike",
+            MoveState::SmashLand => "hyper-strike landing",
         }
     }
 }
@@ -73,6 +84,13 @@ pub enum Event {
     Dashed,
     AirDashed,
     Landed { fall_speed: f32 },
+    /// A combo swing started (0 = first).
+    MeleeSwing { index: usize },
+    /// The swing's wrench connects now: the host checks for hits.
+    MeleeHit { index: usize },
+    SmashStarted,
+    /// The Hyper-Strike hit the ground: the host applies the slam around the character.
+    SmashImpact { fall_speed: f32 },
 }
 
 /// Small downward speed on the ground so the host's collision keeps reporting contact.
@@ -112,6 +130,14 @@ pub struct Ratchet {
     dash_travelled: f32,
     dash_braking: bool,
     air_dash_used: bool,
+    prev_melee: bool,
+    /// Current combo swing, seconds into it (or into the Hyper-Strike / its landing), a press
+    /// waiting for the next swing, and whether this swing's hit already happened.
+    swing: usize,
+    swing_time: f32,
+    swing_queued: bool,
+    swing_hit: bool,
+    smash_descending: bool,
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
     move_vy: Option<f32>,
@@ -140,6 +166,12 @@ impl Ratchet {
             dash_travelled: 0.0,
             dash_braking: false,
             air_dash_used: false,
+            prev_melee: false,
+            swing: 0,
+            swing_time: 0.0,
+            swing_queued: false,
+            swing_hit: false,
+            smash_descending: false,
             events: Vec::new(),
             move_vy: None,
         }
@@ -191,6 +223,16 @@ impl Ratchet {
         self.midair_jumps
     }
 
+    /// The combo swing in progress (0 = first), while in [`MoveState::Melee`].
+    pub fn melee_swing(&self) -> Option<usize> {
+        (self.state == MoveState::Melee).then_some(self.swing)
+    }
+
+    /// Seconds into the current swing, Hyper-Strike or Hyper-Strike landing.
+    pub fn melee_time(&self) -> f32 {
+        self.swing_time
+    }
+
     /// Advances one tick and returns the velocity the host should move by.
     pub fn step(&mut self, dt: f32, input: &Input, contact: &Contact, position: Vec3) -> Vec3 {
         self.events.clear();
@@ -198,17 +240,23 @@ impl Ratchet {
         self.prev_jump = input.jump;
         let dash_pressed = input.dash && !self.prev_dash;
         self.prev_dash = input.dash;
+        let melee_pressed = input.melee && !self.prev_melee;
+        self.prev_melee = input.melee;
         let stick = input.move_dir.clamp_length_max(1.0);
 
         // Contact changes first, so this tick runs in the right state.
-        if matches!(self.state, MoveState::Ground | MoveState::Dash) {
+        if matches!(self.state, MoveState::Ground | MoveState::Dash | MoveState::Melee | MoveState::SmashLand) {
             if !contact.grounded {
-                // Dashing off a ledge keeps the dash speed and falls.
+                // Dashing (or lunging) off a ledge keeps its speed and falls.
                 self.enter_fall();
                 self.events.push(Event::LeftGround);
             }
         } else if contact.grounded && self.velocity.y <= 0.0 {
-            self.land();
+            if self.state == MoveState::Smash {
+                self.smash_land();
+            } else {
+                self.land();
+            }
         }
         if contact.hit_ceiling && self.velocity.y > 0.0 {
             self.velocity.y = 0.0;
@@ -222,6 +270,8 @@ impl Ratchet {
                 self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, decel);
                 if pressed {
                     self.start_jump(dt, MoveState::Jump, position);
+                } else if melee_pressed && self.start_swing(0, stick) {
+                    self.swing(dt, false, false, false, stick, position);
                 } else if dash_pressed {
                     self.start_dash(MoveState::Dash, stick);
                     self.ground_dash(dt);
@@ -233,13 +283,29 @@ impl Ratchet {
                 if pressed {
                     // Jumping out of a dash keeps its speed.
                     self.start_jump(dt, MoveState::Jump, position);
+                } else if melee_pressed && self.start_swing(0, stick) {
+                    self.swing(dt, false, false, false, stick, position);
                 } else {
                     self.ground_dash(dt);
                 }
             }
+            MoveState::Melee => {
+                self.swing(dt, melee_pressed, pressed, dash_pressed, stick, position);
+            }
+            MoveState::Smash => {
+                self.air_time += dt;
+                self.smash(dt);
+            }
+            MoveState::SmashLand => {
+                self.smash_landing(dt, melee_pressed, pressed, stick, position);
+            }
             MoveState::AirDash => {
                 self.air_time += dt;
-                self.air_dash(dt);
+                if melee_pressed && self.can_smash(contact) {
+                    self.start_smash(dt);
+                } else {
+                    self.air_dash(dt);
+                }
             }
             MoveState::Jump | MoveState::DoubleJump => {
                 let params = self.params(self.state).clone();
@@ -249,6 +315,8 @@ impl Ratchet {
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
+                } else if melee_pressed && self.can_smash(contact) {
+                    self.start_smash(dt);
                 } else if dash_pressed && !self.air_dash_used {
                     self.start_dash(MoveState::AirDash, stick);
                     self.air_dash(dt);
@@ -263,6 +331,8 @@ impl Ratchet {
                 self.fall_under(dt, &params);
                 if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
+                } else if melee_pressed && self.can_smash(contact) {
+                    self.start_smash(dt);
                 } else if dash_pressed && !self.air_dash_used {
                     self.start_dash(MoveState::AirDash, stick);
                     self.air_dash(dt);
@@ -277,7 +347,10 @@ impl Ratchet {
                 let accel = self.tuning.glide_accel;
                 self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, accel);
                 self.integrate_vertical(dt, params.gravity(), self.glide_terminal);
-                if dash_pressed && !self.air_dash_used {
+                if melee_pressed && self.can_smash(contact) {
+                    self.events.push(Event::GlideEnded);
+                    self.start_smash(dt);
+                } else if dash_pressed && !self.air_dash_used {
                     self.events.push(Event::GlideEnded);
                     self.start_dash(MoveState::AirDash, stick);
                     self.air_dash(dt);
@@ -293,6 +366,127 @@ impl Ratchet {
         self.turn(dt);
         let vy = self.move_vy.take().unwrap_or(self.velocity.y);
         Vec3::new(self.velocity.x, vy, self.velocity.z)
+    }
+
+    /// Starts combo swing `index`, aimed where the stick points (straight ahead without input).
+    /// Returns false when there's no such swing.
+    fn start_swing(&mut self, index: usize, stick: Vec2) -> bool {
+        if index >= self.tuning.melee.combo.len() {
+            return false;
+        }
+        if stick.length() > 0.1 {
+            self.facing_yaw = stick.x.atan2(stick.y);
+        }
+        self.state = MoveState::Melee;
+        self.swing = index;
+        self.swing_time = 0.0;
+        self.swing_queued = false;
+        self.swing_hit = false;
+        self.extending = false;
+        self.events.push(Event::MeleeSwing { index });
+        true
+    }
+
+    /// One tick of a swing: the lunge along the facing direction (the animation's root motion),
+    /// the hit, and what comes next. A press during the swing queues the next swing for
+    /// `chain_delay` after the hit; from `cancel_delay` after the hit, moving, jumping or
+    /// dashing cuts the swing short.
+    fn swing(&mut self, dt: f32, melee_pressed: bool, jump_pressed: bool, dash_pressed: bool, stick: Vec2, position: Vec3) {
+        let combo_len = self.tuning.melee.combo.len();
+        let w: SwingParams = self.tuning.melee.combo[self.swing].clone();
+        let before = self.swing_time;
+        self.swing_time += dt;
+        if melee_pressed {
+            self.swing_queued = true;
+        }
+        if !self.swing_hit && self.swing_time >= w.hit_time {
+            self.swing_hit = true;
+            self.events.push(Event::MeleeHit { index: self.swing });
+        }
+        let forward = (w.lunge_at(self.swing_time) - w.lunge_at(before)) / dt;
+        let v = self.facing_dir() * forward;
+        self.velocity = Vec3::new(v.x, -STICK_DOWN_SPEED * self.tuning.scale, v.z);
+
+        let after_hit = self.swing_time - w.hit_time;
+        if self.swing_queued && after_hit >= self.tuning.melee.chain_delay {
+            self.start_swing((self.swing + 1) % combo_len, stick);
+        } else if after_hit >= self.tuning.melee.cancel_delay && (jump_pressed || dash_pressed || stick.length() > 0.1) {
+            self.state = MoveState::Ground;
+            if jump_pressed {
+                self.start_jump(dt, MoveState::Jump, position);
+            } else if dash_pressed {
+                self.start_dash(MoveState::Dash, stick);
+                self.ground_dash(dt);
+            }
+        } else if self.swing_time >= w.duration {
+            self.state = MoveState::Ground;
+        }
+    }
+
+    fn can_smash(&self, contact: &Contact) -> bool {
+        contact.ground_distance.is_none_or(|d| d >= self.tuning.melee.smash_min_height)
+    }
+
+    /// Hyper-Strike: a short hop (its own jump config), then a slam straight down.
+    fn start_smash(&mut self, dt: f32) {
+        let hop = self.tuning.melee.smash_hop.clone();
+        let g = hop.gravity_for(hop.height_min);
+        self.state = MoveState::Smash;
+        self.swing_time = 0.0;
+        self.smash_descending = false;
+        self.extending = false;
+        self.jump_gravity = g;
+        self.velocity.y = (2.0 * g * hop.height_min).sqrt();
+        self.events.push(Event::SmashStarted);
+        self.smash(dt);
+    }
+
+    /// Rising: drifts forward by the intro animation's root motion. From the top of the hop:
+    /// straight down at the slam gravity. (Assumption: the slam has no sideways movement.)
+    fn smash(&mut self, dt: f32) {
+        let m = self.tuning.melee.clone();
+        let before = self.swing_time;
+        self.swing_time += dt;
+        if !self.smash_descending {
+            let forward = (m.smash_intro.lunge_at(self.swing_time) - m.smash_intro.lunge_at(before)) / dt;
+            let v = self.facing_dir() * forward;
+            self.velocity.x = v.x;
+            self.velocity.z = v.z;
+            self.integrate_vertical(dt, self.jump_gravity, m.smash_hop.terminal_velocity);
+            if self.velocity.y <= 0.0 {
+                self.smash_descending = true;
+            }
+        } else {
+            self.velocity.x = 0.0;
+            self.velocity.z = 0.0;
+            self.integrate_vertical(dt, m.smash_gravity, m.smash_hop.terminal_velocity);
+        }
+    }
+
+    fn smash_land(&mut self) {
+        let fall_speed = -self.velocity.y;
+        self.land();
+        self.state = MoveState::SmashLand;
+        self.swing_time = 0.0;
+        self.velocity = Vec3::ZERO;
+        self.events.push(Event::SmashImpact { fall_speed });
+    }
+
+    /// Stays put for `smash_land_time`; from `cancel_delay` in, moving, jumping or another
+    /// swing cut it short.
+    fn smash_landing(&mut self, dt: f32, melee_pressed: bool, jump_pressed: bool, stick: Vec2, position: Vec3) {
+        self.swing_time += dt;
+        self.velocity = Vec3::new(0.0, -STICK_DOWN_SPEED * self.tuning.scale, 0.0);
+        let m = &self.tuning.melee;
+        let can_cancel = self.swing_time >= m.cancel_delay;
+        if self.swing_time >= m.smash_land_time || (can_cancel && stick.length() > 0.1) {
+            self.state = MoveState::Ground;
+        } else if can_cancel && jump_pressed {
+            self.state = MoveState::Ground;
+            self.start_jump(dt, MoveState::Jump, position);
+        } else if can_cancel && melee_pressed && self.start_swing(0, stick) {
+            self.swing(dt, false, false, false, stick, position);
+        }
     }
 
     fn params(&self, state: MoveState) -> &JumpParams {

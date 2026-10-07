@@ -23,6 +23,7 @@ typedef struct RatchetInput {
     float move_x, move_z; /* world-space direction on the ground plane, length 0..1 */
     uint8_t jump;         /* jump button held */
     uint8_t dash;         /* dash button held */
+    uint8_t melee;        /* melee (wrench) button held */
 } RatchetInput;
 
 typedef struct RatchetContact {
@@ -40,6 +41,9 @@ enum {
     RATCHET_STATE_GLIDE = 4,
     RATCHET_STATE_DASH = 5,
     RATCHET_STATE_AIR_DASH = 6,
+    RATCHET_STATE_MELEE = 7,      /* a combo swing; see melee_swing */
+    RATCHET_STATE_SMASH = 8,      /* Hyper-Strike: hop, then slam down */
+    RATCHET_STATE_SMASH_LAND = 9, /* on the ground after the slam */
 };
 
 enum {
@@ -51,6 +55,10 @@ enum {
     RATCHET_EVENT_LANDED = 1u << 5,
     RATCHET_EVENT_DASHED = 1u << 6,
     RATCHET_EVENT_AIR_DASHED = 1u << 7,
+    RATCHET_EVENT_MELEE_SWING = 1u << 8,   /* a swing started (melee_swing) */
+    RATCHET_EVENT_MELEE_HIT = 1u << 9,     /* the swing connects now: check for hits */
+    RATCHET_EVENT_SMASH_STARTED = 1u << 10,
+    RATCHET_EVENT_SMASH_IMPACT = 1u << 11, /* the slam hit the ground: see ratchet_smash_info */
 };
 
 typedef struct RatchetStepResult {
@@ -59,7 +67,17 @@ typedef struct RatchetStepResult {
     uint32_t events;         /* RATCHET_EVENT_* bits */
     float facing_yaw;        /* radians, atan2(x, z) */
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
+    uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
 } RatchetStepResult;
+
+typedef struct RatchetSwingInfo {
+    float duration;
+    float hit_time;  /* seconds into the swing when it connects */
+    float damage;
+    float knockback; /* how far a standard enemy is knocked back, metres */
+} RatchetSwingInfo;
+
+typedef struct RatchetWrench RatchetWrench;
 
 /* Generic default tuning, scaled (1 = Ratchet-sized). Free with ratchet_free. */
 RatchetSim *ratchet_new(float scale);
@@ -72,6 +90,17 @@ void ratchet_set_scale(RatchetSim *sim, float scale);
 RatchetStepResult ratchet_step(RatchetSim *sim, float dt, RatchetInput input, RatchetContact contact, RatchetVec3 feet);
 void ratchet_set_velocity(RatchetSim *sim, RatchetVec3 velocity);
 void ratchet_reset(RatchetSim *sim);
+
+/* Combo swing `index` into out; returns the number of swings, or 0 if index is out of range. */
+uint32_t ratchet_swing_info(const RatchetSim *sim, uint32_t index, RatchetSwingInfo *out);
+/* Hyper-Strike slam damage and radius (metres). Either pointer may be null. */
+void ratchet_smash_info(const RatchetSim *sim, float *damage, float *radius);
+
+/* Thrown OmniWrench: out along dir, back to the hand. Step it each tick with the hand position
+ * and blocked = 1 if it hit something; it returns 1 once caught (then free it). */
+RatchetWrench *ratchet_wrench_throw(const RatchetSim *sim, RatchetVec3 from, RatchetVec3 dir);
+uint8_t ratchet_wrench_step(RatchetWrench *wrench, float dt, RatchetVec3 hand, uint8_t blocked, RatchetVec3 *position, float *spin);
+void ratchet_wrench_free(RatchetWrench *wrench);
 
 #ifdef __cplusplus
 }

@@ -141,10 +141,10 @@ def pick(textures, suffix, material_path):
     return cands[0] if cands else None
 
 
-def special_material(material_path):
+def special_material(material_path, preset=None):
     """Materials drawn by special shaders in the game: 'glow', 'glass', 'blur' or None."""
     name = os.path.basename((material_path or "").replace("\\", "/")).lower()
-    if "glow" in name:
+    if "glow" in name or any(m in name for m in (preset or {}).get("glow_match", ())):
         return "glow"
     if "glass" in name:
         return "glass"
@@ -363,6 +363,31 @@ PRESETS = {
             "land": "neutral_jump_single_land_hero_ratchet",
             "dash": "dash_n_hero_ratchet",
             "air_dash": "dash_air_n_hero_ratchet",
+            # OmniWrench: the 3-hit combo, Hyper-Strike (intro in the air, then the slam) and
+            # the throw. The wrench model has matching clips (preset "wrench").
+            "melee_1": "weapon_wrench_hit_1_hero_ratchet",
+            "melee_2": "weapon_wrench_hit_2_hero_ratchet",
+            "melee_3": "weapon_wrench_hit_3_hero_ratchet",
+            "smash_intro": "weapon_wrench_hit_smash_intro_hero_ratchet",
+            "smash": "weapon_wrench_hit_smash_hero_ratchet",
+            "throw": "weapon_wrench_throw_hero_ratchet",
+        },
+    },
+    "wrench": {
+        # Held in Ratchet's right hand (RT_handle_bound, the igLoc_RT_gunAttach locator). Its
+        # clips squash and stretch the wrench in time with his swings; the emissive strip glows
+        # cyan (DefaultEmissiveColor in its config).
+        "model": "equipment/weapon/wpn_wrench/wpn_wrench.model",
+        "out": "wrench.glb",
+        "glow": [0.0, 0.52, 0.65],
+        "glow_match": ["wpn_wrench_emissive"],
+        "clip_dir": "characters/hero/hero_ratchet/animations/",
+        "clips": {
+            "melee_1": "weapon_wrench_hit_1_wpn_wrench",
+            "melee_2": "weapon_wrench_hit_2_wpn_wrench",
+            "melee_3": "weapon_wrench_hit_3_wpn_wrench",
+            "smash_intro": "weapon_wrench_hit_smash_intro_wpn_wrench",
+            "smash": "weapon_wrench_hit_smash_wpn_wrench",
         },
     },
     "clank": {
@@ -488,7 +513,7 @@ def convert(game, a, preset):
         if path is None or any(s in path.lower() for s in SKIP_MATERIALS):
             print(f"  skip mesh {mi} ({path})")
             continue
-        if pick(material_textures(game, path), "c", path) is None and not special_material(path):
+        if pick(material_textures(game, path), "c", path) is None and not special_material(path, preset):
             # Fur shells, stitching and small emissive bits have no colour map; they need
             # special shaders, so leave them out for now.
             print(f"  skip mesh {mi} (no colour map: {path})")
@@ -548,11 +573,13 @@ def convert(game, a, preset):
             mat = pygltflib.Material(name=os.path.basename(mpath), doubleSided=True)
             pbr = pygltflib.PbrMetallicRoughness(baseColorFactor=[1, 1, 1, 1], metallicFactor=0.0, roughnessFactor=0.7)
             entry = {"textures": texs}
-            special = special_material(mpath)
+            special = special_material(mpath, preset)
             if special == "glow":
-                # Clank's eyes and antenna glow green; the game draws them with a shader we don't have.
-                pbr.baseColorFactor = [0.35, 1.0, 0.45, 1.0]
-                mat.emissiveFactor = [0.35, 1.0, 0.45]
+                # Clank's eyes and antenna glow green, the wrench's strip cyan; the game draws
+                # them with a shader we don't have.
+                glow = list(preset.get("glow", [0.35, 1.0, 0.45]))
+                pbr.baseColorFactor = glow + [1.0]
+                mat.emissiveFactor = glow
             elif special == "glass":
                 pbr.baseColorFactor = [0.6, 0.9, 0.8, 0.25]
                 pbr.roughnessFactor = 0.1
