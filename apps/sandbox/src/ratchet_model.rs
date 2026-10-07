@@ -146,6 +146,10 @@ pub struct Rig {
     /// The speed each clip was authored for (its root motion over its length, from the
     /// converter's ratchet.json), to play it at the rate that keeps the feet planted.
     authored_speed: HashMap<String, f32>,
+    /// The sounds each clip calls for (Wwise event names, and "footstep" at its steps) at their
+    /// times, and the clip and time they were last checked at.
+    clip_sounds: HashMap<String, Vec<(f32, String)>>,
+    sound_clock: Option<(&'static str, f32)>,
     walking: bool,
     /// The run's lean: −1 (right) … 1 (left), its two clips, and the yaw it was last measured at.
     lean: f32,
@@ -307,6 +311,7 @@ fn on_ready(
         by_name.get("spine_1").map(|&s| std::iter::once(s).chain(children.iter_descendants(s)).collect()).unwrap_or_default();
     let lower_body = if upper.is_empty() { vec![] } else { children.iter_descendants(root).filter(|e| !upper.contains(e)).collect() };
     let authored_speed = settings.model_dir.as_ref().map(|d| authored_speeds(&d.join("ratchet.json"))).unwrap_or_default();
+    let clip_sounds = settings.model_dir.as_ref().map(|d| clip_sounds(&d.join("ratchet.json"), &d.join("wrench.json"))).unwrap_or_default();
     info!("ratchet model ready: {} bones rigged, arm rest angles {:.0}°/{:.0}°", bones.len(), arm_rest_angle[0].to_degrees(), arm_rest_angle[1].to_degrees());
     commands.insert_resource(Rig {
         bones,
@@ -325,6 +330,8 @@ fn on_ready(
         fire_time: None,
         shots_seen: 0,
         authored_speed,
+        clip_sounds,
+        sound_clock: None,
         walking: false,
         lean: 0.0,
         lean_nodes: None,
@@ -436,6 +443,7 @@ fn play_clips(
     arsenal: Option<Res<crate::weapons::Arsenal>>,
     players: Query<&Player>,
     mut anim: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let (Some(mut rig), Ok(p)) = (rig, players.single()) else { return };
     let Some(entity) = rig.player else { return };
@@ -691,6 +699,31 @@ fn play_clips(
         }
         rig.current_clip = Some(want);
     }
+    // The sounds the clip calls for, as its time passes them (looping clips wrap around). A
+    // clip that just started sounds what it passed already. The jump clip's landing sound plays
+    // at landing instead (simulate), not at the end of the clip in the air.
+    if let Some(&node) = rig.clips.get(want)
+        && let Some(now) = player.animation(node).map(|a| a.seek_time())
+    {
+        let from = match rig.sound_clock {
+            Some((clip, t)) if clip == want => Some(t),
+            _ => None,
+        };
+        rig.sound_clock = Some((want, now));
+        if let Some(list) = rig.clip_sounds.get(want) {
+            for (t, name) in list {
+                let passed = match from {
+                    Some(f) if now >= f => *t > f && *t <= now,
+                    Some(f) => *t > f || *t <= now,
+                    None => *t <= now,
+                };
+                if passed && name != "Play_FOL_ratchet_land" {
+                    cues.write(crate::sound::SoundCue::play(name.clone()));
+                }
+            }
+        }
+    }
+
     // Match the walk, run and strafe cycles (and the moving landings) to the actual speed: at
     // the speed a clip was authored for, it plays at 1x.
     if (["run", "walk", "pistol_run", "land_walk", "land_run"].contains(&want) || want.contains("strafe"))
@@ -772,6 +805,44 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, runnin
 pub fn clip_event(manifest: &std::path::Path, clip: &str, event: &str) -> Option<f32> {
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
     v["animations"][clip]["events"][event].get(0)?.as_f64().map(|t| t as f32)
+}
+
+/// Each clip's sounds from the converter's manifests: Ratchet's clips, plus for the swings the
+/// wrench's own clips (which sound the swing in the game); a sound both call for at nearly the
+/// same time plays once. Footsteps are the clips' footstep events.
+fn clip_sounds(manifest: &std::path::Path, wrench: &std::path::Path) -> HashMap<String, Vec<(f32, String)>> {
+    let read = |path: &std::path::Path| {
+        std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).unwrap_or_default()
+    };
+    let (ours, theirs) = (read(manifest), read(wrench));
+    let mut out: HashMap<String, Vec<(f32, String)>> = HashMap::new();
+    for (doc, only_swings) in [(&ours, false), (&theirs, true)] {
+        for (name, a) in doc["animations"].as_object().into_iter().flatten() {
+            if only_swings && !MELEE_CLIPS.contains(&name.as_str()) {
+                continue;
+            }
+            let list = out.entry(name.clone()).or_default();
+            for s in a["sounds"].as_array().into_iter().flatten() {
+                if let (Some(t), Some(event)) = (s[0].as_f64(), s[1].as_str()) {
+                    let t = t as f32;
+                    if !list.iter().any(|(u, e)| e == event && (u - t).abs() < 0.1) {
+                        list.push((t, event.to_string()));
+                    }
+                }
+            }
+            // A step at the very end of a looping clip is the one at its start.
+            let end = a["seconds"].as_f64().unwrap_or(f64::MAX) as f32;
+            for t in a["events"]["Footstep"].as_array().into_iter().flatten().filter_map(|t| t.as_f64()) {
+                let t = t as f32;
+                let near = |u: f32| (u - t).abs() < 0.1 || (t > end - 0.05 && u < 0.05);
+                if !list.iter().any(|(u, e)| e == "footstep" && near(*u)) {
+                    list.push((t, "footstep".to_string()));
+                }
+            }
+        }
+    }
+    out.retain(|_, l| !l.is_empty());
+    out
 }
 
 fn authored_speeds(manifest: &std::path::Path) -> HashMap<String, f32> {

@@ -355,7 +355,7 @@ fn fire(
     (mut rig, shakes): (ResMut<CameraRig>, Res<WeaponShakes>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut commands: Commands,
+    (mut commands, mut cues): (Commands, MessageWriter<crate::sound::SoundCue>),
 ) {
     let dt = time.delta_secs();
     let (Ok(p), Ok(cam)) = (players.single(), cams.single()) else { return };
@@ -375,6 +375,7 @@ fn fire(
         if *t <= 0.0 {
             arsenal.pending = None;
             arsenal.stance = STRAFE_AFTER_SHOT;
+            cues.write(crate::sound::SoundCue::play("grenade_throw"));
             if let Some(shot) = last_grenade_shot(&arsenal, &aim) {
                 let proj = Projectile::new(&shot, &arsenal.grenade.params().projectile);
                 let light = art.available.then(|| art.grenade_light(settings.scale));
@@ -391,6 +392,7 @@ fn fire(
             for shot in shots {
                 arsenal.shots += 1;
                 arsenal.stance = STRAFE_AFTER_SHOT;
+                cues.write(crate::sound::SoundCue::play("pistol_shot"));
                 if let Some(recoil) = &shakes.recoil {
                     rig.add_shake(recoil, 1.0);
                 }
@@ -564,6 +566,7 @@ fn fly_bolts(
     mut hits: ResMut<Hits>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let s = settings.scale;
     for (e, mut bolt, mut tf) in &mut bolts {
@@ -603,6 +606,7 @@ fn fly_bolts(
             art.bolt_trail(&mut commands, &mut materials, a, end, s);
         }
         if let Some((at, normal, wall)) = impact {
+            cues.write(crate::sound::SoundCue::at("bolt_impact", at));
             if art.available {
                 art.bolt_impact(&mut commands, &mut materials, &mut rng, at, normal, wall, s);
                 // Show it at the hit for a step (its streak catches up), then remove it.
@@ -633,11 +637,11 @@ fn fly_grenades(
     mut rig: ResMut<CameraRig>,
     shakes: Res<WeaponShakes>,
     players: Query<&Player>,
-    art: Res<VfxArt>,
-    mut rng: ResMut<FxRng>,
+    (art, mut rng): (Res<VfxArt>, ResMut<FxRng>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let Some(ex) = arsenal.grenade.params().explosion.clone() else { return };
     let player = players.single().map_or(Vec3::ZERO, |p| p.feet);
@@ -688,6 +692,7 @@ fn fly_grenades(
         }
         hits.count += n;
         hits.last = format!("Shatterbomb hit {n} ({total:.0} damage in all, {:.1}-{:.1} m)", ex.inner_radius, ex.outer_radius);
+        cues.write(crate::sound::SoundCue::at("grenade_explode", at));
         // The game's explosion shake, full strength near it and fading out further away.
         match &shakes.blast {
             Some((shake, inner, outer)) => {

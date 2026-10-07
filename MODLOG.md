@@ -35,6 +35,62 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: the game's sounds
+
+The user asked for sounds next. A research subagent worked out the game's audio and wrote the
+extractor; the sandbox side and the demo soundtrack mixer are ours.
+
+### Known (the user's install)
+- **Storage:** sounds are Wwise (bank format 135).
+  - The `soundanks\*.soundbank` assets wrap Wwise banks with embedded .wem audio, the
+    event/container hierarchy and every event's name.
+  - Longer sounds are streamed .wem assets.
+  - Sound effects are Opus (about 30,700, most of Ratchet's own) or Wwise Vorbis (about 14,100,
+    most weapon sounds).
+- **Animation clips:** clips call sounds by Wwise event name at set times, for example:
+  - `Play_FOL_ratchet_run` on each run step;
+  - `Play_FOL_ratchet_jump_swish`, `HERO_VFX_SWITCH_JUMP` (an effort grunt) and
+    `Play_FOL_ratchet_jump` as a jump starts;
+  - `Play_WPN_Wrench_Swing` in the swing clips (the wrench's own clips too).
+  - Footsteps are the clips' FootstepEvents.
+- **Code-driven sounds:** the guns, explosions, the heli-pack and the dashes are played by code
+  through the game's event names.
+- **Missing sounds:** the test dummy's sound events are in no bank, so it's silent in the game too.
+
+### Built
+- **Extractor:** `tools/extract_riftapart_sounds.py` (+ `riftapart_wwise.py`) follows each
+  moment's events through the banks, with Ratchet's default switches and concrete footsteps.
+  - It repacks Wwise Vorbis into standard .ogg, losslessly; a ww2ogg port reads the codebooks
+    from the user's RiftApart.exe at run time.
+  - It converts Opus with the user's ffmpeg; the user approved this.
+  - It writes 38 moments and 881 files (14 MB), plus `sounds.json`. That holds the moments'
+    layers, delays, pitch ranges, volumes and chances, and the event-name map.
+- **The sandbox's `sound.rs`:** for each cue it plays one random variation per layer.
+  - Each layer gets its delay and pitch.
+  - Loops: a looping file, or the heli-pack's rotor chops retriggered every 0.09 s.
+  - World sounds fade with distance.
+  - **Clip-timed sounds:** clips fire their sound events as their time passes, looping clips
+    included, plus footsteps at their FootstepEvents. The jump clip's landing sound plays at
+    the real landing instead.
+  - **Code-timed sounds:** landing, dashes, the heli-pack, hits, the slam, the wrench throw,
+    loop and catch, pistol shots, bolt impacts, and the grenade throw and explosion.
+- **Converter:** it writes each clip's sound events into ratchet.json and wrench.json
+  (`riftapart_anim.clip_sound_events`).
+- **Demo soundtracks:**
+  - A recording logs every sound it plays.
+  - `tools/mix_demo_audio.py` mixes them with ffmpeg under the video, with each sound's pitch.
+  - `--demo-part sounds` runs through the moves and the combat section.
+
+### Derived or assumed
+- **Balance between moments:** the game's raw per-sound levels (`level_db`) span about 45 dB
+  before its buses and loudness mixing, which we don't have. We play each moment at half its
+  difference from a reference level, within -18..+3 dB, and the master volume is ours. It
+  wasn't balanced by ear.
+- **Defaults:** three switch groups with unknown names use their first option. Footsteps are
+  concrete only. The pistol's two alternating variants are merged into random pools.
+- **Which events play when:** which game moment fires each dash sound is read from the event
+  names, not traced.
+
 ## 2026-10-07: the grenade windup and throw arc, the guns' aim poses, offscreen demos
 
 The two "not played yet" items from the hip-fire entry.

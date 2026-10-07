@@ -8,7 +8,7 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
-//!   --demo-part wrench|weapons|moves|combat|face  with --demo: only that section
+//!   --demo-part wrench|weapons|moves|combat|face|sounds  with --demo: only that section
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;
@@ -19,6 +19,7 @@ mod dummy_model;
 mod level;
 mod ratchet_model;
 mod vfx;
+mod sound;
 mod weapons;
 mod wrench;
 
@@ -188,7 +189,7 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin, sound::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     // The sky: with HDR the clear colour goes through the tonemapper too, so this is the colour
     // that comes out as sRGB (0.55, 0.7, 0.9) after it.
@@ -413,6 +414,7 @@ pub fn simulate(
     settings: Res<Settings>,
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
+    (mut cues, mut was_gliding): (MessageWriter<sound::SoundCue>, Local<bool>),
 ) {
     let dt = time.delta_secs();
     let Ok(mut p) = players.single_mut() else { return };
@@ -436,6 +438,31 @@ pub fn simulate(
     let before = p.feet;
     let contact = p.contact;
     let v = p.sim.step(dt, &input, &contact, before);
+    // The game's sounds for what the moves do (the animation clips sound the rest: steps,
+    // jumps, swings, efforts). The heli-pack unfolds, spins while gliding, and folds away.
+    for e in p.sim.events() {
+        match e {
+            MoveEvent::Jumped => drop(cues.write(sound::SoundCue::play("footstep_jump"))),
+            MoveEvent::Landed { .. } => {
+                cues.write(sound::SoundCue::play("land"));
+                cues.write(sound::SoundCue::play("footstep_land"));
+            }
+            MoveEvent::Dashed => drop(cues.write(sound::SoundCue::play("phantom_dash"))),
+            MoveEvent::AirDashed => drop(cues.write(sound::SoundCue::play("air_dash"))),
+            _ => {}
+        }
+    }
+    let gliding = p.sim.state() == MoveState::Glide;
+    if gliding != *was_gliding {
+        *was_gliding = gliding;
+        if gliding {
+            cues.write(sound::SoundCue::play("heli_extend"));
+            cues.write(sound::SoundCue::start("heli_loop"));
+        } else {
+            cues.write(sound::SoundCue::stop("heli_loop"));
+            cues.write(sound::SoundCue::play("heli_retract"));
+        }
+    }
     let moved = level::move_box(&level, before, half_w, height, v * dt, STEP_HEIGHT * s);
 
     // Walls stop the sim's horizontal speed too, so it doesn't keep pushing.

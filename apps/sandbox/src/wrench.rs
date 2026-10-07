@@ -192,6 +192,7 @@ fn start_throw(
     mut wrench: ResMut<Wrench>,
     globals: Query<&GlobalTransform>,
     mut players: Query<&mut Player>,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let from_script = std::mem::take(&mut scripted.0);
     let requested = std::mem::take(&mut wrench.throw_requested) || from_script;
@@ -205,6 +206,8 @@ fn start_throw(
             wrench.releasing = None;
             let from = hand_position(&wrench, &globals, &p, settings.scale);
             wrench.flight = Some(WrenchThrow::new(&p.sim.tuning().melee.throw, from, dir));
+            cues.write(crate::sound::SoundCue::play("wrench_throw"));
+            cues.write(crate::sound::SoundCue::start("wrench_throw_loop"));
         }
     }
     let busy = wrench.flight.is_some() || wrench.releasing.is_some();
@@ -234,6 +237,7 @@ fn fly(
     (art, mut rng): (Res<VfxArt>, ResMut<FxRng>),
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let Ok(p) = players.single() else { return };
     let hand = hand_position(&wrench, &globals, p, settings.scale);
@@ -259,7 +263,12 @@ fn fly(
     if art.available {
         art.wrench_trail(&mut commands, &mut materials, pos, flight.position(), s);
     }
+    if let Some(&(at, _)) = hit_at.first() {
+        cues.write(crate::sound::SoundCue::at("wrench_hit", at));
+    }
     if status == ThrowStatus::Caught {
+        cues.write(crate::sound::SoundCue::stop("wrench_throw_loop"));
+        cues.write(crate::sound::SoundCue::play("wrench_catch"));
         wrench.flight = None;
         wrench.catches += 1;
         wrench.show = SHOW_AFTER;

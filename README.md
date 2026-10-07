@@ -68,6 +68,19 @@ python tools/extract_riftapart_vfx.py --game "<your Rift Apart folder>" --alert 
 
 Without them, the guns fire plain shapes.
 
+The sounds (steps, foley, jumps, the heli-pack, dashes, the wrench, the guns, the explosion)
+are the game's own too, extracted into `riftapart-assets/sounds/` with a map from gameplay moments
+and animation sound events to the files:
+
+```bash
+python tools/extract_riftapart_sounds.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
+```
+
+Weapon sounds are Wwise Vorbis and get repacked into plain `.ogg` with no tools. Ratchet's own
+sounds are Opus, which Bevy can't play: the extractor converts them with `ffmpeg` if it's on
+your PATH (`--opus keep` keeps the `.opus` files instead). Without the folder the sandbox is silent.
+Recorded demos log their sounds; `tools/mix_demo_audio.py` lays them under the video.
+
 ## Run the sandbox
 
 ```bash
@@ -113,4 +126,6 @@ See [MODLOG.md](MODLOG.md) for what's confirmed vs. assumed.
 
 ## Licence
 
-MIT, except `tools/extract_riftapart_configs.py` (GPLv3, since it uses ALERT).
+MIT, except the extractors that use ALERT (GPLv3): `tools/extract_riftapart_*.py`,
+`tools/riftapart_anim.py` and `tools/riftapart_wwise.py` (whose Vorbis repacking follows ww2ogg,
+BSD-3-Clause).

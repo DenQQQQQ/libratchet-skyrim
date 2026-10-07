@@ -22,6 +22,7 @@
 #   3A7B4855 Sample data:  [u16 frame->key table, padded to 16 B, when keys < frames]
 #                          then keys rows; each row packs every element LSB-first, unsigned,
 #                          (bits+1) wide, rows padded to 4 bytes. value = base int16 + packed.
+import re
 import struct
 
 import numpy as np
@@ -41,6 +42,29 @@ EVENT_NAMES = {
     0x4CA735F3: "JumpPeak", 0x3609711F: "Sound", 0xD0D37C85: "ConduitAnim", 0x4673A5C8: "CameraShakeAnim",
     0x7F3864C5: "AnimFireWeapon", 0xF786C9B6: "Footstep", 0x5EFD7D29: "BotFling", 0xE16EC0DE: "PickupReset",
 }
+
+
+def clip_sound_events(sections, duration):
+    """The clip's sound events as (seconds, Wwise event name), in time order. A sound event's
+    record carries a serialized object whose first string is the event name (an optional
+    locator name follows)."""
+    raw = sections.get(TRIGGERS)
+    if raw is None or len(raw) < 8:
+        return []
+    count, size = struct.unpack_from("<2xHI", raw, 0)
+    out = []
+    for i in range(count):
+        row = 8 + size + 16 * i
+        if row + 16 > len(raw):
+            break
+        t, words = struct.unpack_from("<2xHH", raw, row + 8)
+        rec = 8 + 4 * words
+        if rec + 8 > len(raw) or struct.unpack_from("<I", raw, rec + 4)[0] != 0x3609711F:
+            continue
+        name = re.search(rb"[A-Za-z][A-Za-z0-9_]{3,}(?=\x00)", raw[rec + 8:rec + 400])
+        if name:
+            out.append((t / 65535.0 * duration, name.group().decode()))
+    return sorted(out)
 
 
 def clip_events(sections, duration):

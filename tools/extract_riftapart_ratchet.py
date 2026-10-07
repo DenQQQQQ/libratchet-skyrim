@@ -558,6 +558,8 @@ def add_animations(game, w, model, preset):
             event = riftapart_anim.EVENT_NAMES.get(kind)
             if event and event not in ("Sound", "ConduitAnim"):
                 events.setdefault(event, []).append(round(t, 4))
+        # The clip's sounds (Wwise event names) at their times, for the sandbox to play.
+        sounds = [[round(t, 4), name] for t, name in riftapart_anim.clip_sound_events(sections, clip.duration)]
         if clip.additive:
             # Layered clips get "_additive" names and no scale channels (Bevy adds scales). Their
             # rotation offsets work as-is with Bevy's rule (offset · base): the throw looks right
@@ -565,7 +567,7 @@ def add_animations(game, w, model, preset):
             add_animation(w, g, clip, state + "_additive", node_of_hash)
             report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "additive": True,
                              "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4),
-                             "events": events}
+                             "events": events, "sounds": sounds}
             print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), additive")
             continue
         times = [f / clip.fps for f in range(clip.frames)]
@@ -601,7 +603,7 @@ def add_animations(game, w, model, preset):
         # can play it at the rate that keeps the feet planted.
         report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "joints": mapped,
                          "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4),
-                         "events": events}
+                         "events": events, "sounds": sounds}
         print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), {mapped} joints")
     return report
 

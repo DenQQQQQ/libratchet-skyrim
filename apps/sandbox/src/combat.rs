@@ -182,6 +182,7 @@ fn melee_hits(
     mut rng: ResMut<FxRng>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let Ok(p) = players.single() else { return };
     let s = settings.scale;
@@ -199,6 +200,9 @@ fn melee_hits(
                     to.length() <= reach + DUMMY_RADIUS && to.normalize_or_zero().dot(facing) > 0.2
                 });
                 let n = hit_at.len();
+                if let Some(&(at, _)) = hit_at.first() {
+                    cues.write(crate::sound::SoundCue::at("wrench_hit", at));
+                }
                 if art.available {
                     for &(at, floor) in &hit_at {
                         art.wrench_hit(&mut commands, &mut materials, &mut rng, at, (at - feet).with_y(0.0).normalize_or(facing), Some(floor), s);
@@ -211,6 +215,7 @@ fn melee_hits(
             }
             MoveEvent::SmashImpact { .. } => {
                 rig.shake = 0.25;
+                cues.write(crate::sound::SoundCue::play("wrench_slam"));
                 if art.available {
                     art.wrench_slam(&mut commands, &mut materials, &mut rng, p.feet, t.smash_radius, s);
                 }

@@ -27,6 +27,13 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
   falloff, shell and camera-shake data). Pure Rust like libratchet; the host does aiming,
   collision, damage and effects. Run `cargo test -p libarsenal` after weapon changes.
+- `tools/extract_riftapart_sounds.py` + `tools/riftapart_wwise.py`: GPLv3. Extract the game's
+  sounds for the sandbox's moments into `riftapart-assets/sounds/` (gitignored) with
+  `sounds.json`: Wwise banks and streamed .wem, Vorbis repacked (codebooks found in the user's
+  RiftApart.exe at run time), Opus converted with the user's ffmpeg. The sandbox's `sound.rs`
+  plays them; animation clips fire theirs by Wwise event name (the converter writes each clip's
+  sound events into ratchet.json). `tools/mix_demo_audio.py` mixes a recorded demo's sounds.log
+  under its video.
 - `tools/extract_riftapart_vfx.py`: GPLv3. Exports the effect art the sandbox's weapon effects
   use (`riftapart-assets/vfx/`, gitignored), with a colour palette read from the game's effect
   materials and particle data.

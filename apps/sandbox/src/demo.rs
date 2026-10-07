@@ -61,8 +61,14 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("moves") => [vec![hold(1.5, Vec2::ZERO, false)], locomotion()].concat(),
         Some("combat") => [vec![hold(1.5, Vec2::ZERO, false)], combat()].concat(),
         Some("face") => [vec![hold(1.5, Vec2::ZERO, false)], face()].concat(),
+        Some("sounds") => [vec![hold(1.5, Vec2::ZERO, false)], sound_tour()].concat(),
         _ => script(),
     };
+    if let Some(dir) = &record {
+        let log = dir.join("sounds.log");
+        std::fs::remove_file(&log).ok();
+        app.insert_resource(crate::sound::SoundLog(log));
+    }
     app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0, pending_shot: None })
         .add_systems(FixedUpdate, run_script.before(simulate))
         .add_systems(Update, record_frames);
@@ -454,6 +460,43 @@ fn combat() -> Vec<Act> {
         Act::Slot(Slot::Wrench),
         Act::Follow { yaw: 0.9, pitch: 0.2, distance: 9.0 },
     ]);
+    acts
+}
+
+/// The moves that make the game's sounds: walking and running (steps, foley), jumps and a
+/// landing, a glide off the tower (the heli-pack unfolding, spinning, folding away), dashes,
+/// then the combat section.
+fn sound_tour() -> Vec<Act> {
+    let x = Vec2::X;
+    let mut acts = vec![
+        Act::Teleport(spots::DEMO_LANE),
+        Act::Follow { yaw: 1.2, pitch: 0.15, distance: 5.0 },
+        hold(0.5, Vec2::ZERO, false),
+        hold(1.6, x * 0.45, false),
+        hold(1.6, x, false),
+        hold(0.22, x, true),
+        hold(0.3, x, false),
+        hold(0.6, x, false),
+        hold(0.22, x, true),
+        hold(0.04, x, false),
+        hold(0.2, x, true),
+        hold(1.0, x, false),
+        hold(0.6, Vec2::ZERO, false),
+        // Off the tower: jump, hold to glide, land.
+        Act::Teleport(spots::TOWER_TOP + Vec3::new(-1.5, 0.0, 0.0)),
+        Act::Follow { yaw: -1.9, pitch: 0.2, distance: 4.0 },
+        hold(0.6, Vec2::ZERO, false),
+        hold(0.45, x, false),
+        hold(0.22, x, true),
+        hold(0.04, x, false),
+        hold(2.6, x, true),
+        hold(1.5, x, false),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Teleport(spots::DEMO_LANE),
+        Act::Follow { yaw: 1.2, pitch: 0.15, distance: 6.0 },
+    ];
+    acts.extend(dashes());
+    acts.extend(combat());
     acts
 }
 
