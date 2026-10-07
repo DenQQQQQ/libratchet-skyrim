@@ -10,11 +10,13 @@
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
 //!   --demo-part wrench|weapons  with --demo: only that section
 
+mod camera;
 mod clank;
 mod combat;
 mod demo;
 mod level;
 mod ratchet_model;
+mod vfx;
 mod weapons;
 mod wrench;
 
@@ -85,10 +87,24 @@ pub struct CameraRig {
     focus: Vec3,
     /// When set, the camera looks at this fixed spot instead of following (demo wide shots).
     fixed: Option<(Vec3, f32, f32, f32)>,
-    /// Seconds of camera shake left (Hyper-Strike landings, explosions).
+    /// Seconds of camera wobble left (Hyper-Strike landings; ours).
     pub shake: f32,
-    /// 0..1: how far the camera has moved in over the shoulder for aiming.
+    /// 0..1: how far the camera has moved over the shoulder for aiming, and back for running.
     aim_blend: f32,
+    moving: f32,
+    /// The game's shakes playing: shake, seconds in, strength.
+    shakes: Vec<(camera::Shake, f32, f32)>,
+    /// Demo close-ups: look at his chest.
+    close_up: bool,
+}
+
+impl CameraRig {
+    /// Starts one of the game's camera shakes (`strength` 0..1).
+    pub fn add_shake(&mut self, shake: &camera::Shake, strength: f32) {
+        if strength > 0.0 {
+            self.shakes.push((shake.clone(), 0.0, strength));
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -133,6 +149,7 @@ fn main() {
                 .unwrap_or_else(|| PathBuf::from("riftapart-configs"))
         });
     let (base, load_note) = load_tuning(&configs_dir);
+    let camera_configs = camera::CameraConfigs::load(&configs_dir);
 
     let resolution = if demo { (1280, 720) } else { (1600, 900) };
     let model_dir = ratchet_model::find_assets_dir();
@@ -154,15 +171,29 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin, weapons::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin, weapons::plugin, vfx::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
-    .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.9)))
+    // The sky: with HDR the clear colour goes through the tonemapper too, so this is the colour
+    // that comes out as sRGB (0.55, 0.7, 0.9) after it.
+    .insert_resource(ClearColor(Color::linear_rgb(0.34, 0.73, 1.75)))
     .insert_resource(Settings { base, scale, configs_dir, load_note, model_dir })
-    .insert_resource(CameraRig { yaw: 0.6, pitch: 0.35, distance: 7.0, focus: spots::SPAWN, fixed: None, shake: 0.0, aim_blend: 0.0 })
+    .insert_resource(CameraRig {
+        yaw: 0.6,
+        pitch: 0.35,
+        distance: camera_configs.stand.level.z * scale,
+        focus: spots::SPAWN,
+        fixed: None,
+        shake: 0.0,
+        aim_blend: 0.0,
+        moving: 0.0,
+        shakes: Vec::new(),
+        close_up: false,
+    })
+    .insert_resource(camera_configs)
     .init_resource::<Trail>()
     .init_resource::<ScriptedInput>()
     .init_resource::<MouseMelee>()
-    .add_systems(Startup, (level::spawn_level, setup).chain())
+    .add_systems(Startup, ((level::spawn_level, setup).chain(), camera::log_source))
     .add_systems(FixedUpdate, simulate)
     .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud, crosshair).chain());
 
@@ -206,7 +237,15 @@ fn setup(
         Color::srgb(0.35, 0.33, 0.3),
     );
     sky.intensity = 1500.0;
-    commands.spawn((Camera3d::default(), sky, Transform::from_xyz(-6.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    // HDR with a light bloom, so bright effects (muzzle flashes, tracers, explosions) glow the
+    // way they do in the game.
+    commands.spawn((
+        Camera3d::default(),
+        bevy::camera::Hdr,
+        bevy::post_process::bloom::Bloom { intensity: 0.1, ..bevy::post_process::bloom::Bloom::NATURAL },
+        sky,
+        Transform::from_xyz(-6.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
     commands.spawn((
         DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -422,10 +461,13 @@ fn hotkeys(
     mut settings: ResMut<Settings>,
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
+    mut rig: ResMut<CameraRig>,
 ) {
     let Ok(mut p) = players.single_mut() else { return };
     if keys.just_pressed(KeyCode::Tab) {
+        let old = settings.scale;
         settings.scale = if (settings.scale - 1.0).abs() < 0.01 { DRAGONBORN_SCALE } else { 1.0 };
+        rig.distance *= settings.scale / old;
         let t = settings.base.scaled(settings.scale);
         p.sim.set_tuning(t);
     }
@@ -514,38 +556,80 @@ fn update_visuals(
     }
 }
 
+/// The follow camera, placed by the game's camera contexts (`camera.rs`): around a pivot above
+/// Ratchet's feet, further back while he runs, over his right shoulder while aiming.
+#[allow(clippy::too_many_arguments)]
 fn camera_follow(
     time: Res<Time>,
     settings: Res<Settings>,
+    configs: Res<camera::CameraConfigs>,
     arsenal: Option<Res<weapons::Arsenal>>,
     mut rig: ResMut<CameraRig>,
     players: Query<&Player>,
-    mut cams: Query<&mut Transform, With<Camera3d>>,
+    mut cams: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
 ) {
-    let (Ok(p), Ok(mut cam)) = (players.single(), cams.single_mut()) else { return };
+    let (Ok(p), Ok((mut cam, mut projection))) = (players.single(), cams.single_mut()) else { return };
+    let dt = time.delta_secs();
+    // The game's shakes, added up (degrees of yaw, pitch and roll).
+    let mut shake = Vec3::ZERO;
+    rig.shakes.retain_mut(|(sh, age, strength)| {
+        *age += dt;
+        sh.sample(*age).map(|v| shake += v * *strength).is_some()
+    });
+    let shake = Quat::from_euler(EulerRot::YXZ, shake.x.to_radians(), shake.y.to_radians(), shake.z.to_radians());
     if let Some((focus, yaw, pitch, distance)) = rig.fixed {
         let offset = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()) * distance;
         *cam = Transform::from_translation(focus + offset).looking_at(focus, Vec3::Y);
-        rig.focus = focus;
+        cam.rotation *= shake;
+        set_fov(&mut projection, configs.stand.fov);
         return;
     }
-    let target = p.feet + Vec3::Y * 0.9 * settings.scale;
-    let k = 1.0 - (-10.0 * time.delta_secs()).exp();
-    rig.focus = rig.focus.lerp(target, k);
-    // A short 20 Hz wobble, fading out (like the game's melee-impact shake).
-    rig.shake = (rig.shake - time.delta_secs()).max(0.0);
+    let s = settings.scale;
+    let k = 1.0 - (-10.0 * dt).exp();
+    rig.focus = rig.focus.lerp(p.feet, k);
+    // A short 20 Hz wobble, fading out (ours, for melee impacts).
+    rig.shake = (rig.shake - dt).max(0.0);
     let wobble = (time.elapsed_secs() * 20.0 * std::f32::consts::TAU).sin() * (rig.shake / 0.25).min(1.0);
     let (yaw, pitch) = (rig.yaw + wobble * 0.012, rig.pitch + wobble * 0.004);
-    // Aiming: in close over the right shoulder (blending in over about 0.13 s).
+    // Aiming blends to the strafe context (over about 0.13 s); running, to the traversal place.
     let aiming = arsenal.is_some_and(|a| a.aiming);
-    let k = 1.0 - (-time.delta_secs() / 0.13).exp();
+    let k = 1.0 - (-dt / 0.13).exp();
     rig.aim_blend += ((aiming as u8 as f32) - rig.aim_blend) * k;
-    let s = settings.scale;
+    let speed = p.sim.velocity().with_y(0.0).length() / s;
+    let k = 1.0 - (-dt / 0.5).exp();
+    rig.moving += (camera::CameraContext::moving(speed) - rig.moving) * k;
+    // The mouse wheel (and the demo) set how far back the standing camera is; zoomed in closer
+    // than the game's distance, it looks lower, toward his chest (ours), and stops pulling back
+    // while he runs.
+    let zoom = rig.distance / (configs.stand.level.z * s).max(0.01);
+    let game_framing = if rig.close_up { 0.0 } else { ((zoom - 0.45) / 0.55).clamp(0.0, 1.0) };
+    let (stand_pivot, mut stand, stand_fov) = configs.stand.place(pitch, rig.moving * game_framing);
+    let stand_pivot = CHEST + (stand_pivot - CHEST) * game_framing;
+    stand.z *= zoom;
+    let (aim_pivot, aim, aim_fov) = configs.aim.place(pitch, 0.0);
+    let b = rig.aim_blend;
+    let pivot = (stand_pivot + (aim_pivot - stand_pivot) * b) * s;
+    let offset = stand.lerp(aim, b) * s;
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
-    let focus = rig.focus + (right * 0.55 * s + Vec3::Y * 0.2 * s) * rig.aim_blend;
-    let distance = rig.distance + (2.6 * s - rig.distance) * rig.aim_blend;
-    let offset = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()) * distance;
-    *cam = Transform::from_translation(focus + offset).looking_at(focus, Vec3::Y);
+    let focus = rig.focus + Vec3::Y * (pivot + offset.y) + right * offset.x;
+    let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
+    *cam = Transform::from_translation(focus + back * offset.z).looking_at(focus, Vec3::Y);
+    cam.rotation *= shake;
+    set_fov(&mut projection, stand_fov + (aim_fov - stand_fov) * b);
+}
+
+/// Where a zoomed-in camera looks (height above his feet at Ratchet's size; ours).
+const CHEST: f32 = 0.8;
+
+/// Sets a perspective camera's horizontal field of view (degrees), the way the game's configs
+/// give it.
+fn set_fov(projection: &mut Projection, horizontal: f32) {
+    if let Projection::Perspective(p) = projection {
+        let fov = 2.0 * ((horizontal.to_radians() * 0.5).tan() / p.aspect_ratio.max(0.1)).atan();
+        if (p.fov - fov).abs() > 1e-4 {
+            p.fov = fov;
+        }
+    }
 }
 
 fn draw_trail(trail: Res<Trail>, mut gizmos: Gizmos) {

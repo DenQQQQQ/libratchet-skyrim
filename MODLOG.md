@@ -35,6 +35,91 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: the weapons' effects, shells and camera, from the game's data
+
+The user found the bullets and effects basic and asked to take more from the game. Everything
+below that isn't marked "ours" comes from their install.
+
+### Known (the user's install)
+- **Which art the effects use.** Followed from the weapon configs through actors, conduits and
+  `.visualeffect` files to their materials, textures and meshes:
+  - The Burst Pistol's bolt (`burst_pistol_gun_projectile_fast`): a tracer mesh
+    (`burst_pistol_tracer_wiggle`), a glow shape (`gbl_projectile_shape_vfx`), a "star wars"
+    tracer texture, a soft glow, a smoke trail (`gbl_smoke_sim_trail_00`) and sparks.
+  - Its impact (`burst_pistol_projectile_impact`): an impact flare, a glow, sparks, smoke puffs
+    and a green scorch decal.
+  - The Shatterbomb's explosion (`wpn_protogrenade_explosion_sub`): the shockwave hemisphere,
+    lens flares and glows, debris and "dimensional shards", smoke and a scorch mark.
+- **Colours.**
+  - Material parameter overrides. The layout is decoded: section F5260180 holds a count and a
+    data offset, then (u16 offset, u16 size, u32 name hash) entries right before the values.
+    They give the bolt's green (0.03, 0.78, 0.07) at intensity 6, the impact decal's greens,
+    the shell glass tint, and the Shatterbomb scorch's violet (0.17, 0.06, 0.81).
+  - The particle data isn't decoded, but its half-float value table (section B1F4C248) has
+    colour-like keys. They give the bolt's lime glow, the impact flash, and the explosion's
+    white-hot to orange fire, violet energy, magenta shards and grey smoke.
+- **Shells.** The Burst Pistol's `ShellCasingData` names a shell actor
+  (`burst_pistol_shell_01`: glass, an inner part, metal ends). Shells eject at 2–4 m/s, spin up
+  to (45, 5, 45), from the gun's `igLoc_shell_eject` locator. That locator is on the barrel
+  joint and points out of the gun's right side and up.
+- **Camera.** The weapon's `ZoomConfig` points at the camera contexts
+  (`CameraAimContextConfig`):
+  - Default: a pivot 1.5 m above the feet, 4.65 m back, FOV 76°. Moving: 6 m back, pivot
+    1.65 m, FOV 82°. Looking up: 3 m back.
+  - Strafe (aiming): pivot 1.6 m, 0.5 m to the right, 4.5 m back, FOV 72°.
+  - The FOVs are horizontal (82° vertical would be far too wide).
+- **Camera shakes.** A `CameraShakingConfig` has three sine curves per axis (magnitude,
+  frequency, phase), a duration and a fade-out.
+  - The Burst Pistol's recoil (`camerashake_recoilsmall`) lasts 0.08 s.
+  - The Shatterbomb's explosion (`camera_CameraShake_MediumExplosion`) holds 0.1 s and fades
+    over 0.7 s. It's full strength within 30 m and gone past 50 m.
+
+### Ours (assumed or simplified)
+- **Effect motion.** The particle systems aren't decoded, so the effects' timing, sizes, speeds
+  and counts are ours. Palette keys are picked by offset in a table we can't read yet.
+- **Units we guessed.** The shake curves are read as degrees of camera yaw, pitch and roll. The
+  shell spin is read as rad/s (as degrees the shells would barely turn).
+- **Camera blending.** How the game blends its contexts isn't known. Ours: by pitch (full "down"
+  at 1.2 rad, "up" at −0.6) and by speed (2.5 to 6 m/s). Zoomed in closer than the game's
+  distance, the camera looks lower, toward his chest. The demo has a close-up mode.
+- **Small things.** Ratchet keeps the gun up for 1 s after firing. The bolt's 2 m streak, its
+  head glow, the 0.35 s trail and the lights' brightness are ours.
+
+### Built
+- **`tools/extract_riftapart_vfx.py`:** adds the smoke trail texture and the shell model, and
+  writes a palette to `vfx.json` (material parameters and effect keys). The muzzle flash becomes
+  a white mask to tint.
+- **`tools/extract_riftapart_ratchet.py`:** exports model locators (`igLoc_*`) as glTF nodes
+  under their joints.
+- **`tools/extract_riftapart_configs.py`:** also extracts the two camera contexts and the two
+  shakes.
+- **libarsenal:** `ShellParams` (from `ShellCasingData`) and `ShakeRef` (the recoil and
+  explosion shakes, with radii). 12 tests.
+- **Sandbox, `vfx.rs`:**
+  - Bolts: the game's tracer mesh and glow shape, a streak stretched by speed with a glow at its
+    head that faces the camera, a green light, and a smoke trail.
+  - Muzzle flash: the game's flash mesh and flash shape, a glow and a burst of light.
+  - Impacts: flare, glow, light, sparks that bounce, smoke, and a bullet mark that glows green
+    and cools.
+  - Shells that tumble out of the ejector and bounce on the floor.
+  - The Shatterbomb blast: a burst of light, a white-hot flash, an orange fireball, the game's
+    shockwave dome in violet, violet shards, smoke, debris, and a scorch mark with violet embers.
+    The grenade glows violet in flight.
+- **Sandbox, `camera.rs`:** the game's camera contexts and shakes. The follow camera uses them,
+  turning the horizontal FOV into Bevy's vertical one.
+- **Look:** HDR and a light bloom.
+- **Demo:** side views of hip fire (bolts crossing the screen, shells) and of a Shatterbomb, and
+  close-up framing for the animation shots. Video: `recordings/weapons_game_effects.mp4`.
+
+### Fixed
+- **Effects cast shadows.** That put a blue ring and grey squares on the floor under the blast.
+  Effect pieces no longer cast shadows.
+- **Black and magenta blobs in the bolts.** In Bevy, `LinearRgba * k` scales alpha too. A "6×
+  bright" colour had alpha 6, so blending subtracted the background. The effect materials now
+  reset alpha to 1.
+- **The sky turned grey-blue with HDR.** The clear colour now goes through the tonemapper too,
+  so it's set to the colour that comes out as before.
+
 ## 2026-10-07 (night): weapons: the Burst Pistol and the Shatterbomb
 
 The user said "weapons next!". There's a new engine-independent crate, `libarsenal`, plus aim

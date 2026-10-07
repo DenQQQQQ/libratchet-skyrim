@@ -34,7 +34,8 @@ python tools/extract_riftapart_configs.py --game "<your Rift Apart folder>" --al
 ```
 
 That writes JSON into `riftapart-configs/` (gitignored): the movement configs, the wrench's
-melee and throw configs, the Burst Pistol's and Shatterbomb's weapon configs, and
+melee and throw configs, the Burst Pistol's and Shatterbomb's weapon configs, the camera's
+placement and shakes, and
 `hero_melee_clips.json` (each swing's length, hit time and lunge, read from Ratchet's wrench
 animations). Without it, the sandbox uses generic default values and
 says so on screen.
@@ -55,6 +56,16 @@ double jump, fall, glide, land, dash, air-dash, wrench and gun clips, Clank ride
 (backpack idle, heli-pack while gliding), and the OmniWrench and the Burst Pistol appear in his
 hand. Without them, you get a capsule
 with Lombax ears. Never share the `.glb` files: they're game data.
+
+The weapon effects (muzzle flashes, bolts, impacts, shells, the Shatterbomb's blast) use the
+game's own effect textures, meshes and colours, exported the same way into
+`riftapart-assets/vfx/`:
+
+```bash
+python tools/extract_riftapart_vfx.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
+```
+
+Without them, the guns fire plain shapes.
 
 ## Run the sandbox
 

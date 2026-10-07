@@ -3,6 +3,7 @@
 //!
 //! Units: metres, seconds, degrees for angles.
 
+use glam::Vec3;
 use serde_json::Value;
 use std::path::Path;
 
@@ -88,6 +89,25 @@ impl ExplosionParams {
     }
 }
 
+/// Spent shells the gun throws out with each shot (`ShellCasingData`); only for looks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShellParams {
+    /// Ejection speed range (m/s).
+    pub speed: (f32, f32),
+    /// Largest tumbling speed about each axis of the ejector. The config's unit isn't known;
+    /// read as radians per second (as degrees the shells would barely turn).
+    pub spin: Vec3,
+}
+
+/// A camera shake a weapon asks for: the game config that describes it (by name), and for
+/// explosions, full strength within `inner` metres, fading to nothing at `outer`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShakeRef {
+    pub config: String,
+    pub inner: f32,
+    pub outer: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WeaponParams {
     pub name: String,
@@ -111,6 +131,10 @@ pub struct WeaponParams {
     /// Furthest a lobbed shot is aimed.
     pub lob_range: f32,
     pub explosion: Option<ExplosionParams>,
+    pub shell: Option<ShellParams>,
+    /// The camera shake of each shot (recoil), and of its explosion.
+    pub recoil_shake: Option<ShakeRef>,
+    pub blast_shake: Option<ShakeRef>,
     /// Where these values came from, for display.
     pub source: String,
 }
@@ -133,6 +157,9 @@ impl WeaponParams {
             lob: false,
             lob_range: 0.0,
             explosion: None,
+            shell: None,
+            recoil_shake: None,
+            blast_shake: None,
             source: "generic defaults".into(),
         }
     }
@@ -160,6 +187,9 @@ impl WeaponParams {
                 outer_damage: 60.0,
                 knockback: vec![(2.5, 3.5), (5.0, 1.5), (15.0, 0.4)],
             }),
+            shell: None,
+            recoil_shake: None,
+            blast_shake: None,
             source: "generic defaults".into(),
         }
     }
@@ -212,6 +242,21 @@ impl WeaponParams {
         if let Some(s) = spread_from(&prius["SlowInaccuracyData"]) {
             p.aimed_spread = s;
         }
+        let recoil = &prius["Recoil"]["CameraShake"]["CameraShake"]["Obj"]["CameraShakeData"];
+        if let Some(name) = recoil.as_str().and_then(config_name) {
+            p.recoil_shake = Some(ShakeRef { config: name, inner: f32::INFINITY, outer: f32::INFINITY });
+        }
+        let blast = &shot["ShakeData"];
+        if let Some(name) = blast["ShakeConfig"].as_str().and_then(config_name) {
+            let inner = f(blast, "InnerRadius").unwrap_or(f32::INFINITY);
+            p.blast_shake = Some(ShakeRef { config: name, inner, outer: f(blast, "OuterRadius").unwrap_or(inner).max(inner) });
+        }
+        let shell = &prius["ShellCasingData"];
+        if let (Some(lo), Some(hi)) = (f(shell, "EjectSpeedMin"), f(shell, "EjectSpeedMax")) {
+            let spin = &shell["EjectSpinMax"];
+            let axis = |k: &str| f(spin, k).unwrap_or(0.0);
+            p.shell = Some(ShellParams { speed: (lo, hi), spin: Vec3::new(axis("X"), axis("Y"), axis("Z")) });
+        }
         let ex = &shot["ExplosionData"];
         if ex.is_object() {
             let b = base.explosion.clone().unwrap_or_else(|| WeaponParams::grenade().explosion.unwrap());
@@ -249,6 +294,13 @@ impl WeaponParams {
         pp.range *= s;
         pp.radius *= s;
         p.explosion = self.explosion.as_ref().map(|e| e.scaled(s));
+        if let Some(shell) = p.shell.as_mut() {
+            shell.speed = (shell.speed.0 * s, shell.speed.1 * s);
+        }
+        for shake in [&mut p.recoil_shake, &mut p.blast_shake].into_iter().flatten() {
+            shake.inner *= s;
+            shake.outer *= s;
+        }
         p
     }
 }
@@ -286,6 +338,13 @@ fn spread_from(v: &Value) -> Option<SpreadParams> {
         recover: f(v, "DecreaseAnglePerSec").unwrap_or(10.0),
         free_shots: f(v, "MinShotsToIncrease").map_or(0, |n| n as u32),
     })
+}
+
+/// "configs/camera/camera_x.config" -> "camera_x" (the extracted JSON's file name).
+fn config_name(path: &str) -> Option<String> {
+    let base = path.rsplit(['/', '\\']).next()?;
+    let name = base.strip_suffix(".config").unwrap_or(base);
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn f(v: &Value, key: &str) -> Option<f32> {

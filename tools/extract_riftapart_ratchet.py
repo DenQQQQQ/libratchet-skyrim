@@ -341,6 +341,10 @@ def fix_glb_for_bevy(path, compensate=()):
         scene["nodes"] = [n for n in scene["nodes"] if n not in joint_set] + [rig]
         j["skins"][0]["skeleton"] = rig
     split = apply_scale_compensation(j, blob, set(compensate))
+    if not j.get("skins"):
+        # Static models (effect meshes): no skin to point at.
+        for n in j["nodes"]:
+            n.pop("skin", None)
     j["buffers"][0]["byteLength"] = len(blob) + ((-len(blob)) % 4)
     glb_write(path, j, blob)
     return merged, split
@@ -553,6 +557,52 @@ def main():
         convert(game, a, PRESETS[name])
 
 
+def quat_from_basis(m):
+    # Unit quaternion [x, y, z, w] of a rotation matrix whose columns are the rotated axes.
+    t = m[0][0] + m[1][1] + m[2][2]
+    if t > 0:
+        s = 0.5 / np.sqrt(t + 1.0)
+        q = [(m[2][1] - m[1][2]) * s, (m[0][2] - m[2][0]) * s, (m[1][0] - m[0][1]) * s, 0.25 / s]
+    elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = 2.0 * np.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2])
+        q = [0.25 * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s]
+    elif m[1][1] > m[2][2]:
+        s = 2.0 * np.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2])
+        q = [(m[0][1] + m[1][0]) / s, 0.25 * s, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s]
+    else:
+        s = 2.0 * np.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1])
+        q = [(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25 * s, (m[1][0] - m[0][1]) / s]
+    n = np.linalg.norm(q)
+    return [float(v / n) for v in q]
+
+
+def add_locators(model, g):
+    # The model's locators (igLoc_*: attachment points like a gun's shell ejector) as empty
+    # nodes under their joints. A locator's matrix is 4 rows of 3: its X, Y and Z axes in the
+    # joint's space, then its position.
+    locators = model.dat1.get_section(0x9F614FAB)
+    joints = model.dat1.get_section(0x15DF9D3B)
+    if locators is None or joints is None:
+        return 0
+    joint_names = [model.dat1.get_string(j.string_offset) for j in joints.joints]
+    node_of = {n.name: i for i, n in enumerate(g.nodes) if n.name}
+    added = 0
+    for loc in locators.locators:
+        if loc.joint < 0 or joint_names[loc.joint] not in node_of:
+            continue
+        rows = np.array(loc.matrix, dtype=np.float64)
+        node = pygltflib.Node(
+            name=model.dat1.get_string(loc.string_offset),
+            translation=[float(v) for v in rows[3]],
+            rotation=quat_from_basis(rows[:3].T),
+        )
+        g.nodes.append(node)
+        parent = g.nodes[node_of[joint_names[loc.joint]]]
+        parent.children = (parent.children or []) + [len(g.nodes) - 1]
+        added += 1
+    return added
+
+
 def convert(game, a, preset):
     import model_to_gltf as m2g
 
@@ -573,11 +623,11 @@ def convert(game, a, preset):
     all_meshes = sorted(mesh_look)
     keep, mesh_material = [], {}
     for mi in all_meshes:
-        path = w.get_material_path(w.meshes[mi].get_material()) or None
+        path = w.get_material_path(w.meshes[mi].get_material()) or ("vfx" if preset.get("vfx") else None)
         if path is None or any(s in path.lower() for s in SKIP_MATERIALS):
             print(f"  skip mesh {mi} ({path})")
             continue
-        if pick(material_textures(game, path), "c", path) is None and not special_material(path, preset):
+        if not preset.get("vfx") and pick(material_textures(game, path), "c", path) is None and not special_material(path, preset):
             # Fur shells, stitching and small emissive bits have no colour map; they need
             # special shaders, so leave them out for now.
             print(f"  skip mesh {mi} (no colour map: {path})")
@@ -585,10 +635,16 @@ def convert(game, a, preset):
         keep.append(mi)
         mesh_material[f"sm{mi:02}"] = path
     skin, rcra_skin = w.get_skin()
-    w.add_skeleton(model)
+    if preset.get("vfx"):
+        # Effect meshes are drawn static: no skeleton, no skinning attributes.
+        skin, rcra_skin = None, None
+    elif model.dat1.get_section(0x15DF9D3B) is not None:
+        w.add_skeleton(model)
     w.add_meshes(keep, skin, rcra_skin)
     anims = add_animations(game, w, model, preset) if not a.no_anims else {}
     g = w.gltf
+    if not preset.get("vfx"):
+        print(f"  {add_locators(model, g)} locators")
     parts = preset.get("look_parts", {})
     for node in g.nodes:
         # ALERT names mesh nodes after the model's mesh index ("sm07", "sm119").
@@ -688,7 +744,8 @@ def convert(game, a, preset):
     g.save_binary(out)
     # Edit the file directly: pygltflib drops JOINTS_1/WEIGHTS_1 when it reloads a file.
     # Bit 0 of a joint's flags: it doesn't inherit its parent's scale (every *_noScale helper has it).
-    joint_defs = model.dat1.get_section(0x15DF9D3B).joints
+    joints_section = model.dat1.get_section(0x15DF9D3B)
+    joint_defs = joints_section.joints if joints_section else []
     compensate = {model.dat1.get_string(jd.string_offset) for jd in joint_defs if jd.unknown2 & 1}
     merged, split = fix_glb_for_bevy(out, compensate)
     print(f"  merged 8 -> 4 bone influences on {merged} primitives")

@@ -6,8 +6,10 @@
 //! Weapon numbers come from `riftapart-configs/wpn_burstpistol_weapon.json` and
 //! `wpn_protogrenade_weapon.json` (extracted from the user's own install), else generic defaults.
 
+use crate::camera::Shake;
 use crate::combat::{Dummy, Hits, dummy_contains, hit};
-use crate::level::Level;
+use crate::level::{Level, ground_distance};
+use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, MouseMelee, Player, Settings, simulate};
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
@@ -27,6 +29,8 @@ const GRENADE_RELEASE: f32 = 0.16;
 const GRENADE_ANIM: f32 = 0.47;
 /// Empty weapons refill after this long (a sandbox convenience).
 const REFILL_AFTER: f32 = 1.5;
+/// Ratchet keeps the gun up this long after his last shot (ours).
+const COMBAT_STANCE: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -54,6 +58,8 @@ pub struct ScriptedArsenal {
     pub active: bool,
     pub trigger: bool,
     pub aim: bool,
+    /// Aim here instead of at the crosshair.
+    pub target: Option<Vec3>,
 }
 
 #[derive(Resource)]
@@ -69,6 +75,8 @@ pub struct Arsenal {
     pub throws: u32,
     /// Seconds left of the grenade throw animation, and a grenade waiting to leave the hand.
     pub grenade_anim: f32,
+    /// Seconds left of the gun-up stance after firing.
+    pub stance: f32,
     pending: Option<f32>,
     refill: f32,
     pub note: String,
@@ -78,7 +86,17 @@ pub struct Arsenal {
     gun_player: Option<Entity>,
     gun_fire: Option<AnimationNodeIndex>,
     muzzle: Option<Entity>,
+    /// The gun's shell ejector (its igLoc_shell_eject locator).
+    ejector: Option<Entity>,
     shots_seen: u32,
+}
+
+/// The game's camera shakes the weapons name (recoil per shot; explosion, with the radii it
+/// fades over).
+#[derive(Resource, Default)]
+struct WeaponShakes {
+    recoil: Option<Shake>,
+    blast: Option<(Shake, f32, f32)>,
 }
 
 #[derive(Resource)]
@@ -92,6 +110,8 @@ struct Bolt {
     proj: Projectile,
     damage: f32,
     knockback: f32,
+    /// It hit something this step: shown at the hit for one step, then removed.
+    spent: bool,
 }
 
 #[derive(Component)]
@@ -127,6 +147,11 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
     let (grenade, n2) = load_weapon(&settings, "wpn_protogrenade_weapon.json", WeaponParams::grenade());
     let note = [n1, n2].into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("; ");
     let s = settings.scale;
+    let shake = |r: &Option<libarsenal::ShakeRef>| {
+        let r = r.as_ref()?;
+        Shake::load(&settings.configs_dir, &r.config).map(|sh| (sh, r.inner * s, r.outer * s))
+    };
+    commands.insert_resource(WeaponShakes { recoil: shake(&pistol.recoil_shake).map(|(sh, _, _)| sh), blast: shake(&grenade.blast_shake) });
     commands.insert_resource(Arsenal {
         slot: Slot::Wrench,
         pistol: Weapon::new(pistol.scaled(s)),
@@ -136,6 +161,7 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
         shots: 0,
         throws: 0,
         grenade_anim: 0.0,
+        stance: 0.0,
         pending: None,
         refill: 0.0,
         note,
@@ -144,6 +170,7 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
         gun_player: None,
         gun_fire: None,
         muzzle: None,
+        ejector: None,
         shots_seen: 0,
     });
     let has = |f: &str| settings.model_dir.as_ref().is_some_and(|d| d.join(f).exists());
@@ -182,8 +209,12 @@ fn on_gun_ready(
         if players.contains(e) {
             arsenal.gun_player = Some(e);
         }
-        if names.get(e).is_ok_and(|n| n.as_str() == "CTR_chamber") {
-            arsenal.muzzle = Some(e);
+        // The game's locators (exported as nodes); older exports only have the muzzle's joint.
+        match names.get(e).map(|n| n.as_str()) {
+            Ok("igLoc_bulletEmit") => arsenal.muzzle = Some(e),
+            Ok("CTR_chamber") if arsenal.muzzle.is_none() => arsenal.muzzle = Some(e),
+            Ok("igLoc_shell_eject") => arsenal.ejector = Some(e),
+            _ => {}
         }
     }
 }
@@ -214,6 +245,7 @@ fn controls(
         arsenal.trigger = gun && grabbed && mouse_melee.armed() && mouse.pressed(MouseButton::Left);
     }
     arsenal.grenade_anim = (arsenal.grenade_anim - time.delta_secs()).max(0.0);
+    arsenal.stance = if gun { (arsenal.stance - time.delta_secs()).max(0.0) } else { 0.0 };
 }
 
 /// Camera ray: where the crosshair (screen centre) points.
@@ -244,21 +276,34 @@ fn crosshair_target(cam: &GlobalTransform, level: &Level, dummies: &Query<&mut D
 
 /// Distance along the ray to an axis-aligned box, if it hits (slab test).
 fn ray_box(from: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
+    ray_box_normal(from, dir, min, max).map(|(t, _)| t)
+}
+
+/// Like `ray_box`, with the normal of the face it enters through.
+fn ray_box_normal(from: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
     let inv = dir.recip();
     let t1 = (min - from) * inv;
     let t2 = (max - from) * inv;
-    let near = t1.min(t2).max_element();
+    let lo = t1.min(t2);
+    let near = lo.max_element();
     let far = t1.max(t2).min_element();
-    (far >= near.max(0.0)).then_some(near.max(0.0))
+    if far < near.max(0.0) {
+        return None;
+    }
+    let axis = if lo.x >= lo.y && lo.x >= lo.z { 0 } else if lo.y >= lo.z { 1 } else { 2 };
+    let mut n = Vec3::ZERO;
+    n[axis] = -dir[axis].signum();
+    Some((near.max(0.0), n))
 }
 
-fn segment_hits_box(a: Vec3, b: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
+/// Where along a→b (0..1) the segment enters a box, and that face's normal.
+fn segment_hits_box(a: Vec3, b: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
     let d = b - a;
     let len = d.length();
     if len < 1e-6 {
-        return (a.cmpge(min).all() && a.cmple(max).all()).then_some(0.0);
+        return (a.cmpge(min).all() && a.cmple(max).all()).then_some((0.0, Vec3::Y));
     }
-    ray_box(a, d / len, min, max).filter(|t| *t <= len).map(|t| t / len)
+    ray_box_normal(a, d / len, min, max).filter(|(t, _)| *t <= len).map(|(t, n)| (t / len, n))
 }
 
 fn muzzle_position(arsenal: &Arsenal, globals: &Query<&GlobalTransform>, p: &Player, scale: f32) -> Vec3 {
@@ -281,6 +326,9 @@ fn fire(
     cams: Query<&GlobalTransform, With<Camera3d>>,
     globals: Query<&GlobalTransform>,
     dummies: Query<&mut Dummy>,
+    scripted: Res<ScriptedArsenal>,
+    (art, mut rng): (Res<VfxArt>, ResMut<FxRng>),
+    (mut rig, shakes): (ResMut<CameraRig>, Res<WeaponShakes>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
@@ -288,7 +336,10 @@ fn fire(
     let dt = time.delta_secs();
     let (Ok(p), Ok(cam)) = (players.single(), cams.single()) else { return };
     let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
-    let target = crosshair_target(cam, &level, &dummies, AIM_RANGE * settings.scale);
+    let target = match scripted.target {
+        Some(t) if scripted.active => t,
+        _ => crosshair_target(cam, &level, &dummies, AIM_RANGE * settings.scale),
+    };
     let muzzle = muzzle_position(&arsenal, &globals, p, settings.scale);
     let aim = Aim { muzzle, target, aimed: arsenal.aiming };
     let trigger = arsenal.trigger && !busy;
@@ -300,7 +351,8 @@ fn fire(
             arsenal.pending = None;
             if let Some(shot) = arsenal.grenade.step(0.0, true, &aim).into_iter().next().or_else(|| last_grenade_shot(&arsenal, &aim)) {
                 let proj = Projectile::new(&shot, &arsenal.grenade.params().projectile);
-                spawn_grenade(&mut commands, &models, &mut meshes, &mut materials, proj, settings.scale);
+                let light = art.available.then(|| art.grenade_light(settings.scale));
+                spawn_grenade(&mut commands, &models, &mut meshes, &mut materials, proj, light, settings.scale);
             }
         }
     }
@@ -309,10 +361,34 @@ fn fire(
         Slot::BurstPistol => {
             let shots = arsenal.pistol.step(dt, trigger, &aim);
             let w = arsenal.pistol.params().clone();
+            let s = settings.scale;
             for shot in shots {
                 arsenal.shots += 1;
+                arsenal.stance = COMBAT_STANCE;
+                if let Some(recoil) = &shakes.recoil {
+                    rig.add_shake(recoil, 1.0);
+                }
                 let proj = Projectile::new(&shot, &w.projectile);
                 let dir = shot.velocity.normalize();
+                if art.available {
+                    // The game's muzzle flash, bolt, and a spent shell out of the ejector.
+                    art.muzzle_flash(&mut commands, &mut materials, &mut rng, shot.origin, dir, s);
+                    let bolt = commands
+                        .spawn((
+                            Bolt { proj, damage: w.damage, knockback: w.knockback, spent: false },
+                            Transform::from_translation(shot.origin).with_rotation(Quat::from_rotation_arc(Vec3::Z, dir)),
+                            Visibility::default(),
+                        ))
+                        .with_children(|c| art.bolt(c, &mut materials, s))
+                        .id();
+                    art.streak(&mut commands, &mut materials, bolt, shot.origin, s);
+                    if let (Some(shell), Some(eject)) = (&w.shell, arsenal.ejector.and_then(|e| globals.get(e).ok())) {
+                        let (_, rot, at) = eject.to_scale_rotation_translation();
+                        let floor = ground_distance(&level, at, 0.05).map(|d| at.y - d);
+                        art.shell(&mut commands, &mut rng, at, rot, shell, floor, s);
+                    }
+                    continue;
+                }
                 // Muzzle flash.
                 commands.spawn((
                     Blast { age: 0.0, radius: 0.12 * settings.scale, life: 0.06 },
@@ -327,7 +403,7 @@ fn fire(
                     Transform::from_translation(shot.origin).with_scale(Vec3::splat(0.05)),
                 ));
                 commands.spawn((
-                    Bolt { proj, damage: w.damage, knockback: w.knockback },
+                    Bolt { proj, damage: w.damage, knockback: w.knockback, spent: false },
                     Mesh3d(meshes.add(Capsule3d::new(0.04 * settings.scale, 0.9 * settings.scale))),
                     MeshMaterial3d(materials.add(StandardMaterial {
                         base_color: Color::srgb(1.0, 0.8, 0.3),
@@ -382,10 +458,14 @@ fn spawn_grenade(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     proj: Projectile,
+    light: Option<PointLight>,
     scale: f32,
 ) {
     let at = Transform::from_translation(proj.position()).with_scale(Vec3::splat(scale));
     let mut e = commands.spawn((Grenade { proj }, at, Visibility::default()));
+    if let Some(light) = light {
+        e.with_child((light, Transform::default()));
+    }
     match &models.grenade {
         Some(scene) => {
             e.with_children(|c| {
@@ -401,21 +481,32 @@ fn spawn_grenade(
     }
 }
 
-/// Bolts: a hit on a dummy damages and nudges it; a wall or the floor stops them.
+/// Bolts: a hit on a dummy damages and nudges it; a wall or the floor stops them (with the
+/// game's impact flare, sparks and a bullet mark). Each step leaves a stretch of smoke trail.
+#[allow(clippy::too_many_arguments)]
 fn fly_bolts(
     time: Res<Time>,
+    settings: Res<Settings>,
     level: Res<Level>,
+    art: Res<VfxArt>,
+    mut rng: ResMut<FxRng>,
     mut bolts: Query<(Entity, &mut Bolt, &mut Transform)>,
     mut dummies: Query<&mut Dummy>,
     mut hits: ResMut<Hits>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
+    let s = settings.scale;
     for (e, mut bolt, mut tf) in &mut bolts {
+        if bolt.spent {
+            commands.entity(e).despawn();
+            continue;
+        }
         let (a, b) = bolt.proj.step(time.delta_secs());
         let r = bolt.proj.radius();
         // Sample the segment against the dummies.
         let steps = ((b - a).length() / 0.1).ceil().max(1.0) as usize;
-        let mut done = false;
+        let mut impact: Option<(Vec3, Vec3, bool)> = None;
         'samples: for i in 0..=steps {
             let p = a.lerp(b, i as f32 / steps as f32);
             for mut d in dummies.iter_mut() {
@@ -424,15 +515,34 @@ fn fly_bolts(
                     hit(&mut d, p - (b - a), push, 0.3, damage);
                     hits.count += 1;
                     hits.last = format!("Burst Pistol hit ({damage:.1} damage, dummy at {:.0})", d.health.max(0.0));
-                    done = true;
+                    let axis = Vec3::new(d.pos.x, p.y, d.pos.z);
+                    impact = Some((p, (p - axis).normalize_or(-(b - a).normalize_or(Vec3::Y)), false));
                     break 'samples;
                 }
             }
         }
-        if !done {
-            done = level.blocks.iter().any(|blk| segment_hits_box(a, b, blk.min, blk.max).is_some()) || bolt.proj.expired();
+        if impact.is_none() {
+            impact = level
+                .blocks
+                .iter()
+                .filter_map(|blk| segment_hits_box(a, b, blk.min, blk.max))
+                .min_by(|x, y| x.0.total_cmp(&y.0))
+                .map(|(t, n)| (a.lerp(b, t), n, true));
         }
-        if done {
+        let end = impact.map_or(b, |(at, _, _)| at);
+        if art.available {
+            art.bolt_trail(&mut commands, &mut materials, a, end, s);
+        }
+        if let Some((at, normal, wall)) = impact {
+            if art.available {
+                art.bolt_impact(&mut commands, &mut materials, &mut rng, at, normal, wall, s);
+                // Show it at the hit for a step (its streak catches up), then remove it.
+                tf.translation = at;
+                bolt.spent = true;
+            } else {
+                commands.entity(e).despawn();
+            }
+        } else if bolt.proj.expired() {
             commands.entity(e).despawn();
         } else {
             tf.translation = b;
@@ -452,11 +562,16 @@ fn fly_grenades(
     mut dummies: Query<&mut Dummy>,
     mut hits: ResMut<Hits>,
     mut rig: ResMut<CameraRig>,
+    shakes: Res<WeaponShakes>,
+    players: Query<&Player>,
+    art: Res<VfxArt>,
+    mut rng: ResMut<FxRng>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let Some(ex) = arsenal.grenade.params().explosion.clone() else { return };
+    let player = players.single().map_or(Vec3::ZERO, |p| p.feet);
     for (e, mut g, mut tf) in &mut grenades {
         let (a, b) = g.proj.step(time.delta_secs());
         let r = g.proj.radius();
@@ -474,6 +589,7 @@ fn fly_grenades(
                 .blocks
                 .iter()
                 .filter_map(|blk| segment_hits_box(a, b, blk.min - Vec3::splat(r), blk.max + Vec3::splat(r)))
+                .map(|(t, _)| t)
                 .reduce(f32::min)
                 .map(|t| a.lerp(b, t));
         }
@@ -503,7 +619,19 @@ fn fly_grenades(
         }
         hits.count += n;
         hits.last = format!("Shatterbomb hit {n} ({total:.0} damage in all, {:.1}-{:.1} m)", ex.inner_radius, ex.outer_radius);
-        rig.shake = 0.3;
+        // The game's explosion shake, full strength near it and fading out further away.
+        match &shakes.blast {
+            Some((shake, inner, outer)) => {
+                let d = player.distance(at);
+                rig.add_shake(shake, if d <= *inner { 1.0 } else { ((outer - d) / (outer - inner).max(1e-3)).clamp(0.0, 1.0) });
+            }
+            None => rig.shake = 0.3,
+        }
+        if art.available {
+            let ground = ground_distance(&level, at + Vec3::Y * 0.2, 0.05).filter(|d| *d < 1.5).map(|d| at.y + 0.2 - d);
+            art.explosion(&mut commands, &mut materials, &mut rng, at, ex.outer_radius, ground, settings.scale);
+            continue;
+        }
         // The fireball (smaller than the damage radius, which is mostly shrapnel).
         commands.spawn((
             Blast { age: 0.0, radius: ex.outer_radius * 0.45, life: 0.4 },

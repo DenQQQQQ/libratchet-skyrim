@@ -4598,6 +4598,7 @@ dependencies = [
  "bevy",
  "libarsenal",
  "libratchet",
+ "serde_json",
 ]
 
 [[package]]

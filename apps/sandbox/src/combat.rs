@@ -113,7 +113,7 @@ pub fn hit(d: &mut Dummy, from: Vec3, knockback: f32, lift: f32, damage: f32) {
     let speed = (2.0 * SLIDE_DECEL * knockback.max(0.0)).sqrt();
     d.vel = away * speed + Vec3::Y * lift;
     d.stunned = STUN;
-    d.flash = 0.15;
+    d.flash = 0.1;
     d.health -= damage;
     if d.health <= 0.0 {
         d.down = DOWN_TIME;
@@ -219,7 +219,7 @@ fn dummy_visuals(
         if let Ok(handle) = meshes.get(body)
             && let Some(mut m) = materials.get_mut(&handle.0)
         {
-            m.emissive = if d.flash > 0.0 { LinearRgba::rgb(6.0, 4.0, 1.0) } else { LinearRgba::BLACK };
+            m.emissive = if d.flash > 0.0 { LinearRgba::rgb(2.5, 2.2, 1.8) } else { LinearRgba::BLACK };
         }
     }
 }

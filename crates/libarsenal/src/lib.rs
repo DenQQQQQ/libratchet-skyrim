@@ -14,6 +14,6 @@ mod projectile;
 mod weapon;
 
 pub use glam;
-pub use params::{ExplosionParams, ProjectileParams, SpreadParams, Trigger, WeaponParams};
+pub use params::{ExplosionParams, ProjectileParams, ShakeRef, ShellParams, SpreadParams, Trigger, WeaponParams};
 pub use projectile::{Projectile, lob_velocity};
 pub use weapon::{Aim, Shot, Weapon};

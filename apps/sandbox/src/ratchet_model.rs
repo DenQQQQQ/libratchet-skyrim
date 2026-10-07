@@ -371,7 +371,7 @@ fn play_clips(
 
     // With the pistol aimed or firing: the one-handed stance, strafing by direction.
     let pistol_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
-    let gun_aim = pistol_out && arsenal.as_ref().is_some_and(|a| a.aiming || a.trigger);
+    let gun_aim = pistol_out && arsenal.as_ref().is_some_and(|a| a.aiming || a.trigger || a.stance > 0.0);
     let throwing_grenade = arsenal.as_ref().is_some_and(|a| a.grenade_anim > 0.0);
     let strafe = {
         let yaw = p.sim.facing_yaw();

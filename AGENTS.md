@@ -25,8 +25,13 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
   in release (GDeflate decoder for the high-res data).
 - `crates/libratchet-ffi`: C API (`include/ratchet.h`) for the planned SKSE plugin.
 - `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
-  falloff). Pure Rust like libratchet; the host does aiming, collision and damage. Run
-  `cargo test -p libarsenal` after weapon changes.
+  falloff, shell and camera-shake data). Pure Rust like libratchet; the host does aiming,
+  collision, damage and effects. Run `cargo test -p libarsenal` after weapon changes.
+- `tools/extract_riftapart_vfx.py`: GPLv3. Exports the effect art the sandbox's weapon effects
+  use (`riftapart-assets/vfx/`, gitignored), with a colour palette read from the game's effect
+  materials and particle data.
+- Bevy gotcha: `LinearRgba * k` scales alpha too. Reset alpha when you brighten a colour for a
+  material (see `vfx.rs`).
 
 ## Workflow
 - Run `cargo test -p libratchet` after any sim change. The tests check the sim against the

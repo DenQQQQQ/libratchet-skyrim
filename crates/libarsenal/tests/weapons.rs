@@ -194,4 +194,14 @@ fn loads_riftapart_weapon_configs_when_present() {
     assert!(sb.lob && sb.explosion.is_some() && sb.projectile.gravity > 0.0);
     // The level numbers win over the base ones.
     assert!(bp.ammo > 60 && bp.damage > 1.0);
+    // The pistol throws out shells; the grenade doesn't.
+    let shell = bp.shell.as_ref().expect("burst pistol shells");
+    assert!(shell.speed.0 > 0.0 && shell.speed.1 >= shell.speed.0);
+    assert!(sb.shell.is_none());
+    // Camera shakes: the pistol's recoil, the grenade's explosion with its falloff radii.
+    assert!(bp.recoil_shake.as_ref().is_some_and(|s| !s.config.contains('/') && !s.config.ends_with(".config")));
+    let blast = sb.blast_shake.as_ref().expect("explosion shake");
+    assert!(blast.inner > 0.0 && blast.outer >= blast.inner);
+    let half = sb.scaled(0.5);
+    assert_eq!(half.blast_shake.as_ref().unwrap().inner, blast.inner * 0.5);
 }

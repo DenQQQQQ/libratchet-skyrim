@@ -24,8 +24,14 @@ enum Act {
     Teleport(Vec3),
     ClearTrail,
     Scale(f32),
-    /// Follow-camera angles.
+    /// Follow-camera angles (also where guns aim, and back from `Watch`).
     Follow { yaw: f32, pitch: f32, distance: f32 },
+    /// Close-up framing (the camera looks at his chest, not the game's pivot above him).
+    CloseUp(bool),
+    /// Watch from a fixed camera from here on, without stopping.
+    Watch { focus: Vec3, yaw: f32, pitch: f32, distance: f32 },
+    /// Guns aim at this point instead of where the camera looks.
+    AimAt(Option<Vec3>),
     /// Stand still, look at a fixed spot for `secs` and take a screenshot.
     Wide { name: &'static str, focus: Vec3, yaw: f32, pitch: f32, distance: f32, secs: f32 },
     /// Screenshot with the current (follow) camera, without stopping.
@@ -178,6 +184,7 @@ fn close_ups() -> Vec<Act> {
     let x = Vec2::X;
     vec![
         Act::ClearTrail,
+        Act::CloseUp(true),
         Act::Teleport(spots::DEMO_LANE),
         Act::Follow { yaw: 1.2, pitch: 0.12, distance: 3.4 },
         hold(1.2, Vec2::ZERO, false),
@@ -224,6 +231,7 @@ fn close_ups() -> Vec<Act> {
         Act::Shot("12_glide_heli_b"),
         hold(1.6, x, true),
         hold(0.6, x, false),
+        Act::CloseUp(false),
     ]
 }
 
@@ -275,6 +283,10 @@ fn weapon_moves() -> Vec<Act> {
     let spot = spots::ARENA + Vec3::new(8.55, 0.0, -7.5);
     let z = Vec2::Y;
     let behind = std::f32::consts::PI;
+    // A camera on his right (gun) side, and dummies to aim at from there.
+    let right_side = -std::f32::consts::FRAC_PI_2;
+    let dummy = spots::ARENA + Vec3::new(8.0, 0.6, -1.4);
+    let far_dummy = spots::ARENA + Vec3::new(8.0, 0.3, 1.4);
     vec![
         Act::ClearTrail,
         Act::Teleport(spot),
@@ -293,15 +305,35 @@ fn weapon_moves() -> Vec<Act> {
         Act::Shot("23_strafe_fire"),
         hold(0.4, Vec2::new(-1.0, 0.0), false),
         Act::Gun { trigger: false, aim: false },
-        hold(0.8, Vec2::ZERO, false),
-        // Side view of the stance.
-        Act::Follow { yaw: behind + 2.6, pitch: 0.12, distance: 3.5 },
-        Act::Gun { trigger: true, aim: false },
         hold(0.5, Vec2::ZERO, false),
+        // From his right side, firing from the hip at the nearest dummy: bolts crossing the
+        // screen, shells flying out of the gun.
+        Act::Teleport(spot),
+        hold(0.12, z, false),
+        Act::Follow { yaw: behind, pitch: 0.06, distance: 4.5 },
+        Act::AimAt(Some(dummy)),
+        Act::Watch { focus: spot.lerp(dummy, 0.5) + Vec3::Y * 0.2, yaw: right_side, pitch: 0.1, distance: 5.0 },
+        hold(0.3, Vec2::ZERO, false),
+        Act::Gun { trigger: true, aim: false },
+        hold(1.0, Vec2::ZERO, false),
         Act::Shot("24_pistol_side"),
         Act::Gun { trigger: false, aim: false },
-        hold(1.5, Vec2::ZERO, false),
-        // Shatterbomb into the ring.
+        hold(1.2, Vec2::ZERO, false),
+        Act::Shot("24b_shells"),
+        // The same view for a Shatterbomb into the ring.
+        Act::Slot(Slot::Shatterbomb),
+        Act::AimAt(Some(far_dummy)),
+        Act::Watch { focus: spot.lerp(far_dummy, 0.55) + Vec3::Y * 0.6, yaw: right_side, pitch: 0.15, distance: 7.5 },
+        hold(0.4, Vec2::ZERO, false),
+        Act::Gun { trigger: true, aim: true },
+        hold(0.1, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: true },
+        hold(0.75, Vec2::ZERO, false),
+        Act::Shot("24c_shatterbomb_side"),
+        hold(1.8, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        Act::AimAt(None),
+        // Shatterbomb into the ring, from behind.
         Act::Slot(Slot::Shatterbomb),
         Act::Teleport(spot),
         hold(0.12, z, false),
@@ -371,7 +403,10 @@ fn run_script(
                     a.slot = slot;
                 }
             }
-            Act::Gun { trigger, aim } => *gun = crate::weapons::ScriptedArsenal { active: true, trigger, aim },
+            Act::Gun { trigger, aim } => *gun = crate::weapons::ScriptedArsenal { active: true, trigger, aim, target: gun.target },
+            Act::AimAt(at) => gun.target = at,
+            Act::CloseUp(on) => rig.close_up = on,
+            Act::Watch { focus, yaw, pitch, distance } => rig.fixed = Some((focus, yaw, pitch, distance)),
             Act::Hold { secs, dir, jump, dash, melee } => {
                 scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, aim: None });
                 demo.elapsed += dt;
