@@ -8,7 +8,8 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
-//!   --demo-part wrench|weapons  with --demo: only that section
+//!   --demo-part wrench|weapons|moves  with --demo: only that section
+//!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;
 mod clank;
@@ -132,11 +133,19 @@ impl MouseMelee {
 #[derive(Component)]
 struct Crosshair;
 
+/// Debug text and drawings (HUD, help, trails), hidden with F1 for recording videos.
+#[derive(Component)]
+struct DebugUi;
+
+#[derive(Resource)]
+struct DebugOverlay(bool);
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let demo = args.iter().any(|a| a == "--demo");
     let record = arg("--record").map(PathBuf::from);
+    let clean = args.iter().any(|a| a == "--clean");
     let scale = arg("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let configs_dir = arg("--configs")
         .or_else(|| std::env::var("RIFTAPART_CONFIGS").ok())
@@ -190,12 +199,13 @@ fn main() {
         close_up: false,
     })
     .insert_resource(camera_configs)
+    .insert_resource(DebugOverlay(!clean))
     .init_resource::<Trail>()
     .init_resource::<ScriptedInput>()
     .init_resource::<MouseMelee>()
     .add_systems(Startup, ((level::spawn_level, setup).chain(), camera::log_source))
     .add_systems(FixedUpdate, simulate)
-    .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud, crosshair).chain());
+    .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud, crosshair, debug_overlay).chain());
 
     if demo {
         let out = PathBuf::from("screenshots");
@@ -295,6 +305,7 @@ fn setup(
 
     commands.spawn((
         HudText,
+        DebugUi,
         Text::new(""),
         TextFont::from_font_size(15.0),
         TextColor(Color::WHITE),
@@ -305,8 +316,9 @@ fn setup(
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
              1 wrench, 2 Burst Pistol, 3 Shatterbomb  |  wrench: left mouse / E swing (in the air: Hyper-Strike), right mouse / Q throw\n\
-             gun: left mouse fire, right mouse aim (E still swings, Q still throws)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it",
+             gun: left mouse fire, right mouse aim (E still swings, Q still throws)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
         ),
+        DebugUi,
         TextFont::from_font_size(13.0),
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         Node { position_type: PositionType::Absolute, bottom: px(10.0), left: px(12.0), ..default() },
@@ -322,6 +334,15 @@ fn setup(
         Node { position_type: PositionType::Absolute, left: percent(50.0), top: percent(50.0), margin: UiRect::new(px(-8.0), px(0.0), px(-17.0), px(0.0)), ..default() },
         Visibility::Hidden,
     ));
+}
+
+/// F1 hides or shows the debug text (the trails check it when they draw).
+fn debug_overlay(overlay: Res<DebugOverlay>, mut q: Query<&mut Visibility, With<DebugUi>>) {
+    if overlay.is_changed() {
+        for mut v in &mut q {
+            v.set_if_neq(if overlay.0 { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
 }
 
 fn crosshair(arsenal: Option<Res<weapons::Arsenal>>, mut q: Query<&mut Visibility, With<Crosshair>>) {
@@ -462,7 +483,11 @@ fn hotkeys(
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
     mut rig: ResMut<CameraRig>,
+    mut overlay: ResMut<DebugOverlay>,
 ) {
+    if keys.just_pressed(KeyCode::F1) {
+        overlay.0 = !overlay.0;
+    }
     let Ok(mut p) = players.single_mut() else { return };
     if keys.just_pressed(KeyCode::Tab) {
         let old = settings.scale;
@@ -632,7 +657,10 @@ fn set_fov(projection: &mut Projection, horizontal: f32) {
     }
 }
 
-fn draw_trail(trail: Res<Trail>, mut gizmos: Gizmos) {
+fn draw_trail(trail: Res<Trail>, overlay: Res<DebugOverlay>, mut gizmos: Gizmos) {
+    if !overlay.0 {
+        return;
+    }
     let lift = Vec3::Y * 0.05;
     for pair in trail.points.as_slices().0.windows(2).chain(trail.points.as_slices().1.windows(2)) {
         let ((a, _), (b, state)) = (pair[0], pair[1]);

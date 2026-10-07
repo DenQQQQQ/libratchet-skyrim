@@ -30,8 +30,12 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - `tools/extract_riftapart_vfx.py`: GPLv3. Exports the effect art the sandbox's weapon effects
   use (`riftapart-assets/vfx/`, gitignored), with a colour palette read from the game's effect
   materials and particle data.
-- Bevy gotcha: `LinearRgba * k` scales alpha too. Reset alpha when you brighten a colour for a
-  material (see `vfx.rs`).
+- Bevy gotchas:
+  - `LinearRgba * k` scales alpha too. Reset alpha when you brighten a colour for a material
+    (see `vfx.rs`).
+  - A mesh entity spawned `Visibility::Hidden` and shown later didn't draw its rebuilt mesh.
+    Keep dynamic meshes visible and collapse them instead (the swing streak).
+  - With HDR, the clear colour goes through the tonemapper too.
 
 ## Workflow
 - Run `cargo test -p libratchet` after any sim change. The tests check the sim against the

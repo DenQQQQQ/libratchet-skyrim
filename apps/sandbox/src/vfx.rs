@@ -11,8 +11,11 @@ use bevy::color::Mix;
 use bevy::gltf::GltfAssetLabel;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use std::collections::HashMap;
-use std::f32::consts::{FRAC_PI_2, TAU};
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::mesh::{Indices, PrimitiveTopology};
+use std::collections::{HashMap, VecDeque};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::Path;
 
 const TEXTURES: &[&str] = &[
@@ -30,6 +33,10 @@ const TEXTURES: &[&str] = &[
     "debris_chunk",
     "scorch_mask",
     "scorch_glow",
+    "swipe_wrench",
+    "trail_basic",
+    "blast_masks",
+    "crater",
 ];
 /// Effect meshes and how many primitives each has.
 const MESHES: &[(&str, usize)] = &[
@@ -44,6 +51,12 @@ const MESHES: &[(&str, usize)] = &[
 ];
 /// How long a bolt's streak takes to catch up with it once it has hit something.
 const STREAK_CATCH_UP: f32 = 0.05;
+/// How long the wrench's swing streak lingers behind it (ours).
+const SWIPE_LIFE: f32 = 0.12;
+/// The swing streak runs along the wrench between these distances from the grip (its +Y, metres
+/// at Ratchet's size): around its effects locator (igLoc_dyn_fx_attach_00, 0.41) out past the
+/// head. Ours, from the streak config's offset and width scale.
+const SWIPE_SPAN: (f32, f32) = (0.2, 0.62);
 
 /// The colours the effects use (linear RGB, may exceed 1 to glow). Generic ones unless the
 /// extractor's palette has the game's.
@@ -67,6 +80,16 @@ struct Colors {
     blast_smoke: LinearRgba,
     scorch_glow: LinearRgba,
     grenade_glow: LinearRgba,
+    /// The OmniWrench: its swing streak (the swipe material's colour times its intensity), hits,
+    /// the Hyper-Strike slam and its scorch, and the thrown wrench's trail.
+    wrench_swipe: LinearRgba,
+    wrench_hit: LinearRgba,
+    wrench_smoke: LinearRgba,
+    wrench_slam: LinearRgba,
+    wrench_slam_glow: LinearRgba,
+    slam_scorch: LinearRgba,
+    wrench_trail: LinearRgba,
+    wrench_trail_end: LinearRgba,
     /// How many came from the game.
     from_game: usize,
 }
@@ -105,10 +128,23 @@ impl Colors {
             blast_smoke: rgb("blast_smoke", [0.2, 0.22, 0.25]),
             scorch_glow: rgb("scorch_glow", [0.3, 0.1, 0.8]),
             grenade_glow: rgb("grenade_glow", [0.45, 0.1, 0.85]),
+            wrench_swipe: rgb("wrench_swipe", [0.05, 0.5, 1.0]),
+            wrench_hit: rgb("wrench_hit", [0.2, 0.65, 1.0]),
+            wrench_smoke: rgb("wrench_smoke", [0.3, 0.33, 0.35]),
+            wrench_slam: rgb("wrench_slam", [0.35, 0.75, 1.0]),
+            wrench_slam_glow: rgb("wrench_slam_glow", [0.2, 0.7, 1.0]),
+            slam_scorch: rgb("slam_scorch", [0.2, 0.7, 1.0]),
+            wrench_trail: rgb("wrench_trail", [0.5, 0.85, 1.0]),
+            wrench_trail_end: rgb("wrench_trail_end", [0.05, 0.6, 1.0]),
             from_game: 0,
         };
-        let intensity = palette.get("bolt_intensity").and_then(|v| v.first().copied()).unwrap_or(5.0);
-        Colors { bolt: colors.bolt * intensity, from_game, ..colors }
+        let intensity = |name: &str, or: f32| palette.get(name).and_then(|v| v.first().copied()).unwrap_or(or);
+        Colors {
+            bolt: colors.bolt * intensity("bolt_intensity", 5.0),
+            wrench_swipe: colors.wrench_swipe * intensity("wrench_swipe_intensity", 4.0),
+            from_game,
+            ..colors
+        }
     }
 }
 
@@ -200,6 +236,28 @@ pub struct Streak {
     gone: f32,
 }
 
+/// The OmniWrench's swing streak: a ribbon through where the wrench has been over the last
+/// moment, rebuilt every frame while he swings.
+#[derive(Component)]
+pub struct SwipeStreak {
+    /// Inner and outer edge, and when.
+    samples: VecDeque<(Vec3, Vec3, f32)>,
+    mesh: Handle<Mesh>,
+    /// The mesh is collapsed to nothing (it's never hidden: an entity spawned hidden and shown
+    /// later didn't draw its rebuilt mesh).
+    collapsed: bool,
+}
+
+/// A triangle with no area, for a ribbon with nothing to show (the renderer rejects a mesh
+/// without vertices).
+fn collapse_ribbon(mesh: &mut Mesh) {
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 3]);
+    mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+}
+
 /// Random numbers for effect variety (deterministic, so demo runs repeat).
 #[derive(Resource)]
 pub struct FxRng(u32);
@@ -222,7 +280,7 @@ impl FxRng {
 }
 
 pub fn plugin(app: &mut App) {
-    app.insert_resource(FxRng(0x2545_F491)).add_systems(Startup, load).add_systems(Update, (run_fx, run_streaks));
+    app.insert_resource(FxRng(0x2545_F491)).add_systems(Startup, load).add_systems(Update, (run_fx, run_streaks, run_swipe));
 }
 
 fn load(
@@ -262,6 +320,23 @@ fn load(
         materials.add(StandardMaterial { base_color: colors.bolt_glow.into(), emissive: colors.bolt * 0.6, unlit: true, ..default() }),
         materials.add(StandardMaterial { base_color: Color::srgb(0.62, 0.63, 0.66), metallic: 0.9, perceptual_roughness: 0.35, ..default() }),
     ];
+    if available {
+        // The swing streak's ribbon, rebuilt each frame (world-space vertices).
+        let mut ribbon = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        collapse_ribbon(&mut ribbon);
+        let ribbon = meshes.add(ribbon);
+        // Blended rather than added, so the blue holds up in front of a bright floor.
+        let swipe = blended(&mut materials, tex.get("swipe_wrench").cloned(), colors.wrench_swipe);
+        commands.spawn((
+            SwipeStreak { samples: VecDeque::new(), mesh: ribbon.clone(), collapsed: true },
+            Mesh3d(ribbon),
+            MeshMaterial3d(swipe),
+            Transform::default(),
+            Visibility::default(),
+            NotShadowCaster,
+            NoFrustumCulling,
+        ));
+    }
     commands.insert_resource(VfxArt { available, tex, mesh, quad, colors, shell });
 }
 
@@ -511,6 +586,170 @@ impl VfxArt {
         }
     }
 
+    /// A wrench hit: a blue flash with an anamorphic streak, a burst of light, sparks spraying back
+    /// off the target, and a puff of smoke. `dir` points from Ratchet to the target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wrench_hit(
+        &self,
+        commands: &mut Commands,
+        materials: &mut Assets<StandardMaterial>,
+        rng: &mut FxRng,
+        at: Vec3,
+        dir: Vec3,
+        floor: Option<f32>,
+        s: f32,
+    ) {
+        let c = &self.colors;
+        let flash = Fx { roll: rng.next() * TAU, fade_from: 0.1, ..Fx::new(0.12) };
+        self.sprite(commands, materials, "flare_radial", at, (0.5 * s, 1.4 * s), c.wrench_hit * 4.0, flash, false);
+        let streak = c.wrench_hit * 3.0;
+        commands.spawn((
+            Fx { scale: (Vec3::new(0.6 * s, 0.08 * s, 1.0), Vec3::new(1.8 * s, 0.03 * s, 1.0)), color: streak, facing: Facing::Camera, ..Fx::new(0.15) },
+            Mesh3d(self.quad.clone()),
+            MeshMaterial3d(additive(materials, self.tex("glow"), streak)),
+            Transform::from_translation(at),
+            NotShadowCaster,
+        ));
+        self.light(commands, at - dir * 0.3 * s, c.wrench_hit, 60_000.0 * s * s, 3.0 * s, 0.12);
+        for _ in 0..10 {
+            let v = (-dir + rng.unit() * 0.9 + Vec3::Y * 0.3).normalize_or(Vec3::Y);
+            let color = c.wrench_hit * 5.0;
+            let w = 0.02 * s;
+            commands.spawn((
+                Fx {
+                    vel: v * (3.0 + 5.0 * rng.next()) * s,
+                    gravity: 9.0 * s,
+                    drag: 1.5,
+                    scale: (Vec3::new(w, w * 7.0, 1.0), Vec3::new(w * 0.5, w * 3.0, 1.0)),
+                    fade_from: 0.4,
+                    color,
+                    color_end: Some(c.wrench_trail_end * 3.0),
+                    facing: Facing::Velocity,
+                    floor,
+                    ..Fx::new(0.25 + 0.15 * rng.next())
+                },
+                Mesh3d(self.quad.clone()),
+                MeshMaterial3d(blended(materials, self.tex("spark"), color)),
+                Transform::from_translation(at),
+                NotShadowCaster,
+            ));
+        }
+        let smoke = Fx { vel: (Vec3::Y * 0.6 - dir * 0.3) * s, drag: 0.5, alpha: (0.35, 0.0), fade_from: 0.2, roll: rng.next() * TAU, ..Fx::new(0.6) };
+        self.sprite(commands, materials, "smoke_puff", at, (0.3 * s, 0.8 * s), c.wrench_smoke * 2.0, smoke, false);
+    }
+
+    /// The Hyper-Strike landing at `at` (on the ground): a flash and a burst of light, the game's
+    /// impact-blast shapes and blast masks bursting up, a ring along the ground, dust and
+    /// debris, and its crater with blue embers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wrench_slam(&self, commands: &mut Commands, materials: &mut Assets<StandardMaterial>, rng: &mut FxRng, at: Vec3, radius: f32, s: f32) {
+        let c = &self.colors;
+        let up = at + Vec3::Y * 0.2 * s;
+        self.light(commands, at + Vec3::Y * 0.8 * s, c.wrench_slam, 1.2e6 * s * s, radius * 3.0, 0.4);
+        let flash = Fx { roll: rng.next() * TAU, fade_from: 0.1, ..Fx::new(0.15) };
+        self.sprite(commands, materials, "flare_radial", up, (1.5 * s, 4.0 * s), c.wrench_slam * 6.0, flash, true);
+        self.sprite(commands, materials, "glow_simple", up, (radius * 0.5, radius * 1.2), c.wrench_slam_glow * 2.5, Fx { fade_from: 0.1, ..Fx::new(0.35) }, true);
+        // The game's impact-blast shapes, bursting up.
+        for i in 0..4 {
+            let color = c.wrench_slam * 2.0;
+            let size = 1.4 * s;
+            commands.spawn((
+                Fx { scale: (Vec3::splat(size * 0.3), Vec3::splat(size)), fade_from: 0.2, color, ..Fx::new(0.3) },
+                Mesh3d(self.mesh("impact_blast", i)),
+                MeshMaterial3d(additive(materials, None, color)),
+                Transform::from_translation(at).with_rotation(Quat::from_rotation_y(rng.next() * TAU)).with_scale(Vec3::splat(size * 0.3)),
+                NotShadowCaster,
+            ));
+        }
+        // Blast masks around the ring, rising (the texture's burst points down: turned over).
+        for k in 0..6 {
+            let a = k as f32 / 6.0 * TAU + rng.next() * 0.4;
+            let p = at + Vec3::new(a.cos(), 0.0, a.sin()) * 0.6 * s + Vec3::Y * 0.4 * s;
+            let fx = Fx { vel: Vec3::Y * 1.5 * s, drag: 2.0, roll: PI + rng.signed() * 0.3, fade_from: 0.3, ..Fx::new(0.3) };
+            self.sprite(commands, materials, "blast_masks", p, (0.6 * s, 1.6 * s), c.wrench_slam * 2.0, fx, false);
+        }
+        // A ring along the ground: the game's shockwave dome, flattened.
+        let ring = c.wrench_slam * 2.0;
+        commands.spawn((
+            Fx { scale: (Vec3::new(radius * 0.2, radius * 0.2, 0.05 * s), Vec3::new(radius, radius, 0.3 * s)), fade_from: 0.2, color: ring, ..Fx::new(0.35) },
+            Mesh3d(self.mesh("shockwave_hemisphere", 0)),
+            MeshMaterial3d(additive(materials, self.tex("shockwave_mask"), ring)),
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+            NotShadowCaster,
+        ));
+        // Dust rolling out along the ground, and debris.
+        for k in 0..8 {
+            let a = k as f32 / 8.0 * TAU + rng.next() * 0.5;
+            let out = Vec3::new(a.cos(), 0.0, a.sin());
+            let fx = Fx {
+                vel: (out * (2.5 + 1.5 * rng.next()) + Vec3::Y * 0.4) * s,
+                drag: 2.0,
+                alpha: (0.5, 0.0),
+                fade_from: 0.25,
+                roll: rng.next() * TAU,
+                ..Fx::new(0.9 + 0.4 * rng.next())
+            };
+            self.sprite(commands, materials, "smoke_puff", at + out * 0.4 * s + Vec3::Y * 0.2 * s, (0.6 * s, 1.6 * s), c.wrench_smoke * 3.0, fx, false);
+        }
+        for _ in 0..10 {
+            let dir = Vec3::new(rng.signed(), 1.0 + rng.next(), rng.signed()).normalize();
+            let fx = Fx {
+                vel: dir * (4.0 + 4.0 * rng.next()) * s,
+                gravity: 16.0 * s,
+                floor: Some(at.y + 0.03 * s),
+                alpha: (1.0, 0.0),
+                fade_from: 0.7,
+                roll: rng.next() * TAU,
+                ..Fx::new(0.8 + 0.4 * rng.next())
+            };
+            self.sprite(commands, materials, "debris_chunk", up, (0.1 * s, 0.1 * s), LinearRgba::rgb(0.45, 0.42, 0.4), fx, false);
+        }
+        // The crater, and blue embers cooling in it.
+        let flat = Quat::from_rotation_x(-FRAC_PI_2) * Quat::from_rotation_z(rng.next() * TAU);
+        let size = radius * 0.7;
+        let mark = LinearRgba::rgb(0.6, 0.6, 0.6);
+        commands.spawn((
+            Fx { scale: (Vec3::splat(size), Vec3::splat(size)), alpha: (0.9, 0.0), fade_from: 0.85, color: mark, ..Fx::new(10.0) },
+            Mesh3d(self.quad.clone()),
+            MeshMaterial3d(blended(materials, self.tex("crater"), mark)),
+            Transform::from_translation(at + Vec3::Y * 0.006).with_rotation(flat).with_scale(Vec3::splat(size)),
+            NotShadowCaster,
+        ));
+        let embers = c.slam_scorch * 5.0;
+        commands.spawn((
+            Fx { scale: (Vec3::splat(size), Vec3::splat(size)), fade_from: 0.15, color: embers, ..Fx::new(1.5) },
+            Mesh3d(self.quad.clone()),
+            MeshMaterial3d(additive(materials, self.tex("scorch_glow"), embers)),
+            Transform::from_translation(at + Vec3::Y * 0.008).with_rotation(flat).with_scale(Vec3::splat(size)),
+            NotShadowCaster,
+        ));
+    }
+
+    /// The thrown wrench's trail over one step of its flight (a → b), and its glow.
+    pub fn wrench_trail(&self, commands: &mut Commands, materials: &mut Assets<StandardMaterial>, a: Vec3, b: Vec3, s: f32) {
+        let c = &self.colors;
+        let d = b - a;
+        let len = d.length();
+        if len < 1e-4 {
+            return;
+        }
+        let color = c.wrench_trail * 3.0;
+        commands.spawn((
+            Fx {
+                scale: (Vec3::new(0.5 * s, len, 1.0), Vec3::new(0.15 * s, len, 1.0)),
+                alpha: (0.95, 0.0),
+                color,
+                color_end: Some(c.wrench_trail_end * 2.0),
+                facing: Facing::Axis(d / len),
+                ..Fx::new(0.4)
+            },
+            Mesh3d(self.quad.clone()),
+            MeshMaterial3d(blended(materials, self.tex("trail_basic"), color)),
+            Transform::from_translation((a + b) * 0.5),
+            NotShadowCaster,
+        ));
+    }
+
     /// The Shatterbomb going off: a burst of light, a white-hot flash, a fireball, the game's
     /// shockwave dome in rift violet, its crystal shards flying out, smoke, debris, and a scorch
     /// mark with violet embers.
@@ -709,6 +948,55 @@ fn run_fx(
             m.base_color = Color::LinearRgba(LinearRgba::new(c.red * k, c.green * k, c.blue * k, a));
         }
     }
+}
+
+/// Rebuilds the swing streak from where the held wrench has been while he swings.
+fn run_swipe(
+    time: Res<Time>,
+    wrench: Res<crate::wrench::Wrench>,
+    players: Query<&crate::Player>,
+    globals: Query<&GlobalTransform>,
+    mut q: Query<&mut SwipeStreak>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let Ok(mut streak) = q.single_mut() else { return };
+    let now = time.elapsed_secs();
+    let swinging = players.single().is_ok_and(|p| matches!(p.sim.state(), libratchet::MoveState::Melee | libratchet::MoveState::Smash | libratchet::MoveState::SmashLand));
+    if swinging && let Some(g) = wrench.held().and_then(|e| globals.get(e).ok()) {
+        streak.samples.push_back((g.transform_point(Vec3::Y * SWIPE_SPAN.0), g.transform_point(Vec3::Y * SWIPE_SPAN.1), now));
+    }
+    while streak.samples.front().is_some_and(|(_, _, t)| now - t > SWIPE_LIFE) {
+        streak.samples.pop_front();
+    }
+    let n = streak.samples.len();
+    if n < 2 && streak.collapsed {
+        return;
+    }
+    let Some(mut mesh) = meshes.get_mut(&streak.mesh) else { return };
+    streak.collapsed = n < 2;
+    if n < 2 {
+        collapse_ribbon(&mut mesh);
+        return;
+    }
+    // Two vertices per sample: u across the wrench (inner → outer), v by age (the swipe texture
+    // is brightest at v = 0), fading out with age (vertex alpha).
+    let (mut pos, mut uv, mut col, mut idx) = (Vec::with_capacity(2 * n), Vec::with_capacity(2 * n), Vec::with_capacity(2 * n), Vec::new());
+    for (i, &(inner, outer, t)) in streak.samples.iter().enumerate() {
+        let age = ((now - t) / SWIPE_LIFE).clamp(0.0, 1.0);
+        let a = 1.0 - age;
+        pos.extend([inner.to_array(), outer.to_array()]);
+        uv.extend([[0.0, age], [1.0, age]]);
+        col.extend([[1.0, 1.0, 1.0, a]; 2]);
+        if i > 0 {
+            let k = (2 * i) as u32;
+            idx.extend([k - 2, k - 1, k, k - 1, k + 1, k]);
+        }
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 2 * n]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    mesh.insert_indices(Indices::U32(idx));
 }
 
 fn run_streaks(

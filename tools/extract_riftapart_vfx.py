@@ -42,6 +42,12 @@ TEXTURES = {
     "scorch_mask": "textures/visualeffect/decal/explosion_scorchmark/decal_explosion_scorchmark_mask.texture",
     "scorch_glow": "textures/visualeffect/decal/explosion_scorchmark/decal_explosion_scorchmark_emissive.texture",
     "fire_ramp": "textures/visualeffect/gradients/fx_ramp_explosion_fire_01.texture",
+    # OmniWrench: the swing streak (its wpn_Wrench_Swipe material, named by wpn_Wrench_Streak),
+    # the thrown wrench's trail, impact blast masks and the Hyper-Strike's crater decal.
+    "swipe_wrench": "textures/visualeffect/swipe/swipe_wrench/swipe_wrench.texture",
+    "trail_basic": "textures/visualeffect/trail/trail_basic_01/trail_basic_01.texture",
+    "blast_masks": "textures/visualeffect/smoke/smoke_blast_masks_3d_x4.texture",
+    "crater": "textures/tbarlow/tb_raft_crater/tb_raft_crater_01_c.texture",
 }
 
 # name -> model asset (exported as plain meshes; the sandbox gives them effect materials)
@@ -61,6 +67,9 @@ WIGGLE = "material/visualeffect/equipment/projectile/proj_burst_pistol_tracer_wi
 DECAL = "material/visualeffect/global/gbl_blaster_scorch_mark/burst_pistol_impact_decal_green.material"
 SHELL_GLASS = "materials/jn_glass_01/burst_shell_simple_exterior.material"
 SCORCH = "material/visualeffect/equipment/weapon/wpn_explosion_scorchmark/wpn_protogrenade_scorchmark.material"
+SWIPE = "material/visualeffect/equipment/weapon/wpn_wrench_swipe/wpn_wrench_swipe.material"
+WRENCH_TRAIL = "material/equipment/weapon/wpn_wrench_throw_trail/wpn_wrench_throw_trail.material"
+SLAM_SCORCH = "material/visualeffect/global/convergence/fx_wpn_wrench_scorch_with_heat_01.material"
 
 # Palette entries from material parameters: name -> (material, parameter name hash).
 MATERIAL_COLOURS = {
@@ -73,12 +82,19 @@ MATERIAL_COLOURS = {
     "shell_glass": (SHELL_GLASS, 0x251A9332),
     "scorch_glow": (SCORCH, 0x2E2142FB),
     "scorch_dark": (SCORCH, 0x5001A382),
+    "wrench_swipe": (SWIPE, 0x7F058428),
+    "wrench_swipe_intensity": (SWIPE, 0x6DE7EA2D),
+    "wrench_trail_material": (WRENCH_TRAIL, 0x7473C8EF),
+    "slam_scorch": (SLAM_SCORCH, 0xBC972CBB),
 }
 
 BOLT_FX = "visualeffect/character/enemy/enm_blarg_blaster_projectile_fx/burst_pistol_gun_projectile_fast.visualeffect"
 IMPACT_FX = "visualeffect/character/enemy/enm_blarg_v1_trooper_projectile_impact/burst_pistol_projectile_impact.visualeffect"
 BLAST_FX = "visualeffect/weapon/wpn_protogrenade/wpn_protogrenade_explosion_sub.visualeffect"
 GRENADE_FX = "visualeffect/weapon/wpn_protogrenade/wpn_protogrenade_projectile.visualeffect"
+WRENCH_HIT_FX = "visualeffect/equipment/weapon/wpn_wrench_impact_projectile/wpn_wrench_impact_projectile.visualeffect"
+WRENCH_SLAM_FX = "visualeffect/equipment/weapon/wpn_wrench_ground_slam/wpn_wrench_ground_slam.visualeffect"
+WRENCH_TRAIL_FX = "visualeffect/equipment/projectile/proj_blaster/wpn_wrench_throw_trail.visualeffect"
 
 # Palette entries from the particle data: name -> (visualeffect, byte offset of a key in its
 # half-float value table).
@@ -97,6 +113,12 @@ EFFECT_COLOURS = {
     "blast_shards": (BLAST_FX, 0x1700),
     "blast_smoke": (BLAST_FX, 0x150),
     "grenade_glow": (GRENADE_FX, 0x180),
+    "wrench_hit": (WRENCH_HIT_FX, 0x570),
+    "wrench_smoke": (WRENCH_HIT_FX, 0x170),
+    "wrench_slam": (WRENCH_SLAM_FX, 0x160),
+    "wrench_slam_glow": (WRENCH_SLAM_FX, 0x7C0),
+    "wrench_trail": (WRENCH_TRAIL_FX, 0x80),
+    "wrench_trail_end": (WRENCH_TRAIL_FX, 0x580),
 }
 
 
@@ -179,6 +201,9 @@ def main():
                 # One-channel masks (BC4): white, with the mask as alpha, so the sandbox tints
                 # them the way the game's shaders do.
                 img = Image.fromarray(np.dstack([np.full(px.shape[:2] + (3,), 255, np.uint8), px[..., 0]]), "RGBA")
+            elif name == "trail_basic":
+                # An opaque grey profile (bright middle, dark edges): white, with it as alpha.
+                img = Image.fromarray(np.dstack([np.full(px.shape[:2] + (3,), 255, np.uint8), px[..., :3].max(axis=2)]), "RGBA")
             elif name == "muzzle_flash":
                 # Three masks packed in RGB (core, body, edge): one white shape, alpha = brightest,
                 # for the sandbox to tint.

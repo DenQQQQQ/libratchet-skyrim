@@ -2,8 +2,9 @@
 //! (`RT_handle_bound`, the game's gun-attach locator) while he swings (playing its own squash-and-stretch clips in time with his), and thrown
 //! with right mouse / Q (libratchet's `WrenchThrow`), knocking back the first dummy it meets.
 
-use crate::combat::{Dummy, Hits, knock};
+use crate::combat::{Dummy, Hits, hit_point, knock};
 use crate::level::Level;
+use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, Player, Settings, simulate};
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
@@ -47,6 +48,13 @@ pub struct Wrench {
     /// Counts throws, so the animation can restart its layer for each one, and catches.
     pub throws: u32,
     pub catches: u32,
+}
+
+impl Wrench {
+    /// The held wrench's holder (it carries the wrench model's transform), for its effects.
+    pub fn held(&self) -> Option<Entity> {
+        self.held
+    }
 }
 
 pub fn plugin(app: &mut App) {
@@ -189,7 +197,8 @@ fn start_throw(
 }
 
 /// Flies the thrown wrench: it turns back at a dummy (knocking it back) or a wall, and is
-/// caught at the hand.
+/// caught at the hand. It leaves the game's blue trail, and hits spark like a swing's.
+#[allow(clippy::too_many_arguments)]
 fn fly(
     time: Res<Time>,
     settings: Res<Settings>,
@@ -199,6 +208,9 @@ fn fly(
     players: Query<&Player>,
     mut dummies: Query<&mut Dummy>,
     mut hits: ResMut<Hits>,
+    (art, mut rng): (Res<VfxArt>, ResMut<FxRng>),
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
 ) {
     let Ok(p) = players.single() else { return };
     let hand = hand_position(&wrench, &globals, p, settings.scale);
@@ -206,14 +218,26 @@ fn fly(
     let Some(flight) = wrench.flight.as_mut() else { return };
     let throw = p.sim.tuning().melee.throw.clone();
     let pos = flight.position();
-    let n = knock(&mut dummies, pos, throw.damage_radius, pos - flight.direction(), 2.0 * s, 1.0 * s, throw.damage, |d| d.pos.y < 0.5 && hit_ready(d));
+    let hit_at = knock(&mut dummies, pos, throw.damage_radius, pos - flight.direction(), 2.0 * s, 1.0 * s, throw.damage, |d| d.pos.y < 0.5 && hit_ready(d));
+    let n = hit_at.len();
+    if art.available {
+        for at in &hit_at {
+            let from = pos - flight.direction();
+            let p = hit_point(*at, from, 0.7, s);
+            art.wrench_hit(&mut commands, &mut materials, &mut rng, p, (p - from).with_y(0.0).normalize_or(Vec3::X), Some(at.y), s);
+        }
+    }
     if n > 0 {
         hits.count += n as u32;
         hits.last = format!("thrown wrench hit {n} ({} damage)", throw.damage);
     }
     // The floor is block 0; anything else stops the wrench.
     let wall = level.blocks.iter().skip(1).any(|b| pos.cmpge(b.min).all() && pos.cmple(b.max).all());
-    if flight.step(time.delta_secs(), hand, n > 0 || wall) == ThrowStatus::Caught {
+    let status = flight.step(time.delta_secs(), hand, n > 0 || wall);
+    if art.available {
+        art.wrench_trail(&mut commands, &mut materials, pos, flight.position(), s);
+    }
+    if status == ThrowStatus::Caught {
         wrench.flight = None;
         wrench.catches += 1;
         wrench.show = SHOW_AFTER;

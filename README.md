@@ -88,6 +88,7 @@ cargo run -p sandbox
 | Tab | Toggle Ratchet-sized / Dragonborn-sized (all distances ×1.55, same timing) |
 | R | Reload tuning from disk |
 | T | Clear the trail |
+| F1 | Hide/show the debug overlay (HUD, help, trails), e.g. for recording videos. `--clean` starts with it hidden |
 | Backspace | Respawn |
 
 The trail is coloured by move: orange = ground, yellow = jump, magenta = double jump,

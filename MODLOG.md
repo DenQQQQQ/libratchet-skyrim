@@ -35,6 +35,52 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: the OmniWrench's effects, from the game's data; F1 hides the debug overlay
+
+The wrench had no effects at all. The user asked for F1 to hide the debug info so they can
+record videos.
+
+### Known (the user's install)
+- **Swing streak.** The wrench's melee config names a `StreakConfig` (`wpn_Wrench_Streak`):
+  - the material `wpn_Wrench_Swipe`: the `swipe_wrench` texture, colour (0.014, 0.53, 1) at
+    intensity 4;
+  - style kConstant;
+  - swings: width ×2.5 at offset 0.3; the Hyper-Strike: ×3 at 0.5.
+- **The wrench's effect conduit** (`wpn_wrench_vfx`):
+  - the impact: sparks, a flash, an anamorphic flare, an impact blast;
+  - the thrown wrench's trail: `trail_basic_01`, blue (0, 0.47, 1);
+  - the Hyper-Strike's scorch: light blue (0.21, 0.70, 0.99);
+  - a crater decal (`tb_raft_crater`).
+- **Particle colour keys.** Hit (0.21, 0.67, 1). Slam (0.34, 0.78, 1). Trail (0.52, 0.85, 1)
+  fading to (0.05, 0.58, 1).
+- **Locators.** The wrench model has `igLoc_Damage` at the hammer head, `igLoc_Damage_Base` and
+  `igLoc_dyn_fx_attach_00` (0.41 m up the shaft).
+
+### Ours (assumed or simplified)
+- **The streak.** It spans 0.2–0.62 m along the shaft and lingers 0.12 s.
+- **Effect motion.** The sizes, timing and counts of the hit, slam and trail pieces.
+
+### Built
+- **`tools/extract_riftapart_vfx.py`:** the swipe, trail (as a mask), blast-mask and crater
+  textures, and the wrench's palette entries.
+- **`vfx.rs`:**
+  - The swing streak: a ribbon through where the wrench head has been, rebuilt every frame.
+  - Wrench hits: a flash and an anamorphic streak, a light, sparks, smoke.
+  - The Hyper-Strike slam: a flash, the impact-blast shapes and blast masks, a ground ring,
+    dust, debris, and the crater with blue embers.
+  - The thrown wrench's trail.
+- **`combat.rs`, `wrench.rs`:** `knock` returns where it hit, and swings, the Hyper-Strike and
+  the thrown wrench spawn the effects there.
+- **Debug overlay:** F1 hides or shows the HUD, the help text and the trails. `--clean` starts
+  with them hidden. The demo videos are recorded that way now.
+- **Video:** `recordings/wrench_effects.mp4`.
+
+### Fixed (Bevy behaviour worth knowing)
+- **The ribbon didn't draw.** An entity spawned hidden and shown later didn't draw its rebuilt
+  mesh. The ribbon stays visible and collapses to a zero-area triangle instead.
+- **A render error at startup.** An empty mesh (no vertices) logs one, so the ribbon is never
+  empty.
+
 ## 2026-10-07: walking, leaning into turns, landings, fidgets and the wrench catch
 
 The user had flagged the throwing and the walking to come back to.

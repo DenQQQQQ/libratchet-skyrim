@@ -2,6 +2,7 @@
 //! distances and take health; at zero they fall over, then get back up at their spot.
 
 use crate::level::spots;
+use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, Player, Settings, simulate};
 use bevy::prelude::*;
 use libratchet::Event as MoveEvent;
@@ -94,17 +95,23 @@ pub fn knock(
     lift: f32,
     damage: f32,
     filter: impl Fn(&Dummy) -> bool,
-) -> usize {
-    let mut n = 0;
+) -> Vec<Vec3> {
+    let mut hit_at = vec![];
     for mut d in dummies.iter_mut() {
         let flat = Vec3::new(d.pos.x - center.x, 0.0, d.pos.z - center.z);
         if d.down > 0.0 || flat.length() > radius + DUMMY_RADIUS || !filter(&d) {
             continue;
         }
+        hit_at.push(d.pos);
         hit(&mut d, from, knockback, lift, damage);
-        n += 1;
     }
-    n
+    hit_at
+}
+
+/// Where a blow from `from` lands on a dummy standing at `pos`: its near side, at `height`.
+pub fn hit_point(pos: Vec3, from: Vec3, height: f32, scale: f32) -> Vec3 {
+    let toward = Vec3::new(from.x - pos.x, 0.0, from.z - pos.z).normalize_or(Vec3::X);
+    pos + Vec3::Y * height * scale + toward * DUMMY_RADIUS * scale
 }
 
 /// One dummy takes a hit from the direction of `from`.
@@ -131,7 +138,19 @@ pub fn dummy_contains(d: &Dummy, p: Vec3, margin: f32) -> bool {
 }
 
 /// Applies the sim's melee events: swing hits in front of Ratchet, the Hyper-Strike all around.
-fn melee_hits(settings: Res<Settings>, players: Query<&Player>, mut dummies: Query<&mut Dummy>, mut hits: ResMut<Hits>, mut rig: ResMut<CameraRig>) {
+/// Swings and the Hyper-Strike: damage and knockback, and the wrench's hit and slam effects.
+#[allow(clippy::too_many_arguments)]
+fn melee_hits(
+    settings: Res<Settings>,
+    players: Query<&Player>,
+    mut dummies: Query<&mut Dummy>,
+    mut hits: ResMut<Hits>,
+    mut rig: ResMut<CameraRig>,
+    art: Res<VfxArt>,
+    mut rng: ResMut<FxRng>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
     let Ok(p) = players.single() else { return };
     let s = settings.scale;
     let t = p.sim.tuning().melee.clone();
@@ -143,10 +162,17 @@ fn melee_hits(settings: Res<Settings>, players: Query<&Player>, mut dummies: Que
                 let reach = SWING_REACH * s;
                 let center = p.feet + facing * reach * 0.5;
                 let feet = p.feet;
-                let n = knock(&mut dummies, center, reach * 0.6, feet - facing * 0.5 * s, w.knockback, 1.5 * s, w.damage, |d| {
+                let hit_at = knock(&mut dummies, center, reach * 0.6, feet - facing * 0.5 * s, w.knockback, 1.5 * s, w.damage, |d| {
                     let to = Vec3::new(d.pos.x - feet.x, 0.0, d.pos.z - feet.z);
                     to.length() <= reach + DUMMY_RADIUS && to.normalize_or_zero().dot(facing) > 0.2
                 });
+                let n = hit_at.len();
+                if art.available {
+                    for pos in &hit_at {
+                        let at = hit_point(*pos, feet, 0.7, s);
+                        art.wrench_hit(&mut commands, &mut materials, &mut rng, at, (at - feet).with_y(0.0).normalize_or(facing), Some(pos.y), s);
+                    }
+                }
                 if n > 0 {
                     hits.count += n as u32;
                     hits.last = format!("swing {} hit {n} ({} damage each, knocked back {:.1} m)", index + 1, w.damage, w.knockback);
@@ -154,7 +180,10 @@ fn melee_hits(settings: Res<Settings>, players: Query<&Player>, mut dummies: Que
             }
             MoveEvent::SmashImpact { .. } => {
                 rig.shake = 0.25;
-                let n = knock(&mut dummies, p.feet, t.smash_radius, p.feet, t.smash_radius, 6.0 * s, t.smash_damage, |_| true);
+                if art.available {
+                    art.wrench_slam(&mut commands, &mut materials, &mut rng, p.feet, t.smash_radius, s);
+                }
+                let n = knock(&mut dummies, p.feet, t.smash_radius, p.feet, t.smash_radius, 6.0 * s, t.smash_damage, |_| true).len();
                 hits.count += n as u32;
                 hits.last = format!("Hyper-Strike hit {n} ({} damage each, {:.1} m around)", t.smash_damage, t.smash_radius);
             }
