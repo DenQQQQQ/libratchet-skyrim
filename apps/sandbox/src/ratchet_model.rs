@@ -133,6 +133,8 @@ fn on_ready(
     parents: Query<&ChildOf>,
     placeholders: Query<Entity, With<Placeholder>>,
     players: Query<(), With<AnimationPlayer>>,
+    assets: Res<AssetServer>,
+    settings: Res<Settings>,
 ) {
     let root = ev.entity;
     let player = children.iter_descendants(root).find(|e| players.contains(*e));
@@ -162,6 +164,13 @@ fn on_ready(
         }
         (rot, pos)
     };
+
+    // Clank rides on the ClankAttach bone, like in the game.
+    if let (Some(dir), Some(&attach)) = (settings.model_dir.as_ref(), by_name.get("ClankAttach"))
+        && dir.join(crate::clank::MODEL_FILE).exists()
+    {
+        crate::clank::spawn(&mut commands, &assets, attach);
+    }
 
     let mut bones = HashMap::new();
     for &name in BONES {

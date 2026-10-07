@@ -35,6 +35,22 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (afternoon): Clank, git
+
+- **Clank** rides on Ratchet's back like in the game. The game's Clank Pack config attaches Clank
+  (`hero_clank_ps4.model`) so his `dyn_backpack_attach` joint sits on Ratchet's `ClankAttach`
+  joint (both carry the `igLoc_clankBackpack` locator). The sandbox re-snaps that every frame,
+  because the backpack clips move the attach joint.
+- **Clank's clips:** backpack idle, and the broken heli-pack extend → glide → retract while
+  Ratchet glides (the game's Clank Pack config sets `BrokenClank`).
+- **Clank's look:** his colour maps are dark because the game's silver comes from metallic
+  reflections. The converter brightens them and marks the materials metallic. The sandbox
+  camera got a sky-to-ground environment light so metal has something to reflect. Glow and
+  glass materials (eyes, antenna) use the game's pink placeholder textures, so they get a green
+  glow and a tinted transparent finish instead.
+- The converter now has presets: `--character ratchet|clank|all` (default all).
+- **Git:** repository initialised, first commit; game data stays in gitignored folders.
+
 ## 2026-10-07 (day): Ratchet's real model, textures and animations in the sandbox
 
 `tools/extract_riftapart_ratchet.py` (GPLv3, uses ALERT) converts, from the user's own install,

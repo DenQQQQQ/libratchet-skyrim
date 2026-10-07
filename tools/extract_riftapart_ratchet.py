@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Converts Ratchet's model and textures from YOUR OWN Rift Apart install into one glTF binary
-# (ratchet.glb) for the sandbox. Uses ALERT (https://github.com/Tkachov/ALERT, GPLv3), so this
+# Converts Ratchet's (and Clank's) model, textures and animation clips from YOUR OWN Rift Apart
+# install into glTF binaries (ratchet.glb, clank.glb) for the sandbox. Uses ALERT (https://github.com/Tkachov/ALERT, GPLv3), so this
 # script is GPLv3 too; the rest of the repository is MIT. The output is game data: keep it
 # local (riftapart-assets/ is gitignored), never commit or share it.
 #
@@ -8,7 +8,7 @@
 #        cargo build -p gdeflate-ffi --release   (GDeflate decoder for the high-res data)
 # Usage:
 #   python tools/extract_riftapart_ratchet.py --game "<Rift Apart folder>" --alert "<ALERT clone>"
-#          [--out riftapart-assets] [--tex-size 2048]
+#          [--character ratchet|clank|all] [--out riftapart-assets] [--tex-size 2048]
 import argparse
 import base64
 import io
@@ -23,7 +23,6 @@ import pygltflib
 import texture2ddecoder
 from PIL import Image
 
-DEFAULT_MODEL = "characters\\hero\\hero_ratchet\\hero_ratchet.model"
 # Meshes with these materials are effect overlays or placeholders, not part of the look.
 SKIP_MATERIALS = ("compositeshell",)
 TEX_RE = re.compile(rb"[A-Za-z0-9_/\\\.\-]+\.texture")
@@ -134,9 +133,22 @@ def material_textures(game, material_path):
 
 def pick(textures, suffix, material_path):
     """Picks the material's own `_<suffix>` map, preferring character textures over shared detail maps."""
-    cands = [t for t in textures if t.lower().endswith("_" + suffix + ".texture") and "detail" not in t.lower()]
+    cands = [
+        t for t in textures
+        if t.lower().endswith("_" + suffix + ".texture") and "detail" not in t.lower() and "default_pink" not in t.lower()
+    ]
     cands.sort(key=lambda t: (not t.lower().startswith("characters"), len(t)))
     return cands[0] if cands else None
+
+
+def special_material(material_path):
+    """Materials drawn by special shaders in the game: 'glow', 'glass' or None."""
+    name = os.path.basename((material_path or "").replace("\\", "/")).lower()
+    if "glow" in name:
+        return "glow"
+    if "glass" in name:
+        return "glass"
+    return None
 
 
 def image_uri(img, alpha):
@@ -262,31 +274,54 @@ def fix_glb_for_bevy(path):
     return merged
 
 
-# Move state -> Rift Apart clip (unarmed "neutral" versions where they exist).
-CLIPS = {
-    "idle": "neutral_idle_hero_ratchet",
-    "run": "neutral_run_hero_ratchet",
-    "jump": "neutral_jump_single_hero_ratchet",
-    "double_jump": "jump_double_hero_ratchet",
-    "fall": "fall_loop_hero_ratchet",
-    "glide": "fall_glide_hero_ratchet",
-    "land": "neutral_jump_single_land_hero_ratchet",
-    "dash": "dash_n_hero_ratchet",
-    "air_dash": "dash_air_n_hero_ratchet",
+# What to convert per character: model, look, output name, and move state -> clip.
+PRESETS = {
+    "ratchet": {
+        "model": "characters/hero/hero_ratchet/hero_ratchet.model",
+        "out": "ratchet.glb",
+        "clip_dir": "characters/hero/hero_ratchet/animations/",
+        "clips": {
+            # Unarmed "neutral" versions where they exist.
+            "idle": "neutral_idle_hero_ratchet",
+            "run": "neutral_run_hero_ratchet",
+            "jump": "neutral_jump_single_hero_ratchet",
+            "double_jump": "jump_double_hero_ratchet",
+            "fall": "fall_loop_hero_ratchet",
+            "glide": "fall_glide_hero_ratchet",
+            "land": "neutral_jump_single_land_hero_ratchet",
+            "dash": "dash_n_hero_ratchet",
+            "air_dash": "dash_air_n_hero_ratchet",
+        },
+    },
+    "clank": {
+        # His colour maps are dark: in the game the silver comes from metallic reflections.
+        "metal": {"brighten": (0.2, 2.0), "metallic": 0.9},
+        # Rides on Ratchet's back: the game attaches Clank's dyn_backpack_attach joint to
+        # Ratchet's ClankAttach joint (locator igLoc_clankBackpack on both).
+        "model": "characters/hero/hero_clank_ps4/hero_clank_ps4.model",
+        "out": "clank.glb",
+        "clip_dir": "characters/hero/hero_clank_ps4/animations/",
+        "clips": {
+            "idle": "backpack_idle_a_hero_clank_ps4",
+            "glide": "backpack_heli_glide_broken_hero_clank_ps4",
+            "heli_extend": "backpack_heli_extend_broken_hero_clank_ps4",
+            "heli_retract": "backpack_heli_retract_broken_hero_clank_ps4",
+            "fall_glide": "fall_glide_hero_clank_ps4",
+        },
+    },
 }
-CLIP_DIR = "characters\\hero\\hero_ratchet\\animations\\"
 
 
-def add_animations(game, w, model):
-    """Decodes the CLIPS from the install and adds them as named glTF animations."""
+def add_animations(game, w, model, preset):
+    """Decodes the preset's clips from the install and adds them as named glTF animations."""
     import riftapart_anim
 
     g = w.gltf
     joints = model.dat1.get_section(0x15DF9D3B).joints
     node_of_hash = {j.hash: g.skins[0].joints[i] for i, j in enumerate(joints)}
     report = {}
-    for state, clip_name in CLIPS.items():
-        data = game.read(CLIP_DIR + clip_name + ".animclip")
+    for state, clip_name in preset["clips"].items():
+        data = game.read(preset["clip_dir"] + clip_name + ".animclip")
         if data is None:
             print(f"  [!] clip missing: {clip_name}")
             continue
@@ -333,7 +368,7 @@ def main():
     ap.add_argument("--game", required=True)
     ap.add_argument("--alert", required=True)
     ap.add_argument("--out", default="riftapart-assets")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--character", default="all", choices=["all", *PRESETS], help="which character(s) to convert")
     ap.add_argument("--look", type=int, default=0)
     ap.add_argument("--lod", type=int, default=0)
     ap.add_argument("--tex-size", type=int, default=2048)
@@ -344,10 +379,17 @@ def main():
     a = ap.parse_args()
 
     game = Game(a.game, a.alert, a.gdeflate_dll)
+    names = list(PRESETS) if a.character == "all" else [a.character]
+    for name in names:
+        print(f"== {name}")
+        convert(game, a, PRESETS[name])
+
+
+def convert(game, a, preset):
     import model_to_gltf as m2g
 
     m2g.ADD_SHAPEKEYS = False
-    model = game.dat1lib.read(io.BytesIO(game.read(a.model)))
+    model = game.dat1lib.read(io.BytesIO(game.read(preset["model"])))
 
     w = m2g.GltfWriter()
     w.init(model)
@@ -362,7 +404,7 @@ def main():
         if path is None or any(s in path.lower() for s in SKIP_MATERIALS):
             print(f"  skip mesh {mi} ({path})")
             continue
-        if pick(material_textures(game, path), "c", path) is None:
+        if pick(material_textures(game, path), "c", path) is None and not special_material(path):
             # Fur shells, stitching and small emissive bits have no colour map; they need
             # special shaders, so leave them out for now.
             print(f"  skip mesh {mi} (no colour map: {path})")
@@ -372,13 +414,13 @@ def main():
     skin, rcra_skin = w.get_skin()
     w.add_skeleton(model)
     w.add_meshes(keep, skin, rcra_skin)
-    anims = add_animations(game, w, model) if not a.no_anims else {}
+    anims = add_animations(game, w, model, preset) if not a.no_anims else {}
     g = w.gltf
 
     # Materials and textures.
     texture_cache = {}
     material_index = {}
-    manifest = {"model": a.model, "look": a.look, "lod": a.lod, "materials": {}}
+    manifest = {"model": preset["model"], "look": a.look, "lod": a.lod, "materials": {}}
 
     def add_texture(path, kind):
         key = (path, kind)
@@ -395,6 +437,12 @@ def main():
             img, alpha = roughness_map(img), False
         else:
             alpha = np.asarray(img)[..., 3].min() < 250
+            metal = preset.get("metal")
+            if metal:
+                lo, gain = metal["brighten"]
+                rgba = np.asarray(img).astype(np.float32)
+                rgba[..., :3] = np.clip(lo * 255 + gain * rgba[..., :3], 0, 255)
+                img = Image.fromarray(rgba.astype(np.uint8), "RGBA")
         g.images.append(pygltflib.Image(uri=image_uri(img, alpha), name=os.path.basename(path)))
         g.textures.append(pygltflib.Texture(source=len(g.images) - 1))
         texture_cache[key] = (len(g.textures) - 1, alpha)
@@ -409,6 +457,17 @@ def main():
             mat = pygltflib.Material(name=os.path.basename(mpath), doubleSided=True)
             pbr = pygltflib.PbrMetallicRoughness(baseColorFactor=[1, 1, 1, 1], metallicFactor=0.0, roughnessFactor=0.7)
             entry = {"textures": texs}
+            special = special_material(mpath)
+            if special == "glow":
+                # Clank's eyes and antenna glow green; the game draws them with a shader we don't have.
+                pbr.baseColorFactor = [0.35, 1.0, 0.45, 1.0]
+                mat.emissiveFactor = [0.35, 1.0, 0.45]
+            elif special == "glass":
+                pbr.baseColorFactor = [0.6, 0.9, 0.8, 0.25]
+                pbr.roughnessFactor = 0.1
+                mat.alphaMode = pygltflib.BLEND
+            if preset.get("metal") and not special:
+                pbr.metallicFactor = preset["metal"]["metallic"]
             c = pick(texs, "c", mpath)
             if c and (t := add_texture(c, "color")):
                 pbr.baseColorTexture = pygltflib.TextureInfo(index=t[0])
@@ -439,12 +498,12 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     g.convert_images(pygltflib.ImageFormat.BUFFERVIEW)
     g.convert_buffers(pygltflib.BufferFormat.BINARYBLOB)
-    out = os.path.join(a.out, "ratchet.glb")
+    out = os.path.join(a.out, preset["out"])
     g.save_binary(out)
     # Edit the file directly: pygltflib drops JOINTS_1/WEIGHTS_1 when it reloads a file.
     merged = fix_glb_for_bevy(out)
     print(f"  merged 8 -> 4 bone influences on {merged} primitives")
-    with open(os.path.join(a.out, "ratchet.json"), "w") as f:
+    with open(os.path.join(a.out, preset["out"].replace(".glb", ".json")), "w") as f:
         json.dump(manifest, f, indent=2)
     print(f"wrote {out} ({os.path.getsize(out) / 1e6:.1f} MB), {len(g.meshes)} meshes, {len(g.materials)} materials, {len(g.textures)} textures")
 

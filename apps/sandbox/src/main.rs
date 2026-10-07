@@ -9,6 +9,7 @@
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
 
+mod clank;
 mod demo;
 mod level;
 mod ratchet_model;
@@ -130,7 +131,7 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins(ratchet_model::plugin)
+    .add_plugins((ratchet_model::plugin, clank::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.9)))
     .insert_resource(Settings { base, scale, configs_dir, load_note, model_dir })
@@ -169,15 +170,24 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<Settings>,
     asset_server: Res<AssetServer>,
 ) {
-    commands.spawn((Camera3d::default(), Transform::from_xyz(-6.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    // A sky-to-ground gradient as environment light, so metal (Clank!) has something to reflect.
+    let mut sky = EnvironmentMapLight::hemispherical_gradient(
+        &mut images,
+        Color::srgb(0.55, 0.7, 0.95),
+        Color::srgb(0.85, 0.85, 0.85),
+        Color::srgb(0.35, 0.33, 0.3),
+    );
+    sky.intensity = 1500.0;
+    commands.spawn((Camera3d::default(), sky, Transform::from_xyz(-6.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y)));
     commands.spawn((
         DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    commands.insert_resource(GlobalAmbientLight { brightness: 600.0, ..default() });
+    commands.insert_resource(GlobalAmbientLight { brightness: 250.0, ..default() });
 
     let tuning = settings.base.scaled(settings.scale);
     let fur = materials.add(StandardMaterial { base_color: Color::srgb(0.95, 0.55, 0.15), ..default() });

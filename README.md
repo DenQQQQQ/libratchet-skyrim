@@ -41,9 +41,10 @@ pip install pygltflib pillow numpy texture2ddecoder lz4
 python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
 ```
 
-The sandbox picks it up automatically and plays Rift Apart's own idle, run, jump, double jump,
-fall, glide, land, dash and air-dash clips. Without it, you get a capsule with Lombax ears.
-Never share the `.glb`: it's game data.
+That makes `ratchet.glb` and `clank.glb`. The sandbox picks them up automatically: Ratchet plays
+Rift Apart's own idle, run, jump, double jump, fall, glide, land, dash and air-dash clips, and
+Clank rides on his back (backpack idle, heli-pack while gliding). Without them, you get a
+capsule with Lombax ears. Never share the `.glb` files: they're game data.
 
 ## Run the sandbox
 
