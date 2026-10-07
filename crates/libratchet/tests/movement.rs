@@ -30,7 +30,7 @@ impl Flat {
     }
 
     fn tick(&mut self, jump: bool, stick: Vec2) {
-        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false, aim: None });
+        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false, aim: None, aim_mode: false });
     }
 
     fn tick_with(&mut self, input: Input) {
@@ -306,12 +306,12 @@ fn ground_dash_covers_its_distance_including_braking() {
             h.tick(false, fwd);
         }
         let start = h.pos.z;
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
         assert_eq!(h.r.state(), MoveState::Dash);
         let mut peak: f32 = 0.0;
         let mut ticks = 1;
         while h.r.state() == MoveState::Dash && ticks < 240 {
-            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
+            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
             peak = peak.max(h.r.velocity().z);
             ticks += 1;
         }
@@ -332,16 +332,16 @@ fn air_dash_is_flat_and_once_per_air_time() {
     let fwd = Vec2::new(0.0, 1.0);
     h.rise(true);
     let start = h.pos;
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
     assert_eq!(h.r.state(), MoveState::AirDash);
     while h.r.state() == MoveState::AirDash {
         assert!((h.pos.y - start.y).abs() < 0.05, "air dash changed height to {}", h.pos.y);
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false, aim: None });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false, aim: None, aim_mode: false });
     }
     let travelled = h.pos.z - start.z;
     assert!((travelled - t.air_dash.distance).abs() < 0.3, "air dash went {travelled} m");
     // A second press in the same air time does nothing.
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
     assert_ne!(h.r.state(), MoveState::AirDash);
     assert_eq!(h.count(|e| *e == Event::AirDashed), 1);
     // After landing it's available again.
@@ -350,7 +350,7 @@ fn air_dash_is_flat_and_once_per_air_time() {
     }
     assert_eq!(h.r.state(), MoveState::Ground);
     h.jump(0.2, 0.25);
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None, aim_mode: false });
     assert_eq!(h.r.state(), MoveState::AirDash);
 }
 
@@ -582,7 +582,48 @@ fn loads_wrench_configs_when_present() {
 }
 
 fn aim_input(stick: Vec2, aim: Vec2, jump: bool) -> Input {
-    Input { move_dir: stick, jump, aim: Some(aim), ..Default::default() }
+    Input { move_dir: stick, jump, aim: Some(aim), aim_mode: true, ..Default::default() }
+}
+
+/// Seconds until the facing is within `tolerance` of `target` (radians).
+fn time_to_face(h: &mut Flat, target: f32, tolerance: f32, input: Input) -> f32 {
+    let start = h.time;
+    while h.time - start < 3.0 {
+        h.tick_with(input);
+        let d = (h.r.facing_yaw() - target + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        if d.abs() < tolerance {
+            return h.time - start;
+        }
+    }
+    f32::MAX
+}
+
+#[test]
+fn running_turns_around_with_the_games_mover_turn() {
+    let mut h = Flat::new(Tuning::default());
+    for _ in 0..120 {
+        h.tick(false, Vec2::new(0.0, 1.0));
+    }
+    let back = Input { move_dir: Vec2::new(0.0, -1.0), ..Default::default() };
+    let t = time_to_face(&mut h, std::f32::consts::PI, 0.3, back);
+    assert!(t > 0.15 && t < 0.45, "turned around in {t} s");
+}
+
+#[test]
+fn firing_from_the_hip_strafes_at_run_speed_and_aiming_turns_almost_at_once() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    let hip = Input { move_dir: Vec2::new(1.0, 0.0), aim: Some(Vec2::new(0.0, 1.0)), ..Default::default() };
+    for _ in 0..240 {
+        h.tick_with(hip);
+    }
+    assert!(h.r.facing_yaw().abs() < 0.02, "facing {}", h.r.facing_yaw());
+    assert!(close(h.r.velocity().x, t.ground_speeds.run_max, 0.05), "strafing at {}", h.r.velocity());
+
+    let mut h = Flat::new(t);
+    let behind = Input { aim: Some(Vec2::new(0.0, -1.0)), aim_mode: true, ..Default::default() };
+    let turned = time_to_face(&mut h, std::f32::consts::PI, 0.05, behind);
+    assert!(turned < 0.15, "turned in {turned} s");
 }
 
 #[test]

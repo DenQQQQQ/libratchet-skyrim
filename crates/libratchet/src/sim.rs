@@ -21,9 +21,12 @@ pub struct Input {
     pub dash: bool,
     /// Melee (wrench) button is down.
     pub melee: bool,
-    /// Aiming a weapon: the direction (x, z) to face while strafing. Movement then uses the aim
-    /// speeds and jumps the aim-mode jumps.
+    /// Strafing: the direction (x, z) to face, as while firing a gun (the game strafes while a
+    /// gun fires) or aiming.
     pub aim: Option<Vec2>,
+    /// Aim mode (the aim button held) on top of `aim`: the slower aim speeds and the aim-mode
+    /// jumps. Without it, strafing keeps the normal speeds (firing from the hip).
+    pub aim_mode: bool,
 }
 
 /// What the host's collision found on the last move.
@@ -107,6 +110,12 @@ const GLIDE_ENTRY_FALL_MIN: f32 = 4.0;
 const GLIDE_ENTRY_FALL_MAX: f32 = 12.0;
 /// The stick counts as moving past this (RiftApart.exe: the run transition out of a swing).
 const MOVE_STICK: f32 = 0.07;
+/// The game's ground turn (RiftApart.exe's mover): (gain, damp, cap in rad/s) while moving
+/// (running or strafing, 1500°/s) and standing (aiming or firing, 2500°/s).
+const MOVING_TURN: (f32, f32, f32) = (-4.0, -25.0, 26.18);
+const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
+/// Closer than this (radians), the turn snaps onto its target (RiftApart.exe).
+const TURN_SNAP: f32 = 0.005;
 
 #[derive(Clone, Debug)]
 pub struct Ratchet {
@@ -150,9 +159,14 @@ pub struct Ratchet {
     swing_queued: bool,
     swing_hit: bool,
     smash_descending: bool,
-    /// Aiming this tick, and whether the current jump started while aiming.
+    /// Strafing this tick (facing this direction), in aim mode, and whether the current jump
+    /// started in aim mode.
     aiming: Option<Vec2>,
+    aim_mode: bool,
     jump_aimed: bool,
+    /// This tick's stick, and the turn's angular speed (rad/s), which the next tick carries on.
+    stick: Vec2,
+    turn_omega: f32,
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
     move_vy: Option<f32>,
@@ -192,7 +206,10 @@ impl Ratchet {
             swing_hit: false,
             smash_descending: false,
             aiming: None,
+            aim_mode: false,
             jump_aimed: false,
+            stick: Vec2::ZERO,
+            turn_omega: 0.0,
             events: Vec::new(),
             move_vy: None,
         }
@@ -268,6 +285,8 @@ impl Ratchet {
         self.combo_rest = (self.combo_rest - dt).max(0.0);
         let stick = input.move_dir.clamp_length_max(1.0);
         self.aiming = input.aim.filter(|a| a.length_squared() > 1e-6).map(Vec2::normalize);
+        self.aim_mode = input.aim_mode && self.aiming.is_some();
+        self.stick = stick;
 
         // Contact changes first, so this tick runs in the right state.
         if matches!(self.state, MoveState::Ground | MoveState::Dash | MoveState::Melee | MoveState::SmashLand) {
@@ -568,10 +587,10 @@ impl Ratchet {
         }
     }
 
-    /// Ground speed for the stick: the normal speeds, or while aiming the aim speeds, slower
-    /// when backing away from the aim direction.
+    /// Ground speed for the stick: the normal speeds (also when strafing while firing), or in
+    /// aim mode the aim speeds, slower when backing away from the aim direction.
     fn ground_speed_for(&self, stick: Vec2) -> f32 {
-        let Some(aim) = self.aiming else {
+        let Some(aim) = self.aiming.filter(|_| self.aim_mode) else {
             return self.tuning.ground_speeds.speed_for_stick(stick.length());
         };
         let forward = self.tuning.aim_speeds.speed_for_stick(stick.length());
@@ -584,7 +603,7 @@ impl Ratchet {
     /// from the tap height, so every jump of a kind peaks at `time_to_peak` when tapped
     /// (RiftApart.exe).
     fn start_jump(&mut self, dt: f32, kind: MoveState, position: Vec3) {
-        self.jump_aimed = self.aiming.is_some();
+        self.jump_aimed = self.aim_mode;
         let params = self.params(kind).clone();
         let (mut h_min, mut h_max) = (params.height_min, params.height_max);
 
@@ -811,24 +830,53 @@ impl Ratchet {
     }
 
     /// Turns towards the movement direction, or while aiming towards the aim (twice as fast).
+    /// Turns Ratchet toward where he should face: the aim while strafing, else where he's
+    /// going. On the ground this is the game's mover turn (RiftApart.exe): each tick takes an
+    /// exponential share of the angle left (gain) plus part of the last tick's turn (damp),
+    /// capped per second and never past the target; moving, a 180° turn is 90 % done in about
+    /// a quarter second, standing it's nearly a snap. In the air and during moves, a plain turn
+    /// rate (ours).
     fn turn(&mut self, dt: f32) {
-        let (target, rate) = if let Some(aim) = self.aiming {
-            (aim.x.atan2(aim.y), self.tuning.turn_rate * 2.0)
-        } else {
-            let h = Vec2::new(self.velocity.x, self.velocity.z);
-            if h.length() < 0.3 * self.tuning.scale {
+        let flat = Vec2::new(self.velocity.x, self.velocity.z);
+        let moving = self.stick.length() > MOVE_STICK;
+        let target = match self.aiming {
+            Some(aim) => aim.x.atan2(aim.y),
+            None if self.state == MoveState::Ground && moving => self.stick.x.atan2(self.stick.y),
+            None if flat.length() >= 0.3 * self.tuning.scale => flat.x.atan2(flat.y),
+            None => {
+                self.turn_omega = 0.0;
                 return;
             }
-            (h.x.atan2(h.y), self.tuning.turn_rate)
         };
-        let mut diff = target - self.facing_yaw;
-        while diff > std::f32::consts::PI {
-            diff -= std::f32::consts::TAU;
+        let diff = wrap_angle(target - self.facing_yaw);
+        if self.state != MoveState::Ground {
+            let rate = if self.aiming.is_some() { self.tuning.turn_rate * 2.0 } else { self.tuning.turn_rate };
+            self.facing_yaw += diff.clamp(-rate * dt, rate * dt);
+            self.turn_omega = 0.0;
+            return;
         }
-        while diff < -std::f32::consts::PI {
-            diff += std::f32::consts::TAU;
+        if diff.abs() <= TURN_SNAP {
+            self.facing_yaw = target;
+            self.turn_omega = 0.0;
+            return;
         }
-        let max = rate * dt;
-        self.facing_yaw += diff.clamp(-max, max);
+        let (gain, damp, cap) = if moving { MOVING_TURN } else { STANDING_TURN };
+        // Only the upper end is clamped (as in the game), so a turn of exactly 180° has a side.
+        let err = diff.min(0.99 * std::f32::consts::PI);
+        let carry = 0.5 * dt * self.turn_omega * (2.0 - (damp * dt / 30.0).exp());
+        let step = (carry + (1.0 - (gain * dt).exp()) * err).clamp(-cap * dt, cap * dt).clamp(-err.abs(), err.abs());
+        self.turn_omega = step / dt;
+        self.facing_yaw = wrap_angle(self.facing_yaw + step);
     }
+}
+
+/// The same angle in -π..=π.
+fn wrap_angle(mut a: f32) -> f32 {
+    while a > std::f32::consts::PI {
+        a -= std::f32::consts::TAU;
+    }
+    while a < -std::f32::consts::PI {
+        a += std::f32::consts::TAU;
+    }
+    a
 }

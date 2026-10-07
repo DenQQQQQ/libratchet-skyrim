@@ -52,8 +52,11 @@ struct ModelGltf(Handle<Gltf>);
 /// Clip names baked into ratchet.glb by the converter (one per move).
 const CLIP_STATES: &[&str] = &[
     "idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash", "melee_1", "melee_2", "melee_3", "smash_intro", "smash",
-    "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw", "grenade_throw",
-    "pistol_idle", "pistol_run", "walk", "land_walk", "land_run", "idle_look", "idle_shoe",
+    "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw",
+    "pistol_idle", "pistol_run", "walk", "land_walk", "land_run", "idle_look", "idle_shoe", "glove_idle", "wrench_aim_idle",
+    "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e", "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w",
+    "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
+    "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
 ];
 /// The run's lean-into-a-turn versions (left, right), blended in step with it by how fast he
 /// turns.
@@ -71,11 +74,19 @@ const FIDGET_AFTER: f32 = 7.0;
 /// branch) is used, weighted well over the move clip under it.
 const CATCH_CLIP: &str = "throw_catch";
 const CATCH_WEIGHT: f32 = 6.0;
-/// The game's arm-only grenade throw, layered (like the catch) over walking, strafing or a jump;
-/// standing still, the full-body throw plays instead.
-const GRENADE_ARM_CLIP: &str = "grenade_throw_arm";
+/// The game's grenade throws (underhand, additive), layered over whatever Ratchet does: the
+/// whole-body one standing still, the upper-body one on the move or in the air.
+const GRENADE_LAYERS: [&str; 2] = ["grenade_throw_additive", "grenade_throw_arm_additive"];
 /// Strafing while aiming, by direction relative to where Ratchet faces (clockwise from ahead).
 const STRAFE_CLIPS: &[&str] = &["strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw"];
+/// The walking versions (aim mode's pace).
+const STRAFE_WALK_CLIPS: &[&str] = &["strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw"];
+const WRENCH_STRAFE_WALK_CLIPS: &[&str] = &["wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw"];
+/// The same with the wrench or the glove (grenades) in hand.
+const WRENCH_STRAFE_CLIPS: &[&str] = &[
+    "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e", "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w",
+    "wrench_strafe_nw",
+];
 /// The one-handed fire recoil: an additive layer, restarted with every shot (when the model has
 /// one; the converter leaves it out for now).
 const FIRE_LAYER: &str = "fire_pistol_additive";
@@ -88,7 +99,9 @@ const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
 const LOOPING: &[&str] = &[
     "idle", "run", "fall", "glide", "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw",
-    "pistol_idle", "pistol_run", "walk",
+    "pistol_idle", "pistol_run", "walk", "glove_idle", "wrench_aim_idle", "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e",
+    "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
+    "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
 ];
 
 struct Bone {
@@ -132,9 +145,10 @@ pub struct Rig {
     catch_layer: Option<(AnimationNodeIndex, f32)>,
     catch_time: Option<f32>,
     catches_seen: u32,
-    /// The arm-only grenade throw, how long it has played, and the throw count it belongs to.
-    grenade_layer: Option<(AnimationNodeIndex, f32)>,
-    grenade_time: Option<f32>,
+    /// The grenade throw layers (see GRENADE_LAYERS), the one playing and for how long, and the
+    /// throw count they've caught up with.
+    grenade_layers: [Option<(AnimationNodeIndex, f32)>; 2],
+    grenade_time: Option<(usize, f32)>,
     grenades_seen: u32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
@@ -302,7 +316,7 @@ fn on_ready(
         catch_layer: None,
         catch_time: None,
         catches_seen: 0,
-        grenade_layer: None,
+        grenade_layers: [None, None],
         grenade_time: None,
         grenades_seen: 0,
         lower_body,
@@ -355,10 +369,11 @@ fn setup_clips(
         let duration = clip_assets.get(clip).map_or(0.33, |c| c.duration());
         rig.catch_layer = Some((graph.add_clip_with_mask(clip.clone(), 1 << 1, 1.0, base), duration));
     }
-    if let Some(clip) = gltf.named_animations.get(GRENADE_ARM_CLIP) {
-        // Only the arm's joints are in the clip; everything else keeps the move clip.
-        let duration = clip_assets.get(clip).map_or(0.47, |c| c.duration());
-        rig.grenade_layer = Some((graph.add_clip(clip.clone(), 1.0, base), duration));
+    for (i, name) in GRENADE_LAYERS.iter().enumerate() {
+        if let Some(clip) = gltf.named_animations.get(*name) {
+            let duration = clip_assets.get(clip).map_or(0.5, |c| c.duration());
+            rig.grenade_layers[i] = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
+        }
     }
     let layer = THROW_LAYER;
     if let Some(clip) = gltf.named_animations.get(layer) {
@@ -445,30 +460,35 @@ fn play_clips(
         }
     }
 
-    // A grenade thrown on the move or in the air: the arm-only throw over the move clip.
+    // A grenade throw: the whole-body one standing still, the upper-body one on the move or in
+    // the air, layered over the move (weapons.rs times the release by the same rule).
     let flat_speed = Vec2::new(p.sim.velocity().x, p.sim.velocity().z).length() / settings.scale;
     let standing = p.sim.state() == MoveState::Ground && flat_speed <= 0.6;
-    if let Some((node, duration)) = rig.grenade_layer {
-        let throws = arsenal.as_ref().map_or(0, |a| a.throws);
-        if throws != rig.grenades_seen {
-            rig.grenades_seen = throws;
-            if !standing {
-                rig.grenade_time = Some(0.0);
-                player.start(node);
+    let throws = arsenal.as_ref().map_or(0, |a| a.throws);
+    if throws != rig.grenades_seen {
+        rig.grenades_seen = throws;
+        let which = if standing { 0 } else { 1 };
+        if let Some((node, _)) = rig.grenade_layers[which] {
+            if let Some((prev, _)) = rig.grenade_time.and_then(|(i, _)| rig.grenade_layers[i]) {
+                player.stop(prev);
             }
+            player.start(node);
+            rig.grenade_time = Some((which, 0.0));
         }
-        if let Some(t) = rig.grenade_time {
-            let t = t + time.delta_secs();
-            if t >= duration {
-                player.stop(node);
-                rig.grenade_time = None;
-            } else {
-                let weight = CATCH_WEIGHT * (t / 0.04).min(1.0).min(((duration - t) / 0.1).max(0.0));
-                if let Some(active) = player.animation_mut(node) {
-                    active.set_weight(weight);
-                }
-                rig.grenade_time = Some(t);
+    }
+    if let Some((which, t)) = rig.grenade_time
+        && let Some((node, duration)) = rig.grenade_layers[which]
+    {
+        let t = t + time.delta_secs();
+        if t >= duration {
+            player.stop(node);
+            rig.grenade_time = None;
+        } else {
+            let weight = (t / LAYER_FADE_IN).min(1.0).min(((duration - t) / LAYER_FADE_OUT).max(0.0));
+            if let Some(active) = player.animation_mut(node) {
+                active.set_weight(weight);
             }
+            rig.grenade_time = Some((which, t));
         }
     }
 
@@ -503,23 +523,30 @@ fn play_clips(
     rig.prev_state = Some(state);
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
 
-    // Aiming (any weapon), or the pistol firing: the one-handed stance, strafing by direction.
+    // Aiming (any weapon), or firing a gun and just after: strafing by direction, with the
+    // pistol's one-handed set, or the wrench/glove set.
     let pistol_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
-    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (pistol_out && (a.trigger || a.stance > 0.0)));
-    let throwing_grenade = arsenal.as_ref().is_some_and(|a| a.grenade_anim > 0.0) && rig.grenade_time.is_none();
+    let glove_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::Shatterbomb);
+    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && (a.trigger || a.stance > 0.0)));
+    let (strafe_clips, aim_idle) = match (pistol_out, rig.walking) {
+        (true, false) => (STRAFE_CLIPS, "aim_idle"),
+        (true, true) => (STRAFE_WALK_CLIPS, "aim_idle"),
+        (false, false) => (WRENCH_STRAFE_CLIPS, "wrench_aim_idle"),
+        (false, true) => (WRENCH_STRAFE_WALK_CLIPS, "wrench_aim_idle"),
+    };
     let strafe = {
         let yaw = p.sim.facing_yaw();
         let (fwd, right) = (Vec2::new(yaw.sin(), yaw.cos()), Vec2::new(-yaw.cos(), yaw.sin()));
         let flat = Vec2::new(v.x, v.z);
         let angle = flat.dot(right).atan2(flat.dot(fwd));
-        STRAFE_CLIPS[((angle / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(8) as usize]
+        strafe_clips[((angle / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(8) as usize]
     };
     let want: &'static str = match state {
-        MoveState::Ground if throwing_grenade => "grenade_throw",
         MoveState::Ground if gun_aim && speed > 0.6 => strafe,
-        MoveState::Ground if gun_aim => "aim_idle",
+        MoveState::Ground if gun_aim => aim_idle,
         MoveState::Ground if pistol_out && speed > 0.6 => "pistol_run",
         MoveState::Ground if pistol_out && rig.land_timer <= 0.0 => "pistol_idle",
+        MoveState::Ground if glove_out && speed <= 0.6 && rig.land_timer <= 0.0 => "glove_idle",
         MoveState::Ground if rig.land_timer > 0.0 && speed > WALK_TO_RUN => "land_run",
         MoveState::Ground if rig.land_timer > 0.0 && speed > 0.6 => "land_walk",
         MoveState::Ground if speed > 0.6 && rig.walking => "walk",
@@ -549,7 +576,7 @@ fn play_clips(
         && let Some(&node) = rig.clips.get(want)
     {
         // Wrench moves, the grenade throw and strafe changes cut in quickly.
-        let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash") || c.starts_with("strafe") || c == "grenade_throw");
+        let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash") || c.contains("strafe"));
         let landing = |c: Option<&str>| c.is_some_and(|c| c.starts_with("land"));
         let fade = if quick(Some(want)) || quick(rig.current_clip) {
             60
@@ -568,12 +595,12 @@ fn play_clips(
     }
     // Match the walk, run and strafe cycles (and the moving landings) to the actual speed: at
     // the speed a clip was authored for, it plays at 1x.
-    if (["run", "walk", "pistol_run", "land_walk", "land_run"].contains(&want) || want.starts_with("strafe"))
+    if (["run", "walk", "pistol_run", "land_walk", "land_run"].contains(&want) || want.contains("strafe"))
         && let Some(&node) = rig.clips.get(want)
     {
         let tuning = p.sim.tuning();
         let authored = rig.authored_speed.get(want).copied().unwrap_or_else(|| {
-            (if want.starts_with("strafe") { tuning.aim_speeds.run_max } else { tuning.ground_speeds.run_max }) / settings.scale
+            (if want.contains("strafe_walk") { tuning.aim_speeds.run_max } else { tuning.ground_speeds.run_max }) / settings.scale
         });
         if let Some(active) = player.animation_mut(node) {
             let range = if want.starts_with("land") { (0.7, 1.3) } else { (0.5, 1.5) };
@@ -643,6 +670,12 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, runnin
 
 /// Reads each clip's authored ground speed (root motion over its length) from the converter's
 /// manifest.
+/// The first time of `event` in a converted clip (the converter's ratchet.json).
+pub fn clip_event(manifest: &std::path::Path, clip: &str, event: &str) -> Option<f32> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
+    v["animations"][clip]["events"][event].get(0)?.as_f64().map(|t| t as f32)
+}
+
 fn authored_speeds(manifest: &std::path::Path) -> HashMap<String, f32> {
     let Ok(text) = std::fs::read_to_string(manifest) else { return HashMap::new() };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return HashMap::new() };

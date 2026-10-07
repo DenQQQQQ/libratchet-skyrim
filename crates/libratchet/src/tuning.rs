@@ -355,7 +355,8 @@ pub struct Tuning {
     pub ground_decel: f32,
     pub air_accel: f32,
     pub glide_accel: f32,
-    /// How fast the character turns to face its movement (rad/s).
+    /// How fast the character turns in the air and during moves (rad/s, ours). On the ground
+    /// the game's mover turn applies (see `Ratchet`).
     pub turn_rate: f32,
     pub single_jump: JumpParams,
     pub double_jump: JumpParams,
@@ -369,8 +370,8 @@ pub struct Tuning {
     pub air_dash: DashParams,
     /// OmniWrench combo, Hyper-Strike and throw.
     pub melee: MeleeParams,
-    /// Aiming a weapon: strafing speeds (forward run/walk, and backing up) and the lower,
-    /// fixed-height jumps of aim mode.
+    /// Aim mode: strafing speeds (forward run/walk, and backing up) and the lower,
+    /// fixed-height jumps. Strafing while firing from the hip keeps the normal speeds.
     pub aim_speeds: SpeedParams,
     pub aim_back_speed: f32,
     pub aim_single_jump: JumpParams,
@@ -467,10 +468,11 @@ impl Tuning {
             ground_dash: dash_from(&traversal["DodgeConfig"], &base.ground_dash),
             air_dash: dash_from(&traversal["AirDashConfig"], &base.air_dash),
             melee: melee_from(dir, &traversal, &shared, &base.melee),
-            // Two aim speed configs exist; StandAimSpeedConfig looks like the strafe one (the
-            // other, StandardSpeeds.AimSpeedConfig at 2 m/s, like precision aiming). Our pick.
-            aim_speeds: speeds_from(&shared["Motion"]["StandAimSpeedConfig"], &base.aim_speeds),
-            aim_back_speed: f(&shared["Motion"]["StandAimSpeedConfig"], "RunSpeedBackwardMax").unwrap_or(base.aim_back_speed),
+            // The game's motion config reads only StandardSpeeds (and MagBootSpeeds); the other
+            // speed blocks in hero_shared, StandAimSpeedConfig among them, are never read
+            // (RiftApart.exe). Aim mode takes its AimSpeedConfig (our reading of the name).
+            aim_speeds: speeds_from(&speeds["AimSpeedConfig"], &base.aim_speeds),
+            aim_back_speed: f(&speeds["AimSpeedConfig"], "RunSpeedBackwardMax").unwrap_or(base.aim_back_speed),
             aim_single_jump: jump_from(&jumps["AimModeSingleJumpConfig"]).unwrap_or(base.aim_single_jump),
             aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
             source: format!("Rift Apart configs ({})", dir.display()),

@@ -24,7 +24,8 @@ typedef struct RatchetInput {
     uint8_t jump;         /* jump button held */
     uint8_t dash;         /* dash button held */
     uint8_t melee;        /* melee (wrench) button held */
-    uint8_t aiming;       /* 1 while aiming a weapon: face (aim_x, aim_z) and strafe */
+    uint8_t aiming;       /* face (aim_x, aim_z) and strafe: 1 = aim mode (aim button held: slower,
+                             aim-mode jumps), 2 = strafing while firing from the hip (normal speeds) */
     float aim_x, aim_z;
 } RatchetInput;
 

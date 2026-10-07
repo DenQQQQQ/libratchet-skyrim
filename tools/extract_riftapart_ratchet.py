@@ -390,9 +390,9 @@ PRESETS = {
             # The upper-body throw (an additive layer), the one for throwing while aiming or
             # moving; it lets go of the wrench at 0.07 s (its WeaponThrown event).
             "throw": "weapon_wrench_throw_partial_hero_ratchet",
-            # One-handed guns (Burst Pistol): holding it (idle, run), the aiming stance and
-            # strafing in 8 directions. Grenades: the overhand glove throw. (The recoil clips
-            # are additive layers whose composition we haven't pinned down; not used yet.)
+            # One-handed guns (Burst Pistol): holding it (idle, run), the aiming stance,
+            # strafing in 8 directions, and the fire overlay the game layers over the upper
+            # body with every shot (its Strafe_Fire driver).
             "pistol_idle": "relaxed_one_hand_idle_hero_ratchet",
             "pistol_run": "run_forward_pistol_hero_ratchet",
             "aim_idle": "strafe_one_hand_idle_hero_ratchet",
@@ -404,9 +404,40 @@ PRESETS = {
             "strafe_sw": "strafe_one_hand_run_sw_hero_ratchet",
             "strafe_w": "strafe_one_hand_run_w_hero_ratchet",
             "strafe_nw": "strafe_one_hand_run_nw_hero_ratchet",
-            "grenade_throw": "weapon_glove_throw_overhand_hero_ratchet",
-            # The same throw for the throwing arm only, layered over walking and strafing.
-            "grenade_throw_arm": "weapon_glove_throw_overhand_partial_hero_ratchet",
+            "fire_pistol": "weapon_one_hand_fire_stand_additive_hero_ratchet",
+            # Grenades (the glove grip): the game's own picks in Ratchet's animset. Standing,
+            # the underhand throw over the glove idle; moving, its upper-body version over
+            # strafing. Both are additive; the overhand clips are never used by the game.
+            "grenade_throw": "weapon_glove_throw_underhand_hero_ratchet",
+            "grenade_throw_arm": "weapon_glove_throw_underhand_partial_hero_ratchet",
+            "glove_idle": "weapon_glove_idle_hero_ratchet",
+            # Strafing with the wrench or the glove in hand (aiming a throw).
+            "wrench_aim_idle": "strafe_wrench_idle_hero_ratchet",
+            "wrench_strafe_n": "strafe_wrench_run_n_hero_ratchet",
+            "wrench_strafe_ne": "strafe_wrench_run_ne_hero_ratchet",
+            "wrench_strafe_e": "strafe_wrench_run_e_hero_ratchet",
+            "wrench_strafe_se": "strafe_wrench_run_se_hero_ratchet",
+            "wrench_strafe_s": "strafe_wrench_run_s_hero_ratchet",
+            "wrench_strafe_sw": "strafe_wrench_run_sw_hero_ratchet",
+            "wrench_strafe_w": "strafe_wrench_run_w_hero_ratchet",
+            "wrench_strafe_nw": "strafe_wrench_run_nw_hero_ratchet",
+            # Walking strafes (aim mode's pace), one-handed and with the wrench or glove.
+            "strafe_walk_n": "strafe_one_hand_walk_n_hero_ratchet",
+            "strafe_walk_ne": "strafe_one_hand_walk_ne_hero_ratchet",
+            "strafe_walk_e": "strafe_one_hand_walk_e_hero_ratchet",
+            "strafe_walk_se": "strafe_one_hand_walk_se_hero_ratchet",
+            "strafe_walk_s": "strafe_one_hand_walk_s_hero_ratchet",
+            "strafe_walk_sw": "strafe_one_hand_walk_sw_hero_ratchet",
+            "strafe_walk_w": "strafe_one_hand_walk_w_hero_ratchet",
+            "strafe_walk_nw": "strafe_one_hand_walk_nw_hero_ratchet",
+            "wrench_strafe_walk_n": "strafe_wrench_walk_n_hero_ratchet",
+            "wrench_strafe_walk_ne": "strafe_wrench_walk_ne_hero_ratchet",
+            "wrench_strafe_walk_e": "strafe_wrench_walk_e_hero_ratchet",
+            "wrench_strafe_walk_se": "strafe_wrench_walk_se_hero_ratchet",
+            "wrench_strafe_walk_s": "strafe_wrench_walk_s_hero_ratchet",
+            "wrench_strafe_walk_sw": "strafe_wrench_walk_sw_hero_ratchet",
+            "wrench_strafe_walk_w": "strafe_wrench_walk_w_hero_ratchet",
+            "wrench_strafe_walk_nw": "strafe_wrench_walk_nw_hero_ratchet",
         },
     },
     "burstpistol": {
@@ -509,13 +540,19 @@ def add_animations(game, w, model, preset):
         if clip is None:
             print(f"  [!] clip kind not supported: {clip_name}")
             continue
+        events = {}
+        for t, kind in riftapart_anim.clip_events(sections, clip.duration):
+            event = riftapart_anim.EVENT_NAMES.get(kind)
+            if event and event not in ("Sound", "ConduitAnim"):
+                events.setdefault(event, []).append(round(t, 4))
         if clip.additive:
             # Layered clips get "_additive" names and no scale channels (Bevy adds scales). Their
             # rotation offsets work as-is with Bevy's rule (offset · base): the throw looks right
             # that way, while re-expressing them in each joint's own space bent the tail wrongly.
             add_animation(w, g, clip, state + "_additive", node_of_hash)
             report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "additive": True,
-                             "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4)}
+                             "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4),
+                             "events": events}
             print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), additive")
             continue
         times = [f / clip.fps for f in range(clip.frames)]
@@ -550,7 +587,8 @@ def add_animations(game, w, model, preset):
         # How far the clip's root motion travels: the speed it was authored for, so the sandbox
         # can play it at the rate that keeps the feet planted.
         report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "joints": mapped,
-                         "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4)}
+                         "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4),
+                         "events": events}
         print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), {mapped} joints")
     return report
 

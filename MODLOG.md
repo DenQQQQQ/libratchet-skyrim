@@ -35,6 +35,70 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: firing while moving, the game's turn, aim speeds and the grenade throws
+
+Follow-up to the playtest fixes. The reports were "holding S while shooting just snaps Ratchet
+180 degrees … then he goes back to walking" and "Ratchet starts sliding while he throws" the
+Shatterbomb. A research subagent traced both to the game's data and code.
+
+### Known (the user's install)
+- **Speeds:** the game's motion config reads only `hero_shared` → `Motion.StandardSpeeds`
+  (and the mag-boot set):
+  - `NormalSpeedConfig`: run 4–5.75 m/s forward, backward and sideways.
+  - `AimSpeedConfig`: walk 0.2–1, run 2.
+  - The other speed blocks in hero_shared, `StandAimSpeedConfig` among them, are never read.
+    Our aim mode used `StandAimSpeedConfig` (6.5–7.75 m/s).
+  - Ratchet's walking strafe clips are authored at about 2 m/s.
+- **Grenade throws:** in Ratchet's animation set, the Shatterbomb uses the underhand glove
+  throw. Both versions are additive:
+  - standing: the whole-body clip (0.83 s), with an `AnimFireWeaponEvent` at 0.1 s;
+  - moving: the upper-body clip (0.53 s), with the event at 0.065 s.
+  - The overhand clips the sandbox played are never used. With the glove out, the base clips
+    are the wrench/glove strafe set and a glove idle.
+- **Firing overlay:** each shot plays an additive upper-body clip
+  (`weapon_one_hand_fire_stand_additive`).
+
+### Read from RiftApart.exe
+- **Strafing on fire:** every weapon strafes while it fires. No weapon sets the "no strafe on
+  fire" flag. Strafing lasts while the trigger is held or the gun is firing, plus 0.1 s after
+  the newest shot. There is no lingering gun-up stance; then Ratchet goes back to running.
+- **The ground turn:**
+  - The mover takes, each tick, an exponential share of the remaining angle (gain), plus part
+    of last tick's turn (damp). It is capped per second and never overshoots.
+  - Running or strafing: gain −4, damp −25, cap 1500°/s. A 180° turn is 90 % done in about
+    0.25 s.
+  - Standing while aiming or firing: −15, −8, 2500°/s, close to a snap.
+
+### Built
+- **Hip-fire:** firing a gun from the hip strafes toward the aim at the normal speeds,
+  backpedalling if you hold back. It keeps strafing for 0.1 s after the last shot, then he
+  runs again. The 1 s stance (ours) is gone.
+  - `Input.aim_mode` separates aim mode (the aim button) from strafing while firing. Aim mode
+    has the aim speeds and aim jumps. The C API's `aiming`: 1 = aim mode, 2 = strafing.
+- **The turn:** libratchet turns Ratchet on the ground with the game's mover turn, toward the
+  stick when running and toward the aim when strafing. It used a constant 14–28 rad/s (ours,
+  near-instant). In the air and during moves the constant rate stays.
+- **Aim speeds:** aim mode takes `StandardSpeeds.AimSpeedConfig` (2 m/s). Walking strafe
+  clips (one-handed, and wrench/glove) play at that pace.
+- **Clips:**
+  - The Shatterbomb plays the game's underhand throws as additive layers: whole-body standing,
+    upper-body moving or in the air. The grenade leaves the hand at each clip's
+    AnimFireWeapon time.
+  - With the glove or the wrench out, strafing uses the game's wrench/glove strafe set.
+  - The pistol plays its fire overlay with every shot.
+- **Converter and demo:** the converter's `ratchet.json` lists each clip's events.
+  `--demo-part combat` adds the pistol fired from the hip while backing away.
+
+### Derived or assumed
+- **Which speed set:** aim mode → `AimSpeedConfig` and hip-fire → `NormalSpeedConfig` is our
+  reading of the names; the code's choice wasn't traced. The 2 m/s walking strafe clips back it.
+- **Running turn target:** the turn's target while running is the stick direction. The game
+  passes it in the run message; we didn't trace what fills it.
+- **Not built:** a turn-start variant (gain −1.5, damp −40, blending in over 0.33–0.66 s)
+  exists for some transitions; we don't use it.
+- **Not played yet:** the glove windup clip while holding the trigger, and the pistol's aim
+  offsets.
+
 ## 2026-10-07: playtest fixes: the combo's timing, aim + melee throws, throwing on the move, the jump's eyes
 
 The user playtested. They reported:
@@ -617,7 +681,8 @@ current vertical speed (we replace), and the dash, which looks animation-driven 
    above the ground (still a guess).
 4. ~~Glide catches a faster fall at 20 m/s².~~ Replaced by the confirmed 4–12 m/s entry clamp.
 5. ~~A capped double jump keeps at least 35%.~~ Replaced by the confirmed clamp / 0.5 m rule.
-6. Ground acceleration 35 m/s², deceleration 45, air 18, glide 10, turning 14 rad/s. No
+6. Ground acceleration 35 m/s², deceleration 45, air 18, glide 10, turning 14 rad/s (now only in
+   the air; the ground turn is the game's mover turn, see the hip-fire entry). No
    accel values were found for standard running (hover boots have RunAccel/RunDecel).
 7. MomentumWeight*, NoFallTime and NoInputTime aren't used yet.
 8. Which jump set is live: we use `hero_traversal.JumpConfigs`. `hero_shared.Traversal` has

@@ -391,6 +391,24 @@ fn combat() -> Vec<Act> {
         Act::Shot("47_air_throw"),
         hold(1.8, Vec2::ZERO, false),
         Act::Gun { trigger: false, aim: false },
+        // The pistol fired from the hip while backing away (S): he strafes facing the aim while
+        // it fires, turns around to run once it stops (0.1 s after the last shot), and back.
+        Act::Slot(Slot::BurstPistol),
+        Act::Teleport(arena + Vec3::new(-3.5, 0.0, 0.0)),
+        hold(0.12, x, false),
+        Act::Follow { yaw: behind + 0.5, pitch: 0.15, distance: 5.0 },
+        hold(0.4, Vec2::ZERO, false),
+        Act::Gun { trigger: true, aim: false },
+        hold(0.8, -x, false),
+        Act::Shot("49_hip_fire_backing_away"),
+        Act::Gun { trigger: false, aim: false },
+        hold(0.2, -x, false),
+        Act::Shot("49b_hip_fire_turning"),
+        hold(0.7, -x, false),
+        Act::Gun { trigger: true, aim: false },
+        hold(0.8, -x, false),
+        Act::Gun { trigger: false, aim: false },
+        hold(0.6, Vec2::ZERO, false),
         // A Shatterbomb thrown while walking past the ring, filmed from his right.
         Act::Slot(Slot::Shatterbomb),
         Act::Teleport(arena + Vec3::new(1.0, 0.0, 3.5)),
@@ -567,7 +585,7 @@ fn run_script(
             Act::CloseUp(on) => rig.close_up = on,
             Act::Watch { focus, yaw, pitch, distance } => rig.fixed = Some((focus, yaw, pitch, distance)),
             Act::Hold { secs, dir, jump, dash, melee } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, aim: None });
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, aim: None, aim_mode: false });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

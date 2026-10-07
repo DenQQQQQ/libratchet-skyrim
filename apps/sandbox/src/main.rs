@@ -379,6 +379,7 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>,
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
         melee: keys.pressed(KeyCode::KeyE) || (mouse_melee && mouse.pressed(MouseButton::Left)),
         aim: None,
+        aim_mode: false,
     }
 }
 
@@ -403,11 +404,13 @@ pub fn simulate(
     // Left mouse swings the wrench only while the wrench is selected; with a gun it fires.
     let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == weapons::Slot::Wrench);
     let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0 && wrench_out, rig.yaw));
-    // Aiming, or firing a gun: face where the camera looks and strafe. While aiming, melee
-    // throws the wrench instead of swinging (wrench.rs), as in the game.
+    // Aiming, or firing a gun (and just after the newest shot): face where the camera looks and
+    // strafe, as in the game. While aiming, melee throws the wrench instead of swinging
+    // (wrench.rs).
     let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
-    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && a.trigger) {
+    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && (a.trigger || a.stance > 0.0)) {
         input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
+        input.aim_mode = aiming;
     }
     if aiming {
         input.melee = false;

@@ -39,6 +39,7 @@ EVENT_NAMES = {
     0xE3A0E468: "HeroFootIKOn", 0xBE60EA49: "HeroFootIKOff", 0x23158C8F: "HeroBounceEarlyTransition",
     0x84094AB6: "WeaponThrown", 0x9C111707: "WeaponThrowStart", 0xE6B0FF70: "WeaponThrowEnd",
     0x4CA735F3: "JumpPeak", 0x3609711F: "Sound", 0xD0D37C85: "ConduitAnim", 0x4673A5C8: "CameraShakeAnim",
+    0x7F3864C5: "AnimFireWeapon", 0xF786C9B6: "Footstep", 0x5EFD7D29: "BotFling", 0xE16EC0DE: "PickupReset",
 }
 
 

@@ -24,13 +24,14 @@ pub const PISTOL_FILE: &str = "burstpistol.glb";
 pub const GRENADE_FILE: &str = "shatterbomb.glb";
 /// How far the crosshair ray looks for something to aim at.
 const AIM_RANGE: f32 = 80.0;
-/// The grenade leaves the hand this long into the throw animation (ours).
-const GRENADE_RELEASE: f32 = 0.16;
-const GRENADE_ANIM: f32 = 0.47;
+/// Without the converter's ratchet.json, a grenade leaves the hand this long into the throw
+/// (ours; with it, the throw clips' AnimFireWeapon events).
+const GRENADE_RELEASE: f32 = 0.1;
 /// Empty weapons refill after this long (a sandbox convenience).
 const REFILL_AFTER: f32 = 1.5;
-/// Ratchet keeps the gun up this long after his last shot (ours).
-const COMBAT_STANCE: f32 = 1.0;
+/// Ratchet strafes (facing the aim) while a gun fires and for this long after the newest shot,
+/// then goes back to running; there's no lingering gun-up stance (RiftApart.exe).
+const STRAFE_AFTER_SHOT: f32 = 0.1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -73,10 +74,10 @@ pub struct Arsenal {
     /// Counters the animation watches to start the recoil layer / grenade throw.
     pub shots: u32,
     pub throws: u32,
-    /// Seconds left of the grenade throw animation, and a grenade waiting to leave the hand.
-    pub grenade_anim: f32,
-    /// Seconds left of the gun-up stance after firing.
+    /// Seconds left of strafing after the newest shot.
     pub stance: f32,
+    /// When a thrown grenade leaves the hand: standing still, and on the move or in the air.
+    grenade_release: (f32, f32),
     pending: Option<f32>,
     refill: f32,
     pub note: String,
@@ -142,6 +143,14 @@ fn load_weapon(settings: &Settings, file: &str, base: WeaponParams) -> (WeaponPa
     }
 }
 
+/// The throw clips' AnimFireWeapon events (the whole-body throw, the upper-body one), from the
+/// converter's ratchet.json.
+fn grenade_release(settings: &Settings) -> (f32, f32) {
+    let manifest = settings.model_dir.as_ref().map(|d| d.join("ratchet.json"));
+    let event = |clip: &str| manifest.as_ref().and_then(|m| crate::ratchet_model::clip_event(m, clip, "AnimFireWeapon"));
+    (event("grenade_throw").unwrap_or(GRENADE_RELEASE), event("grenade_throw_arm").unwrap_or(GRENADE_RELEASE))
+}
+
 fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServer>) {
     let (pistol, n1) = load_weapon(&settings, "wpn_burstpistol_weapon.json", WeaponParams::pistol());
     let (grenade, n2) = load_weapon(&settings, "wpn_protogrenade_weapon.json", WeaponParams::grenade());
@@ -160,8 +169,8 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
         trigger: false,
         shots: 0,
         throws: 0,
-        grenade_anim: 0.0,
         stance: 0.0,
+        grenade_release: grenade_release(&settings),
         pending: None,
         refill: 0.0,
         note,
@@ -245,7 +254,6 @@ fn controls(
         arsenal.aiming = grabbed && mouse.pressed(MouseButton::Right);
         arsenal.trigger = gun && grabbed && mouse_melee.armed() && mouse.pressed(MouseButton::Left);
     }
-    arsenal.grenade_anim = (arsenal.grenade_anim - time.delta_secs()).max(0.0);
     arsenal.stance = if gun { (arsenal.stance - time.delta_secs()).max(0.0) } else { 0.0 };
 }
 
@@ -350,6 +358,7 @@ fn fire(
         *t -= dt;
         if *t <= 0.0 {
             arsenal.pending = None;
+            arsenal.stance = STRAFE_AFTER_SHOT;
             if let Some(shot) = arsenal.grenade.step(0.0, true, &aim).into_iter().next().or_else(|| last_grenade_shot(&arsenal, &aim)) {
                 let proj = Projectile::new(&shot, &arsenal.grenade.params().projectile);
                 let light = art.available.then(|| art.grenade_light(settings.scale));
@@ -365,7 +374,7 @@ fn fire(
             let s = settings.scale;
             for shot in shots {
                 arsenal.shots += 1;
-                arsenal.stance = COMBAT_STANCE;
+                arsenal.stance = STRAFE_AFTER_SHOT;
                 if let Some(recoil) = &shakes.recoil {
                     rig.add_shake(recoil, 1.0);
                 }
@@ -420,9 +429,12 @@ fn fire(
             // The weapon decides (rate, ammo); the grenade itself is spawned at release.
             let shots = arsenal.grenade.step(dt, trigger, &aim);
             if !shots.is_empty() && arsenal.pending.is_none() {
+                // The whole-body throw standing still, the upper-body one on the move or in the
+                // air (ratchet_model picks the same).
+                let v = p.sim.velocity() / settings.scale;
+                let standing = p.sim.state() == MoveState::Ground && Vec2::new(v.x, v.z).length() <= 0.6;
                 arsenal.throws += 1;
-                arsenal.grenade_anim = GRENADE_ANIM;
-                arsenal.pending = Some(GRENADE_RELEASE);
+                arsenal.pending = Some(if standing { arsenal.grenade_release.0 } else { arsenal.grenade_release.1 });
             }
         }
         Slot::Wrench => {
