@@ -40,8 +40,13 @@ struct Demo {
     finished_for: f32,
 }
 
-pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>) {
-    app.insert_resource(Demo { acts: script(), index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0 })
+/// `part`: run only one section ("wrench"), after a short warm-up.
+pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&str>) {
+    let acts = match part {
+        Some("wrench") => [vec![hold(1.5, Vec2::ZERO, false)], wrench_moves()].concat(),
+        _ => script(),
+    };
+    app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0 })
         .add_systems(FixedUpdate, run_script.before(simulate))
         .add_systems(Update, record_frames);
 }
@@ -100,16 +105,24 @@ fn wrench_moves() -> Vec<Act> {
         Act::Teleport(arena + Vec3::new(12.0, 0.0, 4.0)),
         hold(0.12, x, false),
         hold(0.6, Vec2::ZERO, false),
-        Act::Follow { yaw: -2.0, pitch: 0.22, distance: 5.5 },
+        Act::Follow { yaw: 0.45, pitch: 0.15, distance: 4.0 },
         hold(0.3, Vec2::ZERO, false),
         Act::Throw,
-        hold(0.25, Vec2::ZERO, false),
+        hold(0.2, Vec2::ZERO, false),
         Act::Shot("19_wrench_throw"),
         hold(0.3, Vec2::ZERO, false),
         Act::Follow { yaw: -1.3, pitch: 0.25, distance: 9.0 },
         hold(0.05, Vec2::ZERO, false),
         Act::Shot("20_wrench_hit"),
         hold(2.0, Vec2::ZERO, false),
+        // Throwing on the run: the throw is a layer over the run cycle.
+        Act::Follow { yaw: 1.4, pitch: 0.15, distance: 4.5 },
+        hold(0.7, Vec2::Y, false),
+        Act::Throw,
+        hold(0.22, Vec2::Y, false),
+        Act::Shot("21_running_throw"),
+        hold(1.8, Vec2::Y, false),
+        hold(0.8, Vec2::ZERO, false),
     ]
 }
 

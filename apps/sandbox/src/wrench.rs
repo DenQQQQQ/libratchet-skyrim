@@ -44,6 +44,8 @@ pub struct Wrench {
     throw_requested: bool,
     /// Seconds left of Ratchet's throw animation.
     pub throw_anim: f32,
+    /// Counts throws, so the animation can restart its layer for each one.
+    pub throws: u32,
 }
 
 pub fn plugin(app: &mut App) {
@@ -179,6 +181,7 @@ fn start_throw(
     let from = hand_position(&wrench, &globals, &p, settings.scale);
     wrench.flight = Some(WrenchThrow::new(&p.sim.tuning().melee.throw, from, dir));
     wrench.throw_anim = THROW_ANIM;
+    wrench.throws += 1;
 }
 
 /// Flies the thrown wrench: it turns back at a dummy (knocking it back) or a wall, and is

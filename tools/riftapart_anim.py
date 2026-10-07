@@ -30,8 +30,11 @@ BUILT, HASHES, BASE, ELEMS, DATA = 0x9DF23F77, 0xA3B26640, 0x2BB5BC8F, 0xD070D35
 
 
 class Clip:
-    def __init__(self, name, fps, frames, hashes, rotations, translations, scales):
+    def __init__(self, name, fps, frames, hashes, rotations, translations, scales, additive=False):
         self.name = name
+        # Additive clips (flag 0x40) hold offsets from their first frame, meant to be layered on
+        # top of another animation (e.g. the wrench throw over idle or running).
+        self.additive = additive
         self.fps = fps
         self.frames = frames  # number of frames
         self.hashes = hashes  # clip joint hashes
@@ -126,4 +129,4 @@ def decode(name, sections):
     pos = pos * (2.0 ** -pos_exp)[None, :, None]
 
     scl = scl / 4096.0
-    return Clip(name, fps, frames, hashes, rot[key_of_frame], pos[key_of_frame], scl[key_of_frame])
+    return Clip(name, fps, frames, hashes, rot[key_of_frame], pos[key_of_frame], scl[key_of_frame], bool(flags & 0x40))

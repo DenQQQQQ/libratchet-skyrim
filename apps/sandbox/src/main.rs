@@ -8,6 +8,7 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
+//!   --demo-part wrench  with --demo: only the wrench section
 
 mod clank;
 mod combat;
@@ -160,7 +161,7 @@ fn main() {
             // Every frame advances exactly 1/60 s, so saved frames play back at real speed.
             app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
         }
-        demo::add(&mut app, out, record);
+        demo::add(&mut app, out, record, arg("--demo-part").as_deref());
     }
     app.run();
 }

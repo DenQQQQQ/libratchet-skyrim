@@ -433,6 +433,14 @@ def add_animations(game, w, model, preset):
         if clip is None:
             print(f"  [!] clip kind not supported: {clip_name}")
             continue
+        if clip.additive:
+            # Layered clips get "_additive" names and no scale channels (Bevy adds scales). Their
+            # rotation offsets work as-is with Bevy's rule (offset · base): the throw looks right
+            # that way, while re-expressing them in each joint's own space bent the tail wrongly.
+            add_animation(w, g, clip, state + "_additive", node_of_hash)
+            report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "additive": True}
+            print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), additive")
+            continue
         times = [f / clip.fps for f in range(clip.frames)]
         anim = pygltflib.Animation(name=state)
         t_data = w.make_buffer_func(times, lambda x: struct.pack("<f", x))
@@ -464,6 +472,32 @@ def add_animations(game, w, model, preset):
         report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "joints": mapped}
         print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), {mapped} joints")
     return report
+
+
+def add_animation(w, g, clip, name, node_of_hash):
+    """Adds an additive clip as a glTF animation with rotation and translation offsets only."""
+    times = [f / clip.fps for f in range(clip.frames)]
+    anim = pygltflib.Animation(name=name)
+    t_data = w.make_buffer_func(times, lambda x: struct.pack("<f", x))
+    _, t_view = w.create_buffer_view(t_data, None)
+    t_acc, t_index = w.create_accessor()
+    t_acc.bufferView, t_acc.byteOffset, t_acc.componentType = t_view, 0, pygltflib.FLOAT
+    t_acc.count, t_acc.type, t_acc.min, t_acc.max = len(times), pygltflib.SCALAR, [times[0]], [times[-1]]
+    for j, h in enumerate(clip.hashes):
+        node = node_of_hash.get(h)
+        if node is None:
+            continue
+        for path, values, kind, fmt in (("rotation", clip.rotations[:, j], pygltflib.VEC4, "<4f"),
+                                        ("translation", clip.translations[:, j], pygltflib.VEC3, "<3f")):
+            v_data = w.make_buffer_func(values.tolist(), lambda x, fmt=fmt: struct.pack(fmt, *x))
+            _, v_view = w.create_buffer_view(v_data, None)
+            acc, a_index = w.create_accessor()
+            acc.bufferView, acc.byteOffset, acc.componentType = v_view, 0, pygltflib.FLOAT
+            acc.count, acc.type = len(values), kind
+            anim.samplers.append(pygltflib.AnimationSampler(input=t_index, output=a_index, interpolation=pygltflib.ANIM_LINEAR))
+            anim.channels.append(pygltflib.AnimationChannel(
+                sampler=len(anim.samplers) - 1, target=pygltflib.AnimationChannelTarget(node=node, path=path)))
+    g.animations.append(anim)
 
 
 def main():

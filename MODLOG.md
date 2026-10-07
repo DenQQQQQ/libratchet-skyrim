@@ -111,6 +111,22 @@ arena take the hits.
   - Demo shots `13_wrench_ready` … `20_wrench_hit`.
   - Videos `recordings/omniwrench_demo.mp4` and `omniwrench_combo_slowmo.mp4`.
 
+### Fix: the throw sank Ratchet into the floor (reported by the user)
+- **Cause:** `weapon_wrench_throw_hero_ratchet` is an additive clip (flag `0x40` in its
+  header). Its values are offsets from its first frame, so its pelvis sits at (0, 0, 0).
+  Played as a normal clip, that put his hips on the ground. Of the clips we use, only the
+  throw clips have this flag.
+- **The converter** marks additive clips. It writes them as `<state>_additive` with rotation
+  and translation offsets only: Bevy adds scales in additive blending, so scale channels are
+  dropped.
+- **The sandbox** builds Ratchet's animation graph as an additive node over a blend node. The
+  move clips crossfade in the blend node, and the throw plays on top of whatever he's doing,
+  fading in over 0.08 s and out over 0.25 s. He can throw while running.
+- **How the game combines rotation offsets** isn't known. Bevy applies them in the parent's
+  space (offset · base), and that looks right. Re-expressing them in each joint's own space,
+  around the idle pose, bent the tail up over his shoulder.
+- `--demo-part wrench` runs only the wrench section of the demo. Shot `21_running_throw`.
+
 ### Tested
 - `cargo test --workspace`: 24 libratchet tests, including the following:
   - lunge distance and hit timing;

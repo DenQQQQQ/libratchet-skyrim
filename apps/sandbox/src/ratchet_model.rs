@@ -51,8 +51,13 @@ struct ModelGltf(Handle<Gltf>);
 /// Clip names baked into ratchet.glb by the converter (one per move).
 const CLIP_STATES: &[&str] = &[
     "idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash", "melee_1", "melee_2", "melee_3", "smash_intro", "smash",
-    "throw",
 ];
+/// The wrench throw is an additive clip in the game (offsets on top of whatever Ratchet is
+/// doing), so it plays as a layer over the move clips.
+const THROW_LAYER: &str = "throw_additive";
+/// Fade in/out of the throw layer, seconds.
+const LAYER_FADE_IN: f32 = 0.08;
+const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
 const LOOPING: &[&str] = &["idle", "run", "fall", "glide"];
 
@@ -76,6 +81,11 @@ pub struct Rig {
     current_clip: Option<&'static str>,
     prev_state: Option<MoveState>,
     land_timer: f32,
+    /// The additive throw layer: its node, length, how long it has played, and the throw count
+    /// it belongs to.
+    throw_layer: Option<(AnimationNodeIndex, f32)>,
+    throw_time: Option<f32>,
+    throws_seen: u32,
 }
 
 const BONES: &[&str] = &[
@@ -214,6 +224,9 @@ fn on_ready(
         current_clip: None,
         prev_state: None,
         land_timer: 0.0,
+        throw_layer: None,
+        throw_time: None,
+        throws_seen: 0,
     });
     for e in &placeholders {
         commands.entity(e).insert(Visibility::Hidden);
@@ -226,6 +239,7 @@ fn setup_clips(
     rig: Option<ResMut<Rig>>,
     model: Option<Res<ModelGltf>>,
     gltfs: Res<Assets<Gltf>>,
+    clip_assets: Res<Assets<AnimationClip>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let (Some(mut rig), Some(model)) = (rig, model) else { return };
@@ -234,12 +248,21 @@ fn setup_clips(
         return;
     }
     let Some(gltf) = gltfs.get(&model.0) else { return };
+    // The move clips crossfade under `base`; layers are added on top of it.
     let mut graph = AnimationGraph::new();
+    let layers = graph.add_additive_blend(1.0, graph.root);
+    let base = graph.add_blend(1.0, layers);
     let mut clips = HashMap::new();
     for &name in CLIP_STATES {
         if let Some(clip) = gltf.named_animations.get(name) {
-            clips.insert(name, graph.add_clip(clip.clone(), 1.0, graph.root));
+            clips.insert(name, graph.add_clip(clip.clone(), 1.0, base));
         }
+    }
+    let layer = THROW_LAYER;
+    if let Some(clip) = gltf.named_animations.get(layer) {
+        let duration = clip_assets.get(clip).map_or(2.0, |c| c.duration());
+        rig.throw_layer = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
+        info!("ratchet model: throw plays as an additive layer ({layer}, {duration:.2} s)");
     }
     if clips.is_empty() {
         rig.player = None; // no clips in this file: stay procedural
@@ -265,6 +288,28 @@ fn play_clips(
         return;
     }
     let Ok((mut player, mut transitions)) = anim.get_mut(entity) else { return };
+
+    // The throw layer: restart it with each throw, fade it in and out over its length.
+    if let Some((node, duration)) = rig.throw_layer {
+        if wrench.throws != rig.throws_seen {
+            rig.throws_seen = wrench.throws;
+            rig.throw_time = Some(0.0);
+            player.start(node);
+        }
+        if let Some(t) = rig.throw_time {
+            let t = t + time.delta_secs();
+            let weight = (t / LAYER_FADE_IN).min(1.0).min(((duration - t) / LAYER_FADE_OUT).max(0.0));
+            if t >= duration {
+                player.stop(node);
+                rig.throw_time = None;
+            } else {
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+                rig.throw_time = Some(t);
+            }
+        }
+    }
     let v = p.sim.velocity() / settings.scale;
     let speed = Vec2::new(v.x, v.z).length();
     let state = p.sim.state();
@@ -276,7 +321,6 @@ fn play_clips(
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
 
     let want: &'static str = match state {
-        MoveState::Ground if wrench.throw_anim > 0.0 && speed <= 0.6 => "throw",
         MoveState::Ground if speed > 0.6 => "run",
         MoveState::Ground if rig.land_timer > 0.0 => "land",
         MoveState::Ground => "idle",
