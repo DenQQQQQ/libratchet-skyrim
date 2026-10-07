@@ -142,12 +142,15 @@ def pick(textures, suffix, material_path):
 
 
 def special_material(material_path):
-    """Materials drawn by special shaders in the game: 'glow', 'glass' or None."""
+    """Materials drawn by special shaders in the game: 'glow', 'glass', 'blur' or None."""
     name = os.path.basename((material_path or "").replace("\\", "/")).lower()
     if "glow" in name:
         return "glow"
     if "glass" in name:
         return "glass"
+    if "rotorblades" in name:
+        # Clank's spinning-blade smear (no textures; the game draws it with an effect shader).
+        return "blur"
     return None
 
 
@@ -235,9 +238,77 @@ def append_accessor(j, blob, data, component_type, kind):
     return len(j["accessors"]) - 1
 
 
-def fix_glb_for_bevy(path):
+def apply_scale_compensation(j, blob, compensate):
+    """Joints named in `compensate` don't inherit their parent's own scale; only their offset is
+    scaled by it (like Maya's "segment scale compensate"). glTF always inherits scale, so each such
+    parent P with a non-unit scale is split: P keeps its translation and rotation, a new child
+    P_scaled takes P's scale, the skin and the inheriting children move under P_scaled, and each
+    compensating child's translation is multiplied by P's scale at every key. Returns the names of
+    the split joints."""
+    nodes = j["nodes"]
+    anims = j.get("animations", [])
+
+    def channel(anim, node, path):
+        return next((ch for ch in anim["channels"] if ch["target"].get("node") == node and ch["target"]["path"] == path), None)
+
+    def add_vec3(values):
+        index = append_accessor(j, blob, np.asarray(values, np.float32), 5126, "VEC3")
+        j["bufferViews"][-1].pop("target", None)  # animation data, not a vertex buffer
+        return index
+
+    split = []
+    for p in range(len(nodes)):
+        kids = nodes[p].get("children", [])
+        comp = [c for c in kids if nodes[c].get("name") in compensate]
+        if not comp:
+            continue
+        rest = np.array(nodes[p].get("scale", [1.0, 1.0, 1.0]), np.float32)
+        keys = {}
+        for ai, anim in enumerate(anims):
+            ch = channel(anim, p, "scale")
+            if ch is not None:
+                keys[ai] = (ch, read_accessor(j, blob, anim["samplers"][ch["sampler"]]["output"]))
+        if np.allclose(rest, 1) and all(np.allclose(v, 1, atol=1e-4) for _, v in keys.values()):
+            continue
+        for c in comp:
+            c_rest = np.array(nodes[c].get("translation", [0.0, 0.0, 0.0]), np.float32)
+            nodes[c]["translation"] = (rest * c_rest).tolist()
+            for ai, anim in enumerate(anims):
+                if ai not in keys:
+                    if not np.allclose(rest, 1):
+                        tch = channel(anim, c, "translation")
+                        if tch is not None:
+                            sampler = anim["samplers"][tch["sampler"]]
+                            sampler["output"] = add_vec3(read_accessor(j, blob, sampler["output"]) * rest)
+                    continue
+                sch, s_vals = keys[ai]
+                s_sampler = anim["samplers"][sch["sampler"]]
+                tch = channel(anim, c, "translation")
+                if tch is None:
+                    anim["samplers"].append({"input": s_sampler["input"], "output": add_vec3(s_vals * c_rest),
+                                             "interpolation": s_sampler.get("interpolation", "LINEAR")})
+                    anim["channels"].append({"sampler": len(anim["samplers"]) - 1, "target": {"node": c, "path": "translation"}})
+                    continue
+                t_sampler = anim["samplers"][tch["sampler"]]
+                t_vals = read_accessor(j, blob, t_sampler["output"])
+                assert len(t_vals) == len(s_vals), "scale and translation keys must line up"
+                t_sampler["output"] = add_vec3(s_vals * t_vals)
+        s = len(nodes)
+        nodes.append({"name": nodes[p]["name"] + "_scaled", "scale": rest.tolist(), "children": [c for c in kids if c not in comp]})
+        nodes[p].pop("scale", None)
+        nodes[p]["children"] = comp + [s]
+        for ch, _ in keys.values():
+            ch["target"]["node"] = s
+        for skin in j.get("skins", []):
+            skin["joints"] = [s if x == p else x for x in skin["joints"]]
+        split.append(nodes[p]["name"])
+    return split
+
+
+def fix_glb_for_bevy(path, compensate=()):
     """Float accessors must not be 'normalized' (ALERT marks UVs that way, which Bevy rejects),
-    and Bevy skins with at most 4 influences: merge JOINTS_1/WEIGHTS_1 into the top 4."""
+    and Bevy skins with at most 4 influences: merge JOINTS_1/WEIGHTS_1 into the top 4. Also
+    bakes the game's scale-compensating joints into a plain glTF hierarchy."""
     j, blob = glb_read(path)
     for acc in j["accessors"]:
         if acc.get("componentType") == 5126 and acc.get("normalized"):
@@ -269,9 +340,10 @@ def fix_glb_for_bevy(path):
         rig = len(j["nodes"]) - 1
         scene["nodes"] = [n for n in scene["nodes"] if n not in joint_set] + [rig]
         j["skins"][0]["skeleton"] = rig
+    split = apply_scale_compensation(j, blob, set(compensate))
     j["buffers"][0]["byteLength"] = len(blob) + ((-len(blob)) % 4)
     glb_write(path, j, blob)
-    return merged
+    return merged, split
 
 
 # What to convert per character: model, look, output name, and move state -> clip.
@@ -299,6 +371,11 @@ PRESETS = {
         # Rides on Ratchet's back: the game attaches Clank's dyn_backpack_attach joint to
         # Ratchet's ClankAttach joint (locator igLoc_clankBackpack on both).
         "model": "characters/hero/hero_clank_ps4/hero_clank_ps4.model",
+        # Look 0 is his body; looks 4-6 are the heli-pack (top rotor, left and right arm
+        # rotors), which the game only switches on while it's out. Mesh nodes get glTF extras
+        # {"look": n, "part": ...} so the sandbox can do the same.
+        "looks": [0, 4, 5, 6],
+        "look_parts": {4: "heli", 5: "heli", 6: "heli"},
         "out": "clank.glb",
         "clip_dir": "characters/hero/hero_clank_ps4/animations/",
         "clips": {
@@ -347,6 +424,8 @@ def add_animations(game, w, model, preset):
             for path, values, kind, fmt in (
                 ("rotation", clip.rotations[:, j], pygltflib.VEC4, "<4f"),
                 ("translation", clip.translations[:, j], pygltflib.VEC3, "<3f"),
+                # Keyed on every joint in every clip, so a scale never sticks after a switch.
+                ("scale", clip.scales[:, j], pygltflib.VEC3, "<3f"),
             ):
                 v_data = w.make_buffer_func(values.tolist(), lambda x, fmt=fmt: struct.pack(fmt, *x))
                 _, v_view = w.create_buffer_view(v_data, None)
@@ -397,7 +476,12 @@ def convert(game, a, preset):
     # that section for Rift Apart and its vertex reader already divides by 32768, so redo it.
     built = model.dat1.get_section(m2g.SECTION_BUILT)
     w.uv_scale = (built.get_uv_scale() if built else 1.0 / 16384.0) * 32768.0
-    all_meshes = w.get_meshes_indexes_by_looks_and_lod([a.look], a.lod)
+    looks = preset.get("looks", [a.look])
+    mesh_look = {}
+    for look in looks:
+        for mi in w.get_meshes_indexes_by_looks_and_lod([look], a.lod):
+            mesh_look.setdefault(mi, look)
+    all_meshes = sorted(mesh_look)
     keep, mesh_material = [], {}
     for mi in all_meshes:
         path = w.get_material_path(w.meshes[mi].get_material()) or None
@@ -416,11 +500,18 @@ def convert(game, a, preset):
     w.add_meshes(keep, skin, rcra_skin)
     anims = add_animations(game, w, model, preset) if not a.no_anims else {}
     g = w.gltf
+    parts = preset.get("look_parts", {})
+    for node in g.nodes:
+        # ALERT names mesh nodes after the model's mesh index ("sm07", "sm119").
+        if node.mesh is not None and node.name and node.name[2:].isdigit():
+            look = mesh_look.get(int(node.name[2:]))
+            if look is not None:
+                node.extras = {"look": look, **({"part": parts[look]} if look in parts else {})}
 
     # Materials and textures.
     texture_cache = {}
     material_index = {}
-    manifest = {"model": preset["model"], "look": a.look, "lod": a.lod, "materials": {}}
+    manifest = {"model": preset["model"], "looks": looks, "lod": a.lod, "materials": {}}
 
     def add_texture(path, kind):
         key = (path, kind)
@@ -466,6 +557,10 @@ def convert(game, a, preset):
                 pbr.baseColorFactor = [0.6, 0.9, 0.8, 0.25]
                 pbr.roughnessFactor = 0.1
                 mat.alphaMode = pygltflib.BLEND
+            elif special == "blur":
+                pbr.baseColorFactor = [0.8, 0.82, 0.85, 0.3]
+                pbr.roughnessFactor = 0.4
+                mat.alphaMode = pygltflib.BLEND
             if preset.get("metal") and not special:
                 pbr.metallicFactor = preset["metal"]["metallic"]
             c = pick(texs, "c", mpath)
@@ -501,8 +596,12 @@ def convert(game, a, preset):
     out = os.path.join(a.out, preset["out"])
     g.save_binary(out)
     # Edit the file directly: pygltflib drops JOINTS_1/WEIGHTS_1 when it reloads a file.
-    merged = fix_glb_for_bevy(out)
+    # Bit 0 of a joint's flags: it doesn't inherit its parent's scale (every *_noScale helper has it).
+    joint_defs = model.dat1.get_section(0x15DF9D3B).joints
+    compensate = {model.dat1.get_string(jd.string_offset) for jd in joint_defs if jd.unknown2 & 1}
+    merged, split = fix_glb_for_bevy(out, compensate)
     print(f"  merged 8 -> 4 bone influences on {merged} primitives")
+    print(f"  {len(compensate)} scale-compensating joints; split {len(split)} scaled parents: {', '.join(split)}")
     with open(os.path.join(a.out, preset["out"].replace(".glb", ".json")), "w") as f:
         json.dump(manifest, f, indent=2)
     print(f"wrote {out} ({os.path.getsize(out) / 1e6:.1f} MB), {len(g.meshes)} meshes, {len(g.materials)} materials, {len(g.textures)} textures")

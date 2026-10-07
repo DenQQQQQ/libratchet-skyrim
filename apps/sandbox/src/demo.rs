@@ -120,7 +120,7 @@ fn close_ups() -> Vec<Act> {
         Act::Shot("09_close_double_jump"),
         hold(0.55, x, true),
         Act::Shot("10_close_glide"),
-        Act::Follow { yaw: -2.0, pitch: 0.3, distance: 3.4 },
+        Act::Follow { yaw: -2.3, pitch: 0.05, distance: 4.6 },
         hold(0.25, x, true),
         Act::Shot("10b_close_glide_back"),
         Act::Follow { yaw: 1.2, pitch: 0.12, distance: 3.4 },
@@ -130,6 +130,21 @@ fn close_ups() -> Vec<Act> {
         hold(0.1, x, false),
         Act::Shot("11_close_dash"),
         hold(0.8, x, false),
+        // A long glide off the tower, camera behind: Clank's heli-pack.
+        Act::ClearTrail,
+        Act::Teleport(spots::TOWER_TOP + Vec3::new(-1.5, 0.0, 0.0)),
+        Act::Follow { yaw: -1.9, pitch: 0.2, distance: 3.6 },
+        hold(0.6, Vec2::ZERO, false),
+        hold(0.45, x, false),
+        hold(0.22, x, true),
+        hold(0.04, x, false),
+        hold(1.1, x, true),
+        Act::Shot("12_glide_heli_a"),
+        Act::Follow { yaw: -1.2, pitch: 0.35, distance: 3.2 },
+        hold(0.5, x, true),
+        Act::Shot("12_glide_heli_b"),
+        hold(1.6, x, true),
+        hold(0.6, x, false),
     ]
 }
 

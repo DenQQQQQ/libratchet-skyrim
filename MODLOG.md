@@ -35,6 +35,38 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (late afternoon): Clank's head size and heli-pack
+
+The user compared Clank with a screenshot from the game: his head was too big and the
+heli-pack rotors never showed. Both are fixed.
+- **Scale channel decoded** (`tools/riftapart_anim.py`). Clips carry a static scale per joint
+  (in the Base State section after the per-joint records: two joints per 16-byte row, 4.12
+  fixed point) plus animated scale (channel 0 of the packed samples). As a backpack, Clank
+  shrinks himself: `a_body` ×0.84, `head_scale_tweak` ×0.8, `head` ×0.55, plus his limbs.
+  The heli-pack is hidden or shown by scaling its joints.
+- **Joints that don't inherit scale.** Bit 0 of a joint's flags (ALERT calls the field
+  `unknown2`) marks a joint that ignores its parent's own scale. Its offset still stretches
+  with that scale, like Maya's "segment scale compensate". Every `*_noScale` helper joint has
+  this bit, and so do the joints above Clank's telescoping rotor stem. Without the rule, the
+  top rotor squashes into a vertical line. *Inferred from the data, not found in the game's
+  code.*
+  - glTF and Bevy always inherit scale, so the converter bakes the rule in. Such a parent gets
+    a `<name>_scaled` child that carries its scale, and each compensating child's offset is
+    multiplied by the parent's scale at every key.
+  - This affects 26 of Clank's joints and 24 of Ratchet's (tail, spine, limbs, eyes).
+- **Heli-pack meshes.** These are model looks 4–6 (top rotor with its own antenna, left and
+  right arm rotors), separate from look 0, so the converter never exported them. It now
+  exports looks 0, 4, 5 and 6 and tags each mesh node with glTF extras
+  `{"look": n, "part": "heli"}`. The sandbox shows them only while the heli-pack is out
+  (extend, glide, retract), copying the game's look switching. Before this, his own antenna
+  and the heli antenna overlapped in idle.
+- **Rotor spin.** The clips hold the rotors still, so the game must spin them in code. The
+  sandbox spins the three `*BladeSpin` joints at 22 rad/s (a guess). The spin axis is the
+  rotation from blade A to blade B.
+- **Blur discs.** `hero_Clank_Rotorblades.material` has no textures (it's an effect shader in
+  the game), so it's drawn as translucent grey.
+- **Demo:** `12_glide_heli_a/b`. Video: `recordings/clank_heli_closeup.mp4` (half speed).
+
 ## 2026-10-07 (afternoon): Clank, git
 
 - **Clank** rides on Ratchet's back like in the game. The game's Clank Pack config attaches Clank
@@ -120,3 +152,9 @@ current vertical speed (we replace), and the dash, which looks animation-driven 
     at 12 m/s for 7 m, once per air time, then falls with speed capped to the air speed.
 11. Shared.Traversal also has DashTime 0.5 / DashDistance 10 (unused; probably a leftover like
     its jump set).
+12. Joint flag bit 0 = "don't inherit the parent's scale, but scale the offset" (Maya-style
+    segment scale compensate). This fits every rig we've converted, but the matching code
+    hasn't been found in RiftApart.exe.
+13. Clank's rotors spin at 22 rad/s. The blur discs are translucent grey. The heli looks
+    (4–6) are only on while the heli-pack is out. Looks 1–3 (body without arms, left arm,
+    right arm) aren't used.

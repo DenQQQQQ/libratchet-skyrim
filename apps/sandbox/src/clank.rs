@@ -3,11 +3,14 @@
 //!
 //! Like the game, Clank's `dyn_backpack_attach` joint is placed on Ratchet's `ClankAttach` joint
 //! (both carry the `igLoc_clankBackpack` locator). He plays his backpack idle, and his broken
-//! heli-pack extends while Ratchet glides and retracts afterwards.
+//! heli-pack extends while Ratchet glides and retracts afterwards. The heli-pack meshes are their
+//! own model looks, shown only while it's out, and the rotors are spun in code like the game does.
 
 use crate::Player;
-use bevy::gltf::Gltf;
+use bevy::app::AnimationSystems;
+use bevy::gltf::{Gltf, GltfExtras};
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use libratchet::MoveState;
 use std::collections::HashMap;
@@ -16,6 +19,11 @@ use std::time::Duration;
 pub const MODEL_FILE: &str = "clank.glb";
 const ATTACH_JOINT: &str = "dyn_backpack_attach";
 const CLIPS: &[&str] = &["idle", "glide", "heli_extend", "heli_retract"];
+/// Rotor heads (top and both forearms); the game spins them in code, not in the clips.
+const ROTORS: &[&str] = &["topProp", "LF_Prop", "RT_Prop"];
+const ROTOR_SPEED: f32 = 22.0; // rad/s
+/// Clips during which the heli-pack is out.
+const HELI_CLIPS: &[&str] = &["heli_extend", "glide", "heli_retract"];
 
 #[derive(Resource)]
 struct ClankGltf(Handle<Gltf>);
@@ -32,10 +40,19 @@ struct ClankRig {
     /// Seconds left of a one-shot clip (heli extend/retract) before moving on.
     one_shot: f32,
     gliding: bool,
+    /// Rotor spin joints with their spin axis in the joint's local space.
+    rotors: Vec<(Entity, Vec3)>,
+    rotor_angle: f32,
+    /// Heli-pack mesh nodes (glTF extras `"part": "heli"` from the converter) and whether
+    /// they're shown.
+    heli_parts: Vec<Entity>,
+    heli_shown: bool,
 }
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<ClankRig>().add_systems(Update, (setup_clips, play_clips, follow_attach).chain());
+    app.init_resource::<ClankRig>()
+        .add_systems(Update, (setup_clips, play_clips, show_heli, follow_attach).chain())
+        .add_systems(PostUpdate, spin_rotors.after(AnimationSystems).before(TransformSystems::Propagate));
 }
 
 /// Spawns Clank under Ratchet's attach bone. Called once Ratchet's model is ready.
@@ -53,16 +70,50 @@ fn on_ready(
     nodes: Query<(&Transform, Option<&Name>)>,
     parents: Query<&ChildOf>,
     players: Query<(), With<AnimationPlayer>>,
+    extras: Query<&GltfExtras>,
     mut commands: Commands,
 ) {
     let root = ev.entity;
-    let mut attach = None;
+    rig.heli_parts = children
+        .iter_descendants(root)
+        .filter(|e| extras.get(*e).is_ok_and(|x| x.value.replace(' ', "").contains("\"part\":\"heli\"")))
+        .collect();
+    for &e in &rig.heli_parts {
+        commands.entity(e).insert(Visibility::Hidden);
+    }
+    rig.heli_shown = false;
+    let mut by_name = HashMap::new();
     for e in children.iter_descendants(root) {
-        if let Ok((_, Some(name))) = nodes.get(e)
-            && name.as_str() == ATTACH_JOINT
+        if let Ok((_, Some(name))) = nodes.get(e) {
+            by_name.entry(name.as_str().to_string()).or_insert(e);
+        }
+    }
+    let attach = by_name.get(ATTACH_JOINT).copied();
+    // Spin axis per rotor: blades A and B sit 120 degrees apart around it, so it's the axis of
+    // the rotation between their rest frames (in the spin joint's space).
+    let in_space_of = |child: Entity, ancestor: Entity| -> Option<Transform> {
+        let mut chain = vec![];
+        let mut e = child;
+        while e != ancestor {
+            chain.push(e);
+            e = parents.get(e).ok()?.parent();
+        }
+        let mut t = Transform::IDENTITY;
+        for e in chain.into_iter().rev() {
+            t = t * *nodes.get(e).ok()?.0;
+        }
+        Some(t)
+    };
+    rig.rotors.clear();
+    for prefix in ROTORS {
+        let get = |suffix: &str| by_name.get(&format!("{prefix}{suffix}")).copied();
+        if let (Some(spin), Some(a), Some(b)) = (get("BladeSpin"), get("BladeA"), get("BladeB"))
+            && let (Some(ta), Some(tb)) = (in_space_of(a, spin), in_space_of(b, spin))
         {
-            attach = Some(e);
-            break;
+            let (axis, angle) = (tb.rotation * ta.rotation.inverse()).to_axis_angle();
+            if angle.abs() > 0.1 {
+                rig.rotors.push((spin, axis.normalize()));
+            }
         }
     }
     rig.player = children.iter_descendants(root).find(|e| players.contains(*e));
@@ -89,7 +140,12 @@ fn on_ready(
     }
     // ...so offset his root by its inverse: the attach joint then sits exactly on Ratchet's.
     commands.entity(root).insert(Transform::from_matrix(attach_in_model.to_matrix().inverse()));
-    info!("clank attached (offset {:?})", attach_in_model.translation);
+    info!(
+        "clank attached (offset {:?}), {} rotors, {} heli-pack meshes",
+        attach_in_model.translation,
+        rig.rotors.len(),
+        rig.heli_parts.len()
+    );
 }
 
 /// Keeps Clank's (animated) attach joint exactly on Ratchet's ClankAttach bone: his root's
@@ -100,6 +156,35 @@ fn follow_attach(rig: Res<ClankRig>, globals: Query<&GlobalTransform>, mut trans
     let relative = root_global.affine().inverse() * attach_global.affine();
     if let Ok(mut t) = transforms.get_mut(root) {
         *t = Transform::from_matrix(Mat4::from(relative.inverse()));
+    }
+}
+
+/// Spins the heli rotors while the heli-pack is out. Runs after the animation is applied, on
+/// top of the clip's pose.
+fn spin_rotors(time: Res<Time>, mut rig: ResMut<ClankRig>, mut transforms: Query<&mut Transform>) {
+    if !rig.heli_shown {
+        return;
+    }
+    rig.rotor_angle = (rig.rotor_angle + ROTOR_SPEED * time.delta_secs()) % std::f32::consts::TAU;
+    let spin = rig.rotor_angle;
+    for &(entity, axis) in &rig.rotors {
+        if let Ok(mut t) = transforms.get_mut(entity) {
+            t.rotation *= Quat::from_axis_angle(axis, spin);
+        }
+    }
+}
+
+/// Shows the heli-pack looks while it's out (extend, glide, retract), hides them otherwise.
+fn show_heli(mut rig: ResMut<ClankRig>, mut visibility: Query<&mut Visibility>) {
+    let want = rig.current.is_some_and(|c| HELI_CLIPS.contains(&c));
+    if want == rig.heli_shown {
+        return;
+    }
+    rig.heli_shown = want;
+    for &e in &rig.heli_parts {
+        if let Ok(mut v) = visibility.get_mut(e) {
+            *v = if want { Visibility::Inherited } else { Visibility::Hidden };
+        }
     }
 }
 

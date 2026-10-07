@@ -11,10 +11,14 @@
 #   2BB5BC8F Base state:   16 B per clip joint: int16 qx,qy,qz,qw (scaled; normalise),
 #                          int16 x,y,z, u8, u8 pos_exp (position = int16 * 2^-pos_exp).
 #                          Animated channels store their minimum here.
+#                          Then scale rows, two joints per 16 B: u16 Ax,Bx,Ay,By,Az,Bz
+#                          (4.12 fixed point) + u16 destA, destB (record offsets, joint*48).
+#                          Joints not listed have scale 1. Scale isn't always inherited:
+#                          see apply_scale_compensation in extract_riftapart_ratchet.py.
 #   D070D358 Sample elem:  u32 dest offset[elements], then u8 bits[elements] (width = bits+1).
 #                          dest = joint*48 + channel*16 + component*4 (a 48-byte record per
-#                          joint): channel 0 = scale (unused here), 1 = rotation xyzw,
-#                          2 = translation xyz
+#                          joint): channel 0 = scale xyz (added to the static scale, 4.12),
+#                          1 = rotation xyzw, 2 = translation xyz
 #   3A7B4855 Sample data:  [u16 frame->key table, padded to 16 B, when keys < frames]
 #                          then keys rows; each row packs every element LSB-first, unsigned,
 #                          (bits+1) wide, rows padded to 4 bytes. value = base int16 + packed.
@@ -26,13 +30,14 @@ BUILT, HASHES, BASE, ELEMS, DATA = 0x9DF23F77, 0xA3B26640, 0x2BB5BC8F, 0xD070D35
 
 
 class Clip:
-    def __init__(self, name, fps, frames, hashes, rotations, translations):
+    def __init__(self, name, fps, frames, hashes, rotations, translations, scales):
         self.name = name
         self.fps = fps
         self.frames = frames  # number of frames
         self.hashes = hashes  # clip joint hashes
         self.rotations = rotations  # (frames, joints, 4) xyzw, normalised
         self.translations = translations  # (frames, joints, 3) metres
+        self.scales = scales  # (frames, joints, 3)
 
     @property
     def duration(self):
@@ -72,6 +77,15 @@ def decode(name, sections):
     b16 = np.frombuffer(base[: n_joints * 16], np.int16).reshape(n_joints, 8).astype(np.float64)
     pos_exp = np.frombuffer(base[: n_joints * 16], np.uint8).reshape(n_joints, 16)[:, 15].astype(np.float64)
 
+    # Static per-joint scales (4.12 fixed point), two joints per 16-byte row.
+    static_scale = np.full((n_joints, 3), 4096.0)
+    extra = base[n_joints * 16 :]
+    for r in range(len(extra) // 16):
+        v = struct.unpack_from("<8H", extra, r * 16)
+        for k, dest in enumerate((v[6], v[7])):
+            if dest // 48 < n_joints:
+                static_scale[dest // 48] = (v[k], v[2 + k], v[4 + k])
+
     el = sections[ELEMS]
     offs = np.array(struct.unpack_from(f"<{n_el}I", el, 0), np.int64)
     widths = np.frombuffer(el[4 * n_el : 5 * n_el], np.uint8).astype(np.int64) + 1
@@ -91,10 +105,13 @@ def decode(name, sections):
     comp = (offs % 16) // 4
     rot = np.repeat(b16[None, :, :4], n_keys, axis=0)
     pos = np.repeat(b16[None, :, 4:7], n_keys, axis=0)
+    scl = np.repeat(static_scale[None], n_keys, axis=0)
     for i in range(n_el):
         if joint[i] >= n_joints:
             continue
-        if channel[i] == 1:
+        if channel[i] == 0 and comp[i] < 3:
+            scl[:, joint[i], comp[i]] += values[:, i]
+        elif channel[i] == 1:
             rot[:, joint[i], comp[i]] += values[:, i]
         elif channel[i] == 2 and comp[i] < 3:
             pos[:, joint[i], comp[i]] += values[:, i]
@@ -106,4 +123,5 @@ def decode(name, sections):
         rot[k][flip] *= -1
     pos = pos * (2.0 ** -pos_exp)[None, :, None]
 
-    return Clip(name, fps, frames, hashes, rot[key_of_frame], pos[key_of_frame])
+    scl = scl / 4096.0
+    return Clip(name, fps, frames, hashes, rot[key_of_frame], pos[key_of_frame], scl[key_of_frame])
