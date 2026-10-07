@@ -35,6 +35,46 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: the grenade windup and throw arc, the guns' aim poses, offscreen demos
+
+The two "not played yet" items from the hip-fire entry.
+
+### Known (the user's install)
+- **Throw input:** the Shatterbomb's trigger is `kCookedSingleShot`. The game's PC prompt is
+  "Hold [Fire] Throw Arc, Release [Fire] Throw".
+- **Windup clips:** while the button is held, Ratchet's animset plays
+  `weapon_glove_windup(_partial)` (the Strafe_Fire_Loop driver), both additive.
+- **Aim offsets:** while strafing, the animset layers additive aim-offset clips, chosen by grip
+  and speed:
+  - pistol: `strafe_one_hand_{idle,run}_aim_{vertical,horizontal}`;
+  - wrench/glove: `strafe_wrench_*`.
+  - Each clip has 21 poses with the middle one neutral.
+  - Posing the skeleton with each frame shows the pistol arm reaching +87° up and 45° down
+    (vertical clip), and -64° to +96° sideways (horizontal clip).
+
+### Built
+- **Hold-to-throw:**
+  - `libarsenal::Trigger::Cooked`: holding winds the shot up (`Weapon::cooking`), and it leaves
+    on release. The Shatterbomb loads it from its config.
+  - While held, the sandbox draws the throw arc as a thick dashed line with a ring where it
+    lands. It also plays the windup layer: whole-body standing, upper-body moving.
+- **Aim poses:** while aiming or firing, the aim-offset layers bend the arm and upper body toward
+  the crosshair. They scrub the poses by the angle up/down and to the side of his facing,
+  standing or running, for the pistol grip and the wrench/glove grip.
+- **Offscreen demos:**
+  - Demo runs render into an offscreen image instead of the window, so screenshots and
+    recordings work while the window is minimised or behind a game. The window doesn't take
+    focus.
+  - Every demo run steps time exactly 1/60 s per frame.
+  - A grenade's release no longer steps the weapon a second time; with a release-fired
+    trigger, that would have thrown twice.
+
+### Derived or assumed
+- **Pose ranges:** the aim poses span 90° up, 45° down and 90° to each side, read off the
+  pistol's measured reach. The game's own parameter ranges weren't decoded, and the
+  wrench/glove poses are assumed to use the same ranges.
+- **Arc look:** the arc's colour and style are ours.
+
 ## 2026-10-07: firing while moving, the game's turn, aim speeds and the grenade throws
 
 Follow-up to the playtest fixes. The reports were "holding S while shooting just snaps Ratchet

@@ -80,7 +80,7 @@ cargo run -p sandbox
 | Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide |
 | Shift | Dash (on the ground or once in the air) |
 | 1 / 2 / 3 | OmniWrench / Burst Pistol / Shatterbomb |
-| Left mouse | Wrench out: swing (while aiming: throw). Gun out: fire (where the crosshair points) |
+| Left mouse | Wrench out: swing (while aiming: throw). Gun out: fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
 | Right mouse | Aim, with any weapon (aim mode: strafe at the game's aim pace, camera over the shoulder). Swinging while aiming throws the wrench, as in the game ("Hold Aim and Melee to Throw Wrench"), also in the air. Firing without aiming strafes too, at run speed, while the gun fires |
 | E | Swing the wrench: press again during a swing, or just after it, for the next hit (3-hit combo, with a short rest after the third); in the air it's the Hyper-Strike; while aiming it throws |
 | Q | Throw the wrench along the camera in one press (the game's optional "Melee Throw" shortcut); it comes back to your hand |

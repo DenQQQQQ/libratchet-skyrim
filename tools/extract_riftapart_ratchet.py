@@ -411,6 +411,19 @@ PRESETS = {
             "grenade_throw": "weapon_glove_throw_underhand_hero_ratchet",
             "grenade_throw_arm": "weapon_glove_throw_underhand_partial_hero_ratchet",
             "glove_idle": "weapon_glove_idle_hero_ratchet",
+            # Holding the fire button winds a grenade throw up (the game's Strafe_Fire_Loop).
+            "grenade_windup": "weapon_glove_windup_hero_ratchet",
+            "grenade_windup_arm": "weapon_glove_windup_partial_hero_ratchet",
+            # Aim offsets (additive, 21 poses scrubbed by the aim angle): up/down and left/right,
+            # standing and running, for the one-handed grip and the wrench/glove grip.
+            "aim_pistol_v": "strafe_one_hand_idle_aim_vertical_hero_ratchet",
+            "aim_pistol_h": "strafe_one_hand_idle_aim_horizontal_hero_ratchet",
+            "aim_pistol_run_v": "strafe_one_hand_run_aim_vertical_hero_ratchet",
+            "aim_pistol_run_h": "strafe_one_hand_run_aim_horizontal_hero_ratchet",
+            "aim_wrench_v": "strafe_wrench_idle_aim_vertical_hero_ratchet",
+            "aim_wrench_h": "strafe_wrench_idle_aim_horizontal_hero_ratchet",
+            "aim_wrench_run_v": "strafe_wrench_run_aim_vertical_hero_ratchet",
+            "aim_wrench_run_h": "strafe_wrench_run_aim_horizontal_hero_ratchet",
             # Strafing with the wrench or the glove in hand (aiming a throw).
             "wrench_aim_idle": "strafe_wrench_idle_hero_ratchet",
             "wrench_strafe_n": "strafe_wrench_run_n_hero_ratchet",

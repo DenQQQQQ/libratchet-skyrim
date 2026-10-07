@@ -11,8 +11,12 @@ use std::path::Path;
 pub enum Trigger {
     /// Fires for as long as the trigger is held (`kAutoShot`).
     Auto,
-    /// One shot per press (`kSingleShot`, `kCookedSingleShot`).
+    /// One shot per press (`kSingleShot`).
     Single,
+    /// Holding the trigger winds the shot up (the host shows the throw arc); it leaves on
+    /// release (`kCookedSingleShot` on keyboard and mouse: "Hold [Fire] Throw Arc, Release
+    /// [Fire] Throw").
+    Cooked,
 }
 
 /// How a shot flies.
@@ -214,6 +218,7 @@ impl WeaponParams {
         p.name = w["WeaponName"].as_str().unwrap_or(&base.name).to_string();
         p.trigger = match trigger["TriggerType"].as_str() {
             Some("kAutoShot") => Trigger::Auto,
+            Some("kCookedSingleShot") => Trigger::Cooked,
             Some(_) => Trigger::Single,
             None => base.trigger,
         };

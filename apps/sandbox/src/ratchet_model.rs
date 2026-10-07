@@ -77,6 +77,17 @@ const CATCH_WEIGHT: f32 = 6.0;
 /// The game's grenade throws (underhand, additive), layered over whatever Ratchet does: the
 /// whole-body one standing still, the upper-body one on the move or in the air.
 const GRENADE_LAYERS: [&str; 2] = ["grenade_throw_additive", "grenade_throw_arm_additive"];
+/// Winding a grenade throw up while the fire button is held (the same two versions).
+const WINDUP_LAYERS: [&str; 2] = ["grenade_windup_additive", "grenade_windup_arm_additive"];
+/// The aim offsets (additive, 21 poses scrubbed by the aim angle): one-handed and wrench/glove
+/// grip, standing and running, each up/down (v) and left/right (h).
+const AIM_LAYERS: [&str; 8] = ["aim_pistol_v_additive", "aim_pistol_h_additive", "aim_pistol_run_v_additive", "aim_pistol_run_h_additive", "aim_wrench_v_additive", "aim_wrench_h_additive", "aim_wrench_run_v_additive", "aim_wrench_run_h_additive"];
+/// Aim angles at the first and last pose (degrees). The middle pose aims straight ahead. Measured
+/// from the pistol's poses (its arm reaches +87°/-45° and -64°/+96°); the game's own
+/// parameter ranges weren't decoded, and the wrench/glove poses are assumed to match.
+const AIM_UP: f32 = 90.0;
+const AIM_DOWN: f32 = 45.0;
+const AIM_SIDE: f32 = 90.0;
 /// Strafing while aiming, by direction relative to where Ratchet faces (clockwise from ahead).
 const STRAFE_CLIPS: &[&str] = &["strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw"];
 /// The walking versions (aim mode's pace).
@@ -150,6 +161,12 @@ pub struct Rig {
     grenade_layers: [Option<(AnimationNodeIndex, f32)>; 2],
     grenade_time: Option<(usize, f32)>,
     grenades_seen: u32,
+    /// The windup layers, and the one playing with its weight.
+    windup_layers: [Option<AnimationNodeIndex>; 2],
+    windup: Option<(usize, f32)>,
+    /// The aim-offset layers (see AIM_LAYERS) and how far they're faded in.
+    aim_layers: [Option<(AnimationNodeIndex, f32)>; 8],
+    aim_weight: f32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -318,6 +335,10 @@ fn on_ready(
         catches_seen: 0,
         grenade_layers: [None, None],
         grenade_time: None,
+        windup_layers: [None, None],
+        windup: None,
+        aim_layers: [None; 8],
+        aim_weight: 0.0,
         grenades_seen: 0,
         lower_body,
         idle_time: 0.0,
@@ -373,6 +394,17 @@ fn setup_clips(
         if let Some(clip) = gltf.named_animations.get(*name) {
             let duration = clip_assets.get(clip).map_or(0.5, |c| c.duration());
             rig.grenade_layers[i] = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
+        }
+    }
+    for (i, name) in WINDUP_LAYERS.iter().enumerate() {
+        if let Some(clip) = gltf.named_animations.get(*name) {
+            rig.windup_layers[i] = Some(graph.add_clip(clip.clone(), 1.0, layers));
+        }
+    }
+    for (i, name) in AIM_LAYERS.iter().enumerate() {
+        if let Some(clip) = gltf.named_animations.get(*name) {
+            let duration = clip_assets.get(clip).map_or(0.67, |c| c.duration());
+            rig.aim_layers[i] = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
         }
     }
     let layer = THROW_LAYER;
@@ -489,6 +521,72 @@ fn play_clips(
                 active.set_weight(weight);
             }
             rig.grenade_time = Some((which, t));
+        }
+    }
+
+    // Winding a grenade throw up while the fire button is held: the windup plays once and holds
+    // its last pose; the throw takes over from it.
+    let cooking = arsenal.as_ref().is_some_and(|a| a.cooking);
+    let throwing = rig.grenade_time.is_some_and(|(_, t)| t < 0.05);
+    match rig.windup {
+        None if cooking && !throwing => {
+            let which = if standing { 0 } else { 1 };
+            if let Some(node) = rig.windup_layers[which] {
+                player.start(node).set_weight(0.0);
+                rig.windup = Some((which, 0.0));
+            }
+        }
+        Some((which, weight)) => {
+            let on = cooking && !throwing;
+            let weight = if on { (weight + time.delta_secs() / LAYER_FADE_IN).min(1.0) } else if throwing { 0.0 } else { weight - time.delta_secs() / 0.12 };
+            if let Some(node) = rig.windup_layers[which] {
+                if weight <= 0.0 {
+                    player.stop(node);
+                    rig.windup = None;
+                } else {
+                    if let Some(active) = player.animation_mut(node) {
+                        active.set_weight(weight);
+                    }
+                    rig.windup = Some((which, weight));
+                }
+            }
+        }
+        None => {}
+    }
+
+    // Aim offsets while strafing (aiming, or a gun firing): the upper body bends toward what the
+    // crosshair points at, by scrubbing the poses with the angle up/down and to the side of his
+    // facing.
+    let aiming_now = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && (a.trigger || a.stance > 0.0)));
+    let fade = time.delta_secs() / LAYER_FADE_IN;
+    rig.aim_weight = if aiming_now { (rig.aim_weight + fade).min(1.0) } else { (rig.aim_weight - fade).max(0.0) };
+    let (pitch, side) = arsenal.as_ref().map_or((0.0, 0.0), |a| {
+        let d = a.aim_target - (p.feet + Vec3::Y * 0.85 * settings.scale);
+        let yaw = d.x.atan2(d.z) - p.sim.facing_yaw();
+        let side = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        (d.y.atan2(Vec2::new(d.x, d.z).length()).to_degrees(), side.to_degrees())
+    });
+    let pistol_grip = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
+    let running = flat_speed > 0.6;
+    let active = (if pistol_grip { 0 } else { 4 }) + if running { 2 } else { 0 };
+    for (i, layer) in rig.aim_layers.iter().enumerate() {
+        let Some((node, duration)) = *layer else { continue };
+        let weight = if i == active || i == active + 1 { rig.aim_weight } else { 0.0 };
+        if weight <= 0.0 {
+            if player.animation(node).is_some() {
+                player.stop(node);
+            }
+            continue;
+        }
+        let half = duration / 2.0;
+        let t = if i % 2 == 0 {
+            if pitch >= 0.0 { half * (1.0 - pitch / AIM_UP) } else { half * (1.0 - pitch / AIM_DOWN) }
+        } else {
+            half * (1.0 + side / AIM_SIDE)
+        };
+        let anim = if player.animation(node).is_some() { player.animation_mut(node) } else { Some(player.start(node).repeat()) };
+        if let Some(anim) = anim {
+            anim.set_speed(0.0).seek_to(t.clamp(0.0, duration * 0.999)).set_weight(weight);
         }
     }
 

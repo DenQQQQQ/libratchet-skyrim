@@ -76,6 +76,9 @@ pub struct Arsenal {
     pub throws: u32,
     /// Seconds left of strafing after the newest shot.
     pub stance: f32,
+    /// A grenade throw winding up (the fire button held), and what the crosshair points at.
+    pub cooking: bool,
+    pub aim_target: Vec3,
     /// When a thrown grenade leaves the hand: standing still, and on the move or in the air.
     grenade_release: (f32, f32),
     pending: Option<f32>,
@@ -127,11 +130,21 @@ struct Blast {
     life: f32,
 }
 
+/// The throw arc's line style: thick and bright, drawn over the world.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct ArcGizmos;
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<ScriptedArsenal>()
+        .init_gizmo_group::<ArcGizmos>()
+        .add_systems(Startup, |mut store: ResMut<GizmoConfigStore>| {
+            let (config, _) = store.config_mut::<ArcGizmos>();
+            config.line.width = 5.0;
+            config.depth_bias = -0.5;
+        })
         .add_systems(Startup, setup.after(crate::setup))
         .add_systems(FixedUpdate, (fire, fly_bolts, fly_grenades).chain().after(simulate))
-        .add_systems(Update, (controls, gun_clips, gun_visibility, blasts).chain());
+        .add_systems(Update, (controls, gun_clips, gun_visibility, blasts, throw_arc).chain());
 }
 
 fn load_weapon(settings: &Settings, file: &str, base: WeaponParams) -> (WeaponParams, String) {
@@ -170,6 +183,8 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
         shots: 0,
         throws: 0,
         stance: 0.0,
+        cooking: false,
+        aim_target: Vec3::ZERO,
         grenade_release: grenade_release(&settings),
         pending: None,
         refill: 0.0,
@@ -351,6 +366,7 @@ fn fire(
     };
     let muzzle = muzzle_position(&arsenal, &globals, p, settings.scale);
     let aim = Aim { muzzle, target, aimed: arsenal.aiming };
+    arsenal.aim_target = target;
     let trigger = arsenal.trigger && !busy;
 
     // A thrown grenade leaves the hand a moment into the throw.
@@ -359,7 +375,7 @@ fn fire(
         if *t <= 0.0 {
             arsenal.pending = None;
             arsenal.stance = STRAFE_AFTER_SHOT;
-            if let Some(shot) = arsenal.grenade.step(0.0, true, &aim).into_iter().next().or_else(|| last_grenade_shot(&arsenal, &aim)) {
+            if let Some(shot) = last_grenade_shot(&arsenal, &aim) {
                 let proj = Projectile::new(&shot, &arsenal.grenade.params().projectile);
                 let light = art.available.then(|| art.grenade_light(settings.scale));
                 spawn_grenade(&mut commands, &models, &mut meshes, &mut materials, proj, light, settings.scale);
@@ -426,8 +442,10 @@ fn fire(
             }
         }
         Slot::Shatterbomb => {
+            // Holding the fire button winds the throw up (and shows the arc); it goes on release.
             // The weapon decides (rate, ammo); the grenade itself is spawned at release.
             let shots = arsenal.grenade.step(dt, trigger, &aim);
+            arsenal.cooking = arsenal.grenade.cooking();
             if !shots.is_empty() && arsenal.pending.is_none() {
                 // The whole-body throw standing still, the upper-body one on the move or in the
                 // air (ratchet_model picks the same).
@@ -440,6 +458,7 @@ fn fire(
         Slot::Wrench => {
             arsenal.pistol.step(dt, false, &aim);
             arsenal.grenade.step(dt, false, &aim);
+            arsenal.cooking = false;
         }
     }
     // Refill an empty weapon after a moment.
@@ -458,6 +477,43 @@ fn fire(
 
 /// The weapon already spent the ammo when the throw started; at release, aim again from the
 /// hand (this re-solves the lob for where the hand is now).
+/// While a grenade throw winds up: where it would fly, as a dashed arc with a ring where it
+/// lands (the game draws a throw arc while the fire button is held).
+fn throw_arc(
+    settings: Res<Settings>,
+    level: Res<Level>,
+    arsenal: Option<Res<Arsenal>>,
+    globals: Query<&GlobalTransform>,
+    players: Query<&Player>,
+    mut gizmos: Gizmos<ArcGizmos>,
+) {
+    let (Some(arsenal), Ok(p)) = (arsenal, players.single()) else { return };
+    if !arsenal.cooking || arsenal.slot != Slot::Shatterbomb {
+        return;
+    }
+    let muzzle = muzzle_position(&arsenal, &globals, p, settings.scale);
+    let aim = Aim { muzzle, target: arsenal.aim_target, aimed: arsenal.aiming };
+    let Some(shot) = last_grenade_shot(&arsenal, &aim) else { return };
+    let g = Vec3::new(0.0, -arsenal.grenade.params().projectile.gravity, 0.0);
+    let color = Color::srgb(0.35, 0.8, 1.0);
+    let step = 0.03;
+    let mut prev = shot.origin;
+    for i in 1..200 {
+        let t = i as f32 * step;
+        let at = shot.origin + shot.velocity * t + 0.5 * g * t * t;
+        let landed = shot.velocity.y + g.y * t < 0.0 && ground_distance(&level, at, 0.05).is_none_or(|d| d <= 0.05);
+        if i % 2 == 1 {
+            gizmos.line(prev, at, color);
+        }
+        if landed {
+            let radius = arsenal.grenade.params().explosion.as_ref().map_or(1.0, |e| e.inner_radius);
+            gizmos.circle(Isometry3d::new(at + Vec3::Y * 0.02, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), radius, color);
+            break;
+        }
+        prev = at;
+    }
+}
+
 fn last_grenade_shot(arsenal: &Arsenal, aim: &Aim) -> Option<libarsenal::Shot> {
     let w = arsenal.grenade.params();
     let to = aim.target - aim.muzzle;

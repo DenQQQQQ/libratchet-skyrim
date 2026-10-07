@@ -417,15 +417,40 @@ fn combat() -> Vec<Act> {
         Act::AimAt(Some(arena + Vec3::new(8.0, 0.3, 1.6))),
         Act::Watch { focus: arena + Vec3::new(3.5, 0.6, 3.5), yaw: 0.0, pitch: 0.12, distance: 7.0 },
         hold(0.4, Vec2::ZERO, false),
-        hold(0.6, x * 0.45, false),
+        hold(0.3, x * 0.45, false),
+        // Held, it winds up and shows the arc; released, it goes.
         Act::Gun { trigger: true, aim: false },
+        hold(0.6, x * 0.45, false),
+        Act::Shot("48_shatterbomb_windup"),
         hold(0.1, x * 0.45, false),
         Act::Gun { trigger: false, aim: false },
         hold(0.15, x * 0.45, false),
-        Act::Shot("48_walking_shatterbomb"),
+        Act::Shot("48b_walking_shatterbomb"),
         hold(1.2, x * 0.45, false),
         hold(1.0, Vec2::ZERO, false),
         Act::AimAt(None),
+        // Aim offsets: the pistol aimed high, then low; his arm and upper body follow.
+        Act::Slot(Slot::BurstPistol),
+        Act::Teleport(arena + Vec3::new(-3.0, 0.0, 6.0)),
+        hold(0.12, x, false),
+        Act::Follow { yaw: behind, pitch: 0.1, distance: 4.0 },
+        Act::Watch { focus: arena + Vec3::new(-3.0, 0.8, 6.0), yaw: 0.3, pitch: 0.05, distance: 3.2 },
+        Act::AimAt(Some(arena + Vec3::new(4.0, 6.0, 6.0))),
+        Act::Gun { trigger: false, aim: true },
+        hold(0.8, Vec2::ZERO, false),
+        Act::Shot("4a_aim_high"),
+        hold(0.1, Vec2::ZERO, false),
+        Act::AimAt(Some(arena + Vec3::new(0.0, -2.0, 6.0))),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Shot("4b_aim_low"),
+        hold(0.1, Vec2::ZERO, false),
+        Act::AimAt(Some(arena + Vec3::new(4.0, 0.9, 6.0))),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Shot("4c_aim_level"),
+        hold(0.1, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        Act::AimAt(None),
+        hold(0.4, Vec2::ZERO, false),
         Act::Slot(Slot::Wrench),
         Act::Follow { yaw: 0.9, pitch: 0.2, distance: 9.0 },
     ]);
@@ -620,14 +645,15 @@ fn next(demo: &mut Demo) {
 
 /// Saves every other frame (30 fps of 60 fps virtual time) as PNG when recording, and takes the
 /// script's screenshots on the frames in between.
-fn record_frames(mut demo: ResMut<Demo>, mut commands: Commands) {
+fn record_frames(mut demo: ResMut<Demo>, view: Res<crate::DemoView>, mut commands: Commands) {
     demo.frame += 1;
+    let shot = || view.0.clone().map_or_else(Screenshot::primary_window, Screenshot::image);
     if let Some(dir) = demo.record.clone()
         && demo.frame % 2 == 0
     {
         let path = dir.join(format!("f_{:05}.png", demo.frame / 2));
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+        commands.spawn(shot()).observe(save_to_disk(path));
     } else if let Some(path) = demo.pending_shot.take() {
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+        commands.spawn(shot()).observe(save_to_disk(path));
     }
 }

@@ -155,6 +155,21 @@ fn grenades_aim_no_further_than_their_range() {
 }
 
 #[test]
+fn cooked_shots_wind_up_while_held_and_leave_on_release() {
+    let mut p = WeaponParams::grenade();
+    p.trigger = libarsenal::Trigger::Cooked;
+    let mut w = Weapon::new(p);
+    let a = Aim { muzzle: Vec3::ZERO, target: Vec3::new(0.0, 0.0, 10.0), aimed: false };
+    for _ in 0..30 {
+        assert!(w.step(DT, true, &a).is_empty());
+        assert!(w.cooking());
+    }
+    assert_eq!(w.step(DT, false, &a).len(), 1);
+    assert!(!w.cooking());
+    assert!(w.step(DT, false, &a).is_empty());
+}
+
+#[test]
 fn explosions_fall_off_with_distance() {
     let e = WeaponParams::grenade().explosion.unwrap();
     assert_eq!(e.damage_at(0.5), e.inner_damage);
@@ -192,6 +207,7 @@ fn loads_riftapart_weapon_configs_when_present() {
     assert_eq!(bp.trigger, libarsenal::Trigger::Auto);
     assert!(!bp.lob && bp.projectile.gravity == 0.0 && bp.explosion.is_none());
     assert!(sb.lob && sb.explosion.is_some() && sb.projectile.gravity > 0.0);
+    assert_eq!(sb.trigger, libarsenal::Trigger::Cooked);
     // The level numbers win over the base ones.
     assert!(bp.ammo > 60 && bp.damage > 1.0);
     // The pistol throws out shells; the grenade doesn't.

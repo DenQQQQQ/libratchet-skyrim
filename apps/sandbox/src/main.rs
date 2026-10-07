@@ -41,6 +41,11 @@ const STEP_HEIGHT: f32 = 0.35;
 const DRAGONBORN_SCALE: f32 = 1.55;
 const TRAIL_LEN: usize = 4000;
 
+/// Demo runs draw into this image instead of the window, so their screenshots and recordings
+/// work whatever happens to the window (minimised, behind a game).
+#[derive(Resource, Default)]
+pub struct DemoView(pub Option<Handle<Image>>);
+
 #[derive(Resource)]
 pub struct Settings {
     base: Tuning,
@@ -175,6 +180,8 @@ fn main() {
                 primary_window: Some(Window {
                     title: "libratchet sandbox".into(),
                     resolution: WindowResolution::from(resolution),
+                    // A demo runs offscreen (DemoView); its window shouldn't take focus.
+                    focused: !demo,
                     ..default()
                 }),
                 ..default()
@@ -187,6 +194,7 @@ fn main() {
     // that comes out as sRGB (0.55, 0.7, 0.9) after it.
     .insert_resource(ClearColor(Color::linear_rgb(0.34, 0.73, 1.75)))
     .insert_resource(Settings { base, scale, configs_dir, load_note, model_dir })
+    .insert_resource(DemoView(demo.then(Handle::default)))
     .insert_resource(CameraRig {
         yaw: 0.6,
         pitch: 0.35,
@@ -213,9 +221,11 @@ fn main() {
         std::fs::create_dir_all(&out).ok();
         if let Some(dir) = &record {
             std::fs::create_dir_all(dir).ok();
-            // Every frame advances exactly 1/60 s, so saved frames play back at real speed.
-            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
         }
+        // Every frame advances exactly 1/60 s: saved frames play back at real speed, and a
+        // screenshot shows the moment it was asked for even when frames come slowly (another
+        // game on the GPU, a minimised window).
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
         demo::add(&mut app, out, record, arg("--demo-part").as_deref());
     }
     app.run();
@@ -239,6 +249,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     settings: Res<Settings>,
     asset_server: Res<AssetServer>,
+    mut view: ResMut<DemoView>,
 ) {
     // A sky-to-ground gradient as environment light, so metal (Clank!) has something to reflect.
     let mut sky = EnvironmentMapLight::hemispherical_gradient(
@@ -250,13 +261,19 @@ fn setup(
     sky.intensity = 1500.0;
     // HDR with a light bloom, so bright effects (muzzle flashes, tracers, explosions) glow the
     // way they do in the game.
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         bevy::camera::Hdr,
         bevy::post_process::bloom::Bloom { intensity: 0.1, ..bevy::post_process::bloom::Bloom::NATURAL },
         sky,
         Transform::from_xyz(-6.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    if view.0.is_some() {
+        let format = bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb;
+        let target = images.add(Image::new_target_texture(1280, 720, format, None));
+        camera.insert((bevy::camera::RenderTarget::Image(target.clone().into()), IsDefaultUiCamera));
+        view.0 = Some(target);
+    }
     commands.spawn((
         DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),

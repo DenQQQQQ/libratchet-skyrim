@@ -59,6 +59,11 @@ impl Weapon {
         self.ammo = self.params.ammo;
     }
 
+    /// A cooked shot is winding up: the trigger is held and there's ammo for it.
+    pub fn cooking(&self) -> bool {
+        self.params.trigger == Trigger::Cooked && self.prev_trigger && self.ammo >= self.params.ammo_cost
+    }
+
     /// Current spread cone half-angle, degrees.
     pub fn spread(&self) -> f32 {
         self.spread
@@ -67,6 +72,7 @@ impl Weapon {
     /// Advances one tick. Returns the shots fired (at most one per tick at sane rates).
     pub fn step(&mut self, dt: f32, trigger: bool, aim: &Aim) -> Vec<Shot> {
         let pressed = trigger && !self.prev_trigger;
+        let released = !trigger && self.prev_trigger;
         self.prev_trigger = trigger;
         self.cooldown = (self.cooldown - dt).max(0.0);
         self.since_shot += dt;
@@ -80,6 +86,7 @@ impl Weapon {
         let wants = match self.params.trigger {
             Trigger::Auto => trigger,
             Trigger::Single => pressed,
+            Trigger::Cooked => released,
         };
         if !wants || self.cooldown > 0.0 || self.ammo < self.params.ammo_cost {
             return vec![];
