@@ -35,6 +35,37 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: the game's test dummy as the combat dummies
+
+The capsule dummies are replaced by the game's test-dummy enemy.
+
+### Known (the user's install)
+- **The model.** `characters/enemy/enm_testdummy_ps4` is a 1.9 m robot balanced on a glowing
+  ball. Its materials are the body, a glass shell, an emissive inner part and the energy core
+  (teal (0, 1, 0.72), intensity 2).
+- **Its animation set:**
+  - passive and engaged idles (the engaged one holds the arms straight out);
+  - get-hit, knockback (two), knockdown, three falls backward, a twitch;
+  - taunt, cheers and boos;
+  - turns, runs, and attacks (fire, spray, melee).
+
+### Ours (assumed or simplified)
+- **Which reaction plays when.**
+  - A hit plays get-hit. Knocked flying (over 3 m/s) plays knockback.
+  - Out of health plays a fall backward. Otherwise the passive idle.
+- **Facing.** They turn to face Ratchet at 4 rad/s.
+- **Idle speeds.** They vary a little, so the dummies drift out of step.
+- **Hit volume.** Matched to the model's height.
+- **Arena.** The front dummies are spread out for the bigger model.
+
+### Built
+- **Converter:** a `testdummy` preset (model, glow, six clips).
+- **Sandbox, `dummy_model.rs`:** wears the model on each dummy and picks its clips.
+- **Sandbox, `combat.rs`:**
+  - Dummies have a height, and can be "posed" (no physics lean or fall-over).
+  - `knock` returns chest-height hit points.
+- **Video:** `recordings/test_dummies_wrench_and_guns.mp4`.
+
 ## 2026-10-07: the OmniWrench's effects, from the game's data; F1 hides the debug overlay
 
 The wrench had no effects at all. The user asked for F1 to hide the debug info so they can

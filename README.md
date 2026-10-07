@@ -50,7 +50,8 @@ pip install pygltflib pillow numpy texture2ddecoder lz4
 python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
 ```
 
-That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb` and `shatterbomb.glb`.
+That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatterbomb.glb` and
+`testdummy.glb` (the game's test-dummy robot, which the combat dummies wear).
 The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
 double jump, fall, glide, land, dash, air-dash, wrench and gun clips, Clank rides on his back
 (backpack idle, heli-pack while gliding), and the OmniWrench and the Burst Pistol appear in his

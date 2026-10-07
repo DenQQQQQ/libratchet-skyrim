@@ -339,8 +339,8 @@ fn weapon_moves() -> Vec<Act> {
     let behind = std::f32::consts::PI;
     // A camera on his right (gun) side, and dummies to aim at from there.
     let right_side = -std::f32::consts::FRAC_PI_2;
-    let dummy = spots::ARENA + Vec3::new(8.0, 0.6, -1.4);
-    let far_dummy = spots::ARENA + Vec3::new(8.0, 0.3, 1.4);
+    let dummy = spots::ARENA + Vec3::new(8.0, 1.1, -1.6);
+    let far_dummy = spots::ARENA + Vec3::new(8.0, 0.3, 1.6);
     vec![
         Act::ClearTrail,
         Act::Teleport(spot),

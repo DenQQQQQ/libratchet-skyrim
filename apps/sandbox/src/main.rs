@@ -15,6 +15,7 @@ mod camera;
 mod clank;
 mod combat;
 mod demo;
+mod dummy_model;
 mod level;
 mod ratchet_model;
 mod vfx;
@@ -180,7 +181,7 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin, weapons::plugin, vfx::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     // The sky: with HDR the clear colour goes through the tonemapper too, so this is the colour
     // that comes out as sRGB (0.55, 0.7, 0.9) after it.

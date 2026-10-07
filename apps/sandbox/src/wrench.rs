@@ -2,7 +2,7 @@
 //! (`RT_handle_bound`, the game's gun-attach locator) while he swings (playing its own squash-and-stretch clips in time with his), and thrown
 //! with right mouse / Q (libratchet's `WrenchThrow`), knocking back the first dummy it meets.
 
-use crate::combat::{Dummy, Hits, hit_point, knock};
+use crate::combat::{Dummy, Hits, knock};
 use crate::level::Level;
 use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, Player, Settings, simulate};
@@ -221,10 +221,9 @@ fn fly(
     let hit_at = knock(&mut dummies, pos, throw.damage_radius, pos - flight.direction(), 2.0 * s, 1.0 * s, throw.damage, |d| d.pos.y < 0.5 && hit_ready(d));
     let n = hit_at.len();
     if art.available {
-        for at in &hit_at {
+        for &(at, floor) in &hit_at {
             let from = pos - flight.direction();
-            let p = hit_point(*at, from, 0.7, s);
-            art.wrench_hit(&mut commands, &mut materials, &mut rng, p, (p - from).with_y(0.0).normalize_or(Vec3::X), Some(at.y), s);
+            art.wrench_hit(&mut commands, &mut materials, &mut rng, at, (at - from).with_y(0.0).normalize_or(Vec3::X), Some(floor), s);
         }
     }
     if n > 0 {

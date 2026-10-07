@@ -33,12 +33,32 @@ pub struct Dummy {
     /// Seconds left lying down after running out of health.
     down: f32,
     fall_axis: Vec3,
+    /// How tall its hit volume is.
+    height: f32,
+    /// It wears the game's model, which plays its own reactions (no physics lean or fall).
+    posed: bool,
 }
 
 impl Dummy {
     /// Seconds since it was last hit (up to the stun time).
     pub fn since_hit(&self) -> f32 {
         STUN - self.stunned
+    }
+    /// Seconds of stun left (it jumps back up with each hit).
+    pub fn stun(&self) -> f32 {
+        self.stunned
+    }
+    /// Out of health and lying down.
+    pub fn is_down(&self) -> bool {
+        self.down > 0.0
+    }
+    pub fn velocity(&self) -> Vec3 {
+        self.vel
+    }
+    /// Takes on a model `height` tall that animates its own reactions.
+    pub fn wear_model(&mut self, height: f32) {
+        self.height = height;
+        self.posed = true;
     }
 }
 
@@ -57,9 +77,9 @@ pub fn plugin(app: &mut App) {
 
 /// Dummies in the arena, Ratchet starting at `spots::ARENA` facing +X: three within the first
 /// swing, a ring for the Hyper-Strike 8 m on, and one far out for the throw.
-pub const DUMMY_SPOTS: &[(f32, f32)] = &[(1.6, 0.0), (1.5, 0.9), (1.5, -0.9), (9.5, 0.0), (8.0, 1.4), (8.0, -1.4), (6.6, 0.6), (22.0, 4.0)];
+pub const DUMMY_SPOTS: &[(f32, f32)] = &[(1.8, 0.0), (1.6, 1.3), (1.6, -1.3), (9.5, 0.0), (8.0, 1.6), (8.0, -1.6), (6.4, 0.6), (22.0, 4.0)];
 
-fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let body = meshes.add(Capsule3d::new(DUMMY_RADIUS, DUMMY_HEIGHT - 2.0 * DUMMY_RADIUS));
     let band = meshes.add(Cylinder::new(DUMMY_RADIUS * 1.05, 0.12));
     let base = meshes.add(Cylinder::new(0.4, 0.08));
@@ -70,7 +90,19 @@ fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
         let mat = materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.72, 0.62), perceptual_roughness: 0.7, ..default() });
         commands
             .spawn((
-                Dummy { home, pos: home, vel: Vec3::ZERO, stunned: 0.0, flash: 0.0, tilt: Vec3::ZERO, health: DUMMY_HEALTH, down: 0.0, fall_axis: Vec3::X },
+                Dummy {
+                    home,
+                    pos: home,
+                    vel: Vec3::ZERO,
+                    stunned: 0.0,
+                    flash: 0.0,
+                    tilt: Vec3::ZERO,
+                    health: DUMMY_HEALTH,
+                    down: 0.0,
+                    fall_axis: Vec3::X,
+                    height: DUMMY_HEIGHT,
+                    posed: false,
+                },
                 Transform::from_translation(home),
                 Visibility::default(),
             ))
@@ -95,23 +127,23 @@ pub fn knock(
     lift: f32,
     damage: f32,
     filter: impl Fn(&Dummy) -> bool,
-) -> Vec<Vec3> {
+) -> Vec<(Vec3, f32)> {
     let mut hit_at = vec![];
     for mut d in dummies.iter_mut() {
         let flat = Vec3::new(d.pos.x - center.x, 0.0, d.pos.z - center.z);
         if d.down > 0.0 || flat.length() > radius + DUMMY_RADIUS || !filter(&d) {
             continue;
         }
-        hit_at.push(d.pos);
+        hit_at.push((hit_point(&d, from), d.pos.y));
         hit(&mut d, from, knockback, lift, damage);
     }
     hit_at
 }
 
-/// Where a blow from `from` lands on a dummy standing at `pos`: its near side, at `height`.
-pub fn hit_point(pos: Vec3, from: Vec3, height: f32, scale: f32) -> Vec3 {
-    let toward = Vec3::new(from.x - pos.x, 0.0, from.z - pos.z).normalize_or(Vec3::X);
-    pos + Vec3::Y * height * scale + toward * DUMMY_RADIUS * scale
+/// Where a blow from `from` lands on a dummy: its near side, at chest height.
+fn hit_point(d: &Dummy, from: Vec3) -> Vec3 {
+    let toward = Vec3::new(from.x - d.pos.x, 0.0, from.z - d.pos.z).normalize_or(Vec3::X);
+    d.pos + Vec3::Y * d.height * 0.6 + toward * DUMMY_RADIUS
 }
 
 /// One dummy takes a hit from the direction of `from`.
@@ -133,7 +165,7 @@ pub fn dummy_contains(d: &Dummy, p: Vec3, margin: f32) -> bool {
     if d.down > 0.0 {
         return false;
     }
-    let y = (p.y - d.pos.y).clamp(DUMMY_RADIUS, DUMMY_HEIGHT - DUMMY_RADIUS) + d.pos.y;
+    let y = (p.y - d.pos.y).clamp(DUMMY_RADIUS, d.height - DUMMY_RADIUS) + d.pos.y;
     p.distance(Vec3::new(d.pos.x, y, d.pos.z)) <= DUMMY_RADIUS + margin
 }
 
@@ -168,9 +200,8 @@ fn melee_hits(
                 });
                 let n = hit_at.len();
                 if art.available {
-                    for pos in &hit_at {
-                        let at = hit_point(*pos, feet, 0.7, s);
-                        art.wrench_hit(&mut commands, &mut materials, &mut rng, at, (at - feet).with_y(0.0).normalize_or(facing), Some(pos.y), s);
+                    for &(at, floor) in &hit_at {
+                        art.wrench_hit(&mut commands, &mut materials, &mut rng, at, (at - feet).with_y(0.0).normalize_or(facing), Some(floor), s);
                     }
                 }
                 if n > 0 {
@@ -229,8 +260,15 @@ fn dummy_physics(time: Res<Time>, mut dummies: Query<(&mut Dummy, &mut Transform
             d.pos.y = 0.0;
             d.vel.y = 0.0;
         }
-        // Lean with the knockback, or lie flat when down.
-        let lean = if d.down > 0.0 { d.fall_axis * 1.45 } else { Vec3::new(d.vel.z, 0.0, -d.vel.x) * 0.06 };
+        // Lean with the knockback, or lie flat when down (a dummy wearing the game's model plays
+        // its own reactions instead).
+        let lean = if d.posed {
+            Vec3::ZERO
+        } else if d.down > 0.0 {
+            d.fall_axis * 1.45
+        } else {
+            Vec3::new(d.vel.z, 0.0, -d.vel.x) * 0.06
+        };
         d.tilt = d.tilt.lerp(lean, (12.0 * dt).min(1.0));
         tf.translation = d.pos;
         tf.rotation = if d.tilt.length() > 1e-4 { Quat::from_axis_angle(d.tilt.normalize(), d.tilt.length().min(1.5)) } else { Quat::IDENTITY };

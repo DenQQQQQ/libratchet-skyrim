@@ -413,6 +413,24 @@ PRESETS = {
         "clip_dir": "characters/hero/hero_ratchet/animations/",
         "clips": {"fire": "weapon_fire_burstpistol"},
     },
+    "testdummy": {
+        # The game's test-dummy enemy, for the sandbox's combat dummies: its relaxed idle (the
+        # "engaged" one holds the arms straight out) and its hit, knockback, knockdown and death
+        # reactions. Its energy core glows teal (its enm_testdummy_emisscore material's colour).
+        "model": "characters/enemy/enm_testdummy_ps4/enm_testdummy_ps4.model",
+        "out": "testdummy.glb",
+        "glow": [0.0, 1.0, 0.72],
+        "glow_match": ["emisscore"],
+        "clip_dir": "characters/enemy/enm_testdummy_ps4/animations/",
+        "clips": {
+            "idle": "passive_idle_enm_testdummy_ps4",
+            "hit": "engaged_react_get_hit_enm_testdummy_ps4",
+            "knockback": "engaged_react_knockback_enm_testdummy_ps4",
+            "knockdown": "engaged_react_knockdown_enm_testdummy_ps4",
+            "death": "engaged_react_death_back_a_enm_testdummy_ps4",
+            "taunt": "engaged_taunt_a_enm_testdummy_ps4",
+        },
+    },
     "shatterbomb": {
         # The thrown grenade (proto grenade in the game's files).
         "model": "equipment/projectile/proj_protogrenade_grenade/proj_protogrenade_grenade.model",
