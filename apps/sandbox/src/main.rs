@@ -428,7 +428,9 @@ pub fn simulate(
     // strafe, as in the game. While aiming, melee throws the wrench instead of swinging
     // (wrench.rs).
     let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
-    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && (a.trigger || a.stance > 0.0)) {
+    // (A gun put away for a wrench throw doesn't fire, so it doesn't strafe either.)
+    let throwing = wrench.as_ref().is_some_and(|w| w.throwing());
+    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)) {
         input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
         input.aim_mode = aiming;
     }

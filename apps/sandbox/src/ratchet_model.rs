@@ -72,6 +72,16 @@ const LEAN_CLIPS: [(&str, [&str; 2]); 2] = [("run", ["run_lean_left", "run_lean_
 /// It's a pose of those joints only, weighted far over the move clips under it (ours).
 const GLOVE_HAND: &str = "glove_hand";
 const GLOVE_HAND_WEIGHT: f32 = 20.0;
+/// Drawing a weapon (additive, the game's Weapon_Draw driver): for the one-handed gun, the
+/// wrench and the glove, each whole-body (standing) and upper-body (moving).
+const DRAW_LAYERS: [[&str; 2]; 3] = [
+    ["draw_pistol_additive", "draw_pistol_arm_additive"],
+    ["draw_wrench_additive", "draw_wrench_arm_additive"],
+    ["draw_glove_additive", "draw_glove_arm_additive"],
+];
+/// The draw fades in and out over these (the driver's blend times).
+const DRAW_FADE_IN: f32 = 0.15;
+const DRAW_FADE_OUT: f32 = 0.25;
 /// Turn rate (rad/s) at which the run leans fully into the turn (ours).
 const FULL_LEAN_TURN_RATE: f32 = 5.0;
 /// Walk below this speed, run above that one, with some overlap (m/s at Ratchet's size; between
@@ -210,6 +220,12 @@ pub struct Rig {
     /// The glove's hand pose and how far it's faded in.
     glove_hand: Option<AnimationNodeIndex>,
     glove_weight: f32,
+    /// The draw layers (see DRAW_LAYERS), the one playing (grip, which, time), the weapon last
+    /// seen out, and a draw waiting for a swing or a wrench throw to end.
+    draw_layers: [[Option<(AnimationNodeIndex, f32)>; 2]; 3],
+    draw: Option<(usize, usize, f32)>,
+    slot_seen: Option<crate::weapons::Slot>,
+    draw_pending: bool,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -394,6 +410,10 @@ fn on_ready(
         grenades_seen: 0,
         glove_hand: None,
         glove_weight: 0.0,
+        draw_layers: [[None; 2]; 3],
+        draw: None,
+        slot_seen: None,
+        draw_pending: false,
         dash_clip: None,
         lower_body,
         idle_time: 0.0,
@@ -433,6 +453,14 @@ fn setup_clips(
     for (run, names) in LEAN_CLIPS {
         if let [Some(left), Some(right)] = names.map(|n| gltf.named_animations.get(n)) {
             rig.lean_nodes.push((run, [graph.add_clip(left.clone(), 1.0, base), graph.add_clip(right.clone(), 1.0, base)]));
+        }
+    }
+    for (grip, names) in DRAW_LAYERS.iter().enumerate() {
+        for (which, name) in names.iter().enumerate() {
+            if let Some(clip) = gltf.named_animations.get(*name) {
+                let duration = clip_assets.get(clip).map_or(0.93, |c| c.duration());
+                rig.draw_layers[grip][which] = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
+            }
         }
     }
     if let Some(clip) = gltf.named_animations.get(GLOVE_HAND) {
@@ -619,7 +647,8 @@ fn play_clips(
     // crosshair points at, by scrubbing the poses with the angle up/down and to the side of his
     // facing.
     // (Not while dashing: the dash clips are whole-body and the game puts the weapon away.)
-    let aiming_now = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && (a.trigger || a.stance > 0.0)))
+    let throwing = wrench.throwing();
+    let aiming_now = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)))
         && !matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash);
     let fade = time.delta_secs() / LAYER_FADE_IN;
     rig.aim_weight = if aiming_now { (rig.aim_weight + fade).min(1.0) } else { (rig.aim_weight - fade).max(0.0) };
@@ -629,7 +658,7 @@ fn play_clips(
         let side = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         (d.y.atan2(Vec2::new(d.x, d.z).length()).to_degrees(), side.to_degrees())
     });
-    let pistol_grip = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
+    let pistol_grip = !throwing && arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
     let running = flat_speed > 0.6;
     let active = (if pistol_grip { 0 } else { 4 }) + if running { 2 } else { 0 };
     for (i, layer) in rig.aim_layers.iter().enumerate() {
@@ -686,15 +715,52 @@ fn play_clips(
 
     // Aiming (any weapon), or firing a gun and just after: strafing by direction, with the
     // pistol's one-handed set, or the wrench/glove set (standing with the glove, its own idle).
-    let pistol_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
-    let glove_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::Shatterbomb);
-    let carrying = arsenal.as_ref().is_some_and(|a| a.slot != crate::weapons::Slot::BurstPistol);
-    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && (a.trigger || a.stance > 0.0)));
+    // Swinging, and from a wrench throw until the catch, it's the melee grip whatever weapon is
+    // out (a throw is the melee grip's "fire" in the game's animset).
+    let melee_grip = throwing || matches!(state, MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
+    let pistol_out = !melee_grip && arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
+    let glove_out = !melee_grip && arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::Shatterbomb);
+    let carrying = arsenal.is_some() && !pistol_out;
+    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)));
     let (strafe_clips, aim_idle) = match (pistol_out, rig.walking) {
         (true, false) => (STRAFE_CLIPS, "aim_idle"),
         (true, true) => (STRAFE_WALK_CLIPS, "aim_idle"),
         (false, walking) => (if walking { WRENCH_STRAFE_WALK_CLIPS } else { WRENCH_STRAFE_CLIPS }, if glove_out { "glove_idle" } else { "wrench_aim_idle" }),
     };
+
+    // Switching weapons draws the new one: the game's draw for its grip, whole-body standing,
+    // upper-body moving. A switch during a swing (or one that waited for a thrown wrench) draws
+    // once that's over.
+    let slot = arsenal.as_ref().map(|a| a.slot);
+    if slot != rig.slot_seen {
+        rig.draw_pending = rig.slot_seen.is_some();
+        rig.slot_seen = slot;
+    }
+    if rig.draw_pending && !melee_grip {
+        rig.draw_pending = false;
+        let grip = if pistol_out { 0 } else if glove_out { 2 } else { 1 };
+        if let Some((node, _)) = rig.draw_layers[grip][if standing { 0 } else { 1 }] {
+            if let Some((prev, _)) = rig.draw.and_then(|(g, w, _)| rig.draw_layers[g][w]) {
+                player.stop(prev);
+            }
+            player.start(node).set_weight(0.0);
+            rig.draw = Some((grip, if standing { 0 } else { 1 }, 0.0));
+        }
+    }
+    if let Some((g, w, t)) = rig.draw
+        && let Some((node, duration)) = rig.draw_layers[g][w]
+    {
+        let t = t + time.delta_secs();
+        if t >= duration {
+            player.stop(node);
+            rig.draw = None;
+        } else {
+            if let Some(active) = player.animation_mut(node) {
+                active.set_weight((t / DRAW_FADE_IN).min(1.0).min(((duration - t) / DRAW_FADE_OUT).max(0.0)));
+            }
+            rig.draw = Some((g, w, t));
+        }
+    }
 
     // The glove's hand pose while it's on.
     if let Some(node) = rig.glove_hand {

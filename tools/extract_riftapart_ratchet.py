@@ -485,6 +485,14 @@ PRESETS = {
             "glove_glide": "helipack_glove_hand_glide_loop",
             # The glove's hand pose (the GloveAdditive driver), layered while the glove is on.
             "glove_hand": "weapon_glove_hand_partial",
+            # Drawing a weapon (the Weapon_Draw driver, additive): the whole-body draw standing,
+            # the upper-body one moving, for the one-handed gun, the wrench and the glove.
+            "draw_pistol": "weapon_one_hand_draw_hero_ratchet",
+            "draw_pistol_arm": "weapon_one_hand_draw_partial_hero_ratchet",
+            "draw_wrench": "weapon_wrench_draw_hero_ratchet",
+            "draw_wrench_arm": "weapon_wrench_draw_partial_hero_ratchet",
+            "draw_glove": "weapon_glove_draw_hero_ratchet",
+            "draw_glove_arm": "weapon_glove_draw_partial_hero_ratchet",
         },
     },
     "burstpistol": {

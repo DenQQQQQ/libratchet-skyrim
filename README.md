@@ -112,10 +112,11 @@ peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump` to play one section (combat:
-the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the walk; face: his face
-through a jump; carry: the wrench in hand, the Shatterbomb's glove, dashing while aiming;
-dashjump: jumps out of a dash beside a running jump).
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch` to play one
+section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the walk;
+face: his face through a jump; carry: the wrench in hand, the Shatterbomb's glove, dashing while
+aiming; dashjump: jumps out of a dash beside a running jump; throwswitch: switching weapons
+around a wrench throw).
 
 ## Tests
 

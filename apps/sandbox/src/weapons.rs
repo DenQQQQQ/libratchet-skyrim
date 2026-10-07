@@ -71,6 +71,8 @@ pub struct ScriptedArsenal {
 #[derive(Resource)]
 pub struct Arsenal {
     pub slot: Slot,
+    /// A weapon switch waiting for the thrown wrench to be caught.
+    pub requested: Option<Slot>,
     pub pistol: Weapon,
     pub grenade: Weapon,
     /// Aiming (right mouse, with any weapon) and trigger (left mouse, with a gun out) this frame.
@@ -189,6 +191,7 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
     commands.insert_resource(WeaponShakes { recoil: shake(&pistol.recoil_shake).map(|(sh, _, _)| sh), blast: shake(&grenade.blast_shake) });
     commands.insert_resource(Arsenal {
         slot: Slot::Wrench,
+        requested: None,
         pistol: Weapon::new(pistol.scaled(s)),
         grenade: Weapon::new(grenade.scaled(s)),
         aiming: false,
@@ -297,12 +300,19 @@ fn controls(
     mouse_melee: Res<MouseMelee>,
     scripted: Res<ScriptedArsenal>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    wrench: Option<Res<crate::wrench::Wrench>>,
     mut arsenal: ResMut<Arsenal>,
 ) {
     for (key, slot) in [(KeyCode::Digit1, Slot::Wrench), (KeyCode::Digit2, Slot::BurstPistol), (KeyCode::Digit3, Slot::Shatterbomb)] {
         if keys.just_pressed(key) {
-            arsenal.slot = slot;
+            arsenal.requested = Some(slot);
         }
+    }
+    // A switch waits while the wrench is thrown, until it's caught.
+    if !wrench.as_ref().is_some_and(|w| w.throwing())
+        && let Some(slot) = arsenal.requested.take()
+    {
+        arsenal.slot = slot;
     }
     let gun = arsenal.slot.is_gun();
     if scripted.active {
@@ -399,12 +409,14 @@ fn fire(
     (mut rig, shakes): (ResMut<CameraRig>, Res<WeaponShakes>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    (mut commands, mut cues): (Commands, MessageWriter<crate::sound::SoundCue>),
+    (mut commands, mut cues, wrench): (Commands, MessageWriter<crate::sound::SoundCue>, Option<Res<crate::wrench::Wrench>>),
 ) {
     let dt = time.delta_secs();
     let (Ok(p), Ok(cam)) = (players.single(), cams.single()) else { return };
-    // Swinging or dashing, the gun doesn't fire (a dash suspends the weapon in the game).
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash);
+    // Swinging, dashing or throwing the wrench, the gun doesn't fire (a dash suspends the
+    // weapon in the game, and a throw holds the melee grip until the catch).
+    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash)
+        || wrench.as_ref().is_some_and(|w| w.throwing());
     let target = match scripted.target {
         Some(t) if scripted.active => t,
         _ => crosshair_target(cam, &level, &dummies, AIM_RANGE * settings.scale),
@@ -802,11 +814,12 @@ fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, mut vis: Query<&mu
     }
 }
 
-/// The gun shows in the hand while the pistol is out, except during melee (when the wrench is)
-/// and dashes (the game suspends the weapon).
-fn gun_visibility(arsenal: Res<Arsenal>, players: Query<&Player>, mut vis: Query<&mut Visibility>) {
+/// The gun shows in the hand while the pistol is out, except during melee and wrench throws
+/// (when the wrench is) and dashes (the game suspends the weapon).
+fn gun_visibility(arsenal: Res<Arsenal>, players: Query<&Player>, wrench: Option<Res<crate::wrench::Wrench>>, mut vis: Query<&mut Visibility>) {
     let (Some(gun), Ok(p)) = (arsenal.gun, players.single()) else { return };
-    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash);
+    let busy = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash)
+        || wrench.as_ref().is_some_and(|w| w.throwing());
     if let Ok(mut v) = vis.get_mut(gun) {
         v.set_if_neq(if arsenal.slot == Slot::BurstPistol && !busy { Visibility::Inherited } else { Visibility::Hidden });
     }
@@ -841,6 +854,14 @@ fn gun_clips(
 
 /// Helper for other modules: the slot's display name and ammo.
 pub fn hud_line(arsenal: &Arsenal) -> String {
+    let line = slot_line(arsenal);
+    match arsenal.requested {
+        Some(next) if next != arsenal.slot => format!("{line}  |  {} after the catch", next.name()),
+        _ => line,
+    }
+}
+
+fn slot_line(arsenal: &Arsenal) -> String {
     let (ammo, max, extra) = match arsenal.slot {
         Slot::Wrench => return "weapon: OmniWrench (1)  |  2 Burst Pistol, 3 Shatterbomb".into(),
         Slot::BurstPistol => {

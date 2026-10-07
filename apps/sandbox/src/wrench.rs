@@ -69,6 +69,12 @@ impl Wrench {
     pub fn out_of_hand(&self) -> bool {
         self.flight.is_some() || self.releasing.is_some()
     }
+
+    /// From the throw until just after the catch. A throw is the melee grip's "fire" in the
+    /// game's animset, so all that time a gun stays put away and weapon switches wait.
+    pub fn throwing(&self) -> bool {
+        self.out_of_hand() || self.throw_anim > 0.0
+    }
 }
 
 pub fn plugin(app: &mut App) {
@@ -292,7 +298,7 @@ fn fly(
         wrench.flight = None;
         wrench.catches += 1;
         wrench.show = SHOW_AFTER;
-        wrench.throw_anim = wrench.throw_anim.min(0.3);
+        wrench.throw_anim = wrench.throw_anim.min(SHOW_AFTER);
     }
 }
 

@@ -64,6 +64,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("sounds") => [vec![hold(1.5, Vec2::ZERO, false)], sound_tour()].concat(),
         Some("carry") => [vec![hold(1.5, Vec2::ZERO, false)], carry()].concat(),
         Some("dashjump") => [vec![hold(1.5, Vec2::ZERO, false)], dash_jumps()].concat(),
+        Some("throwswitch") => [vec![hold(1.5, Vec2::ZERO, false)], throw_switch()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -582,6 +583,38 @@ fn dash_jumps() -> Vec<Act> {
     acts
 }
 
+/// Switching weapons around a wrench throw: the pistol picked while the wrench flies comes out
+/// after the catch (with the game's draw), and with the pistol out a throw puts it away until the
+/// wrench is back.
+fn throw_switch() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let x = Vec2::X;
+    let lane = spots::ARENA + Vec3::new(-8.0, 0.0, 6.0);
+    vec![
+        Act::ClearTrail,
+        Act::CloseUp(true),
+        Act::Slot(Slot::Wrench),
+        Act::Teleport(lane),
+        hold(0.12, x, false),
+        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
+        hold(0.8, Vec2::ZERO, false),
+        Act::Throw,
+        hold(0.3, Vec2::ZERO, false),
+        Act::Slot(Slot::BurstPistol),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Shot("62_pistol_picked_while_thrown"),
+        hold(1.3, Vec2::ZERO, false),
+        Act::Shot("63_pistol_drawn_after_the_catch"),
+        hold(1.2, Vec2::ZERO, false),
+        Act::Throw,
+        hold(0.5, Vec2::ZERO, false),
+        Act::Shot("64_thrown_with_the_pistol_out"),
+        hold(2.2, Vec2::ZERO, false),
+        Act::Slot(Slot::Wrench),
+        hold(1.0, Vec2::ZERO, false),
+    ]
+}
+
 /// The moves that make the game's sounds: walking and running (steps, foley), jumps and a
 /// landing, a glide off the tower (the heli-pack unfolding, spinning, folding away), dashes,
 /// then the combat section.
@@ -764,7 +797,7 @@ fn run_script(
             Act::Throw => throw.0 = true,
             Act::Slot(slot) => {
                 if let Some(a) = arsenal.as_mut() {
-                    a.slot = slot;
+                    a.requested = Some(slot);
                 }
             }
             Act::Gun { trigger, aim } => *gun = crate::weapons::ScriptedArsenal { active: true, trigger, aim, target: gun.target },
