@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 libratchet = { path = "../../crates/libratchet" }
+libarsenal = { path = "../../crates/libarsenal" }
 bevy = { version = "0.19.1", features = ["jpeg"] }

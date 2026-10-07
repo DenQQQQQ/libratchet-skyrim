@@ -51,7 +51,14 @@ struct ModelGltf(Handle<Gltf>);
 /// Clip names baked into ratchet.glb by the converter (one per move).
 const CLIP_STATES: &[&str] = &[
     "idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash", "melee_1", "melee_2", "melee_3", "smash_intro", "smash",
+    "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw", "grenade_throw",
+    "pistol_idle", "pistol_run",
 ];
+/// Strafing while aiming, by direction relative to where Ratchet faces (clockwise from ahead).
+const STRAFE_CLIPS: &[&str] = &["strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw"];
+/// The one-handed fire recoil: an additive layer, restarted with every shot (when the model has
+/// one; the converter leaves it out for now).
+const FIRE_LAYER: &str = "fire_pistol_additive";
 /// The wrench throw is an additive clip in the game (offsets on top of whatever Ratchet is
 /// doing), so it plays as a layer over the move clips.
 const THROW_LAYER: &str = "throw_additive";
@@ -59,7 +66,10 @@ const THROW_LAYER: &str = "throw_additive";
 const LAYER_FADE_IN: f32 = 0.08;
 const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
-const LOOPING: &[&str] = &["idle", "run", "fall", "glide"];
+const LOOPING: &[&str] = &[
+    "idle", "run", "fall", "glide", "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw",
+    "pistol_idle", "pistol_run",
+];
 
 struct Bone {
     entity: Entity,
@@ -86,6 +96,9 @@ pub struct Rig {
     throw_layer: Option<(AnimationNodeIndex, f32)>,
     throw_time: Option<f32>,
     throws_seen: u32,
+    fire_layer: Option<(AnimationNodeIndex, f32)>,
+    fire_time: Option<f32>,
+    shots_seen: u32,
 }
 
 const BONES: &[&str] = &[
@@ -185,12 +198,16 @@ fn on_ready(
     {
         crate::clank::spawn(&mut commands, &assets, attach);
     }
-    // The OmniWrench goes in his right hand: the game mounts weapons on the igLoc_RT_gunAttach
-    // locator, which sits on RT_handle_bound with no offset (the wrench's origin is its grip).
-    if let (Some(dir), Some(&hand)) = (settings.model_dir.as_ref(), by_name.get("RT_handle_bound"))
-        && dir.join(crate::wrench::MODEL_FILE).exists()
-    {
-        crate::wrench::spawn(&mut commands, &assets, hand);
+    // The OmniWrench and the guns go in his right hand: the game mounts weapons on the
+    // igLoc_RT_gunAttach locator, which sits on RT_handle_bound with no offset (the weapon
+    // models' origin is their grip).
+    if let (Some(dir), Some(&hand)) = (settings.model_dir.as_ref(), by_name.get("RT_handle_bound")) {
+        if dir.join(crate::wrench::MODEL_FILE).exists() {
+            crate::wrench::spawn(&mut commands, &assets, hand);
+        }
+        if dir.join(crate::weapons::PISTOL_FILE).exists() {
+            crate::weapons::spawn_gun(&mut commands, &assets, hand);
+        }
     }
 
     let mut bones = HashMap::new();
@@ -227,6 +244,9 @@ fn on_ready(
         throw_layer: None,
         throw_time: None,
         throws_seen: 0,
+        fire_layer: None,
+        fire_time: None,
+        shots_seen: 0,
     });
     for e in &placeholders {
         commands.entity(e).insert(Visibility::Hidden);
@@ -264,6 +284,10 @@ fn setup_clips(
         rig.throw_layer = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
         info!("ratchet model: throw plays as an additive layer ({layer}, {duration:.2} s)");
     }
+    if let Some(clip) = gltf.named_animations.get(FIRE_LAYER) {
+        let duration = clip_assets.get(clip).map_or(0.33, |c| c.duration());
+        rig.fire_layer = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
+    }
     if clips.is_empty() {
         rig.player = None; // no clips in this file: stay procedural
         return;
@@ -274,11 +298,13 @@ fn setup_clips(
 }
 
 /// Picks the clip for the current move and crossfades to it.
+#[allow(clippy::too_many_arguments)]
 fn play_clips(
     time: Res<Time>,
     settings: Res<Settings>,
     rig: Option<ResMut<Rig>>,
     wrench: Res<crate::wrench::Wrench>,
+    arsenal: Option<Res<crate::weapons::Arsenal>>,
     players: Query<&Player>,
     mut anim: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
@@ -288,6 +314,29 @@ fn play_clips(
         return;
     }
     let Ok((mut player, mut transitions)) = anim.get_mut(entity) else { return };
+
+    // The pistol's recoil layer: restarted with each shot.
+    let shots = arsenal.as_ref().map_or(0, |a| a.shots);
+    if let Some((node, duration)) = rig.fire_layer {
+        if shots != rig.shots_seen {
+            rig.shots_seen = shots;
+            rig.fire_time = Some(0.0);
+            player.start(node);
+        }
+        if let Some(t) = rig.fire_time {
+            let t = t + time.delta_secs();
+            if t >= duration {
+                player.stop(node);
+                rig.fire_time = None;
+            } else {
+                let weight = (t / 0.03).min(1.0).min(((duration - t) / 0.12).max(0.0));
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+                rig.fire_time = Some(t);
+            }
+        }
+    }
 
     // The throw layer: restart it with each throw, fade it in and out over its length.
     if let Some((node, duration)) = rig.throw_layer {
@@ -320,7 +369,23 @@ fn play_clips(
     rig.prev_state = Some(state);
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
 
+    // With the pistol aimed or firing: the one-handed stance, strafing by direction.
+    let pistol_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
+    let gun_aim = pistol_out && arsenal.as_ref().is_some_and(|a| a.aiming || a.trigger);
+    let throwing_grenade = arsenal.as_ref().is_some_and(|a| a.grenade_anim > 0.0);
+    let strafe = {
+        let yaw = p.sim.facing_yaw();
+        let (fwd, right) = (Vec2::new(yaw.sin(), yaw.cos()), Vec2::new(-yaw.cos(), yaw.sin()));
+        let flat = Vec2::new(v.x, v.z);
+        let angle = flat.dot(right).atan2(flat.dot(fwd));
+        STRAFE_CLIPS[((angle / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(8) as usize]
+    };
     let want: &'static str = match state {
+        MoveState::Ground if throwing_grenade => "grenade_throw",
+        MoveState::Ground if gun_aim && speed > 0.6 => strafe,
+        MoveState::Ground if gun_aim => "aim_idle",
+        MoveState::Ground if pistol_out && speed > 0.6 => "pistol_run",
+        MoveState::Ground if pistol_out && rig.land_timer <= 0.0 => "pistol_idle",
         MoveState::Ground if speed > 0.6 => "run",
         MoveState::Ground if rig.land_timer > 0.0 => "land",
         MoveState::Ground => "idle",
@@ -339,8 +404,8 @@ fn play_clips(
     if rig.current_clip != Some(want)
         && let Some(&node) = rig.clips.get(want)
     {
-        // Wrench moves cut in quickly.
-        let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash"));
+        // Wrench moves, the grenade throw and strafe changes cut in quickly.
+        let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash") || c.starts_with("strafe") || c == "grenade_throw");
         let fade = if quick(Some(want)) || quick(rig.current_clip) {
             60
         } else if want == "land" || rig.current_clip == Some("land") {
@@ -354,12 +419,13 @@ fn play_clips(
         }
         rig.current_clip = Some(want);
     }
-    // Match the run cycle to the actual speed.
-    if want == "run"
-        && let Some(&node) = rig.clips.get("run")
+    // Match the run (and strafe) cycles to the actual speed.
+    if (want == "run" || want == "pistol_run" || want.starts_with("strafe"))
+        && let Some(&node) = rig.clips.get(want)
         && let Some(active) = player.animation_mut(node)
     {
-        let run_max = p.sim.tuning().ground_speeds.run_max / settings.scale;
+        let tuning = p.sim.tuning();
+        let run_max = if want.starts_with("strafe") { tuning.aim_speeds.run_max } else { tuning.ground_speeds.run_max } / settings.scale;
         active.set_speed((speed / run_max.max(0.1)).clamp(0.5, 1.5));
     }
 }

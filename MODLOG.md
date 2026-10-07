@@ -35,6 +35,85 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (night): weapons: the Burst Pistol and the Shatterbomb
+
+The user said "weapons next!". There's a new engine-independent crate, `libarsenal`, plus aim
+mode in libratchet and the two weapons in the sandbox.
+
+### Known (the user's install)
+- **Weapon configs.** Each weapon item (`configs\equipment\wpn_<name>_item.config`) points to
+  a `WeaponConfig`. It holds:
+  - a behaviour class (`Prius`, weapon-specific code);
+  - triggers (auto, single or cooked, rounds per second);
+  - ammo;
+  - shot motion (flight speed, gravity, range, collision radius; grenades aim at the target);
+  - an explosion (inner and outer radius, knockback tiers);
+  - 10 levels of upgrades (damage, rate of fire, ammo, range).
+  The game has 56 weapon item configs.
+- **The Shatterbomb is `wpn_protogrenade`.** Its upgrades spawn 4 shards, there are shard
+  models, and the projectile's material is called `proj_Shatter_grenade_godray`.
+- **Burst Pistol (level 1):**
+  - 11.4 damage, 150 ammo;
+  - 3 shots/s (`kRateOfFire`);
+  - shots at 80 m/s with no gravity, out to 45 m;
+  - spread starts at 0.1°, grows 0.05° a shot after 3 shots, up to 4°, and recovers at 25°/s;
+  - while aiming: 0.01° a shot, up to 0.65°.
+- **Shatterbomb (level 1):**
+  - 0.8 throws/s, 6 ammo;
+  - lobbed at 30 m/s under 30 m/s² gravity, aimed at most 30 m out;
+  - explodes on impact: 170.5 damage within 1 m, falling to 85 at 6 m;
+  - knockback tiers out to 3, 6 and 20 m.
+- **Aim mode:**
+  - `StandAimSpeedConfig`: runs at 6.5–7.75 m/s, 5 backward, walks at 2.
+  - `AimModeSingleJumpConfig` / `AimModeDoubleJumpConfig`: fixed 1 m jumps, a 1.8 m total cap,
+    0.32 s and 0.28 s to the peak.
+- **Mounting:** the pistol uses the same hand joint as the wrench (`RT_handle_bound`). In the
+  one-handed aim pose that joint's axes line up with the model (Y up, Z forward), and so does
+  the gun's.
+- **Clips:**
+  - one-handed stance (`strafe_one_hand_idle`) and 8-way strafing
+    (`strafe_one_hand_run_{n,ne,e,...}`);
+  - holding the pistol (`relaxed_one_hand_idle`, `run_forward_pistol`);
+  - the overhand grenade throw (`weapon_glove_throw_overhand`);
+  - the gun's own fire clip (its barrel turns);
+  - the grenade model `proj_protogrenade_grenade`.
+
+### Ours (assumed or simplified)
+- **Rates:** the Burst Pistol fires 3/s while aiming and 6/s from the hip. The game's
+  full-trigger rapid fire is probably one of the `kMisc` values; we took `kMisc3` = 6.
+- **Aim speeds:** of the two aim speed configs, we use `StandAimSpeedConfig` for strafing.
+- **Knockback distances** per knockback level (kOne 0.4 m … kFour 3.5 m).
+- **Grenade release:** 0.16 s into the throw.
+- **Sandbox:** the dummies' 150 health; empty weapons refill after 1.5 s.
+- **Not used yet:** the recoil clips. They're additive arm layers, and with Bevy's rule
+  (offset × base) the arm gets shoved down. One of them turns the forearm 175°, so either our
+  decode or our composition is off for those. Needs the game's additive rules from Ghidra.
+
+### Built
+- **`crates/libarsenal`:**
+  - `WeaponParams` with generic defaults and `from_riftapart_config`.
+  - `Weapon`: auto or single triggers, aimed vs hip-fire rate and spread, ammo, a
+    deterministic spread cone.
+  - `Projectile`: exact gravity steps, range and lifetime.
+  - `lob_velocity`: the low arc to the aimed point, 45° when out of reach.
+  - `ExplosionParams`: linear damage falloff and knockback tiers.
+  - 12 tests, including loading the real configs.
+- **libratchet aim mode:**
+  - `Input.aim` makes him face the aim direction (turning twice as fast).
+  - The aim speeds apply (slower backing up), and so do the aim-mode jumps.
+  - 3 tests. The C API has `aiming`, `aim_x`, `aim_z`.
+- **Sandbox (`weapons.rs`):**
+  - 1/2/3 pick the weapon. Left mouse fires, right mouse aims: the camera moves in over the
+    right shoulder (blending over 0.13 s, `Aiming.StandardAimCameraBlend`) and a crosshair
+    appears.
+  - Shots go where the camera ray first hits the level or a dummy.
+  - Bolts with a muzzle flash, the grenade with the game's model, a fireball, and explosion
+    damage and knockback by distance.
+  - Dummies have health; at zero they fall over, then get back up after 2.5 s.
+  - Ratchet's stance, strafing and throw clips are wired in.
+- **Demo:** `--demo-part weapons`, shots `21_burst_pistol_aim` … `26_shatterbomb_blast`.
+  Video: `recordings/weapons_burstpistol_shatterbomb.mp4`.
+
 ## 2026-10-07 (evening): the OmniWrench
 
 The user asked for the wrench next. The sandbox now has the 3-hit combo, the Hyper-Strike and

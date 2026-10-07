@@ -21,6 +21,9 @@ pub struct Input {
     pub dash: bool,
     /// Melee (wrench) button is down.
     pub melee: bool,
+    /// Aiming a weapon: the direction (x, z) to face while strafing. Movement then uses the aim
+    /// speeds and jumps the aim-mode jumps.
+    pub aim: Option<Vec2>,
 }
 
 /// What the host's collision found on the last move.
@@ -138,6 +141,9 @@ pub struct Ratchet {
     swing_queued: bool,
     swing_hit: bool,
     smash_descending: bool,
+    /// Aiming this tick, and whether the current jump started while aiming.
+    aiming: Option<Vec2>,
+    jump_aimed: bool,
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
     move_vy: Option<f32>,
@@ -172,6 +178,8 @@ impl Ratchet {
             swing_queued: false,
             swing_hit: false,
             smash_descending: false,
+            aiming: None,
+            jump_aimed: false,
             events: Vec::new(),
             move_vy: None,
         }
@@ -243,6 +251,7 @@ impl Ratchet {
         let melee_pressed = input.melee && !self.prev_melee;
         self.prev_melee = input.melee;
         let stick = input.move_dir.clamp_length_max(1.0);
+        self.aiming = input.aim.filter(|a| a.length_squared() > 1e-6).map(Vec2::normalize);
 
         // Contact changes first, so this tick runs in the right state.
         if matches!(self.state, MoveState::Ground | MoveState::Dash | MoveState::Melee | MoveState::SmashLand) {
@@ -265,9 +274,9 @@ impl Ratchet {
 
         match self.state {
             MoveState::Ground => {
-                let speeds = self.tuning.ground_speeds.clone();
+                let speed = self.ground_speed_for(stick);
                 let (accel, decel) = (self.tuning.ground_accel, self.tuning.ground_decel);
-                self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, decel);
+                self.steer(dt, stick, speed, accel, decel);
                 if pressed {
                     self.start_jump(dt, MoveState::Jump, position);
                 } else if melee_pressed && self.start_swing(0, stick) {
@@ -491,17 +500,32 @@ impl Ratchet {
 
     fn params(&self, state: MoveState) -> &JumpParams {
         match state {
+            MoveState::DoubleJump if self.jump_aimed => &self.tuning.aim_double_jump,
             MoveState::DoubleJump => &self.tuning.double_jump,
             MoveState::Fall => &self.tuning.fall,
             MoveState::Glide => &self.tuning.glide,
+            _ if self.jump_aimed => &self.tuning.aim_single_jump,
             _ => &self.tuning.single_jump,
         }
+    }
+
+    /// Ground speed for the stick: the normal speeds, or while aiming the aim speeds, slower
+    /// when backing away from the aim direction.
+    fn ground_speed_for(&self, stick: Vec2) -> f32 {
+        let Some(aim) = self.aiming else {
+            return self.tuning.ground_speeds.speed_for_stick(stick.length());
+        };
+        let forward = self.tuning.aim_speeds.speed_for_stick(stick.length());
+        let back = self.tuning.aim_back_speed.min(forward);
+        let along = stick.normalize_or_zero().dot(aim);
+        if along >= 0.0 { forward } else { forward + (back - forward) * -along }
     }
 
     /// Starts a jump aimed at its tap height; holding raises it (`extend_jump`). Gravity comes
     /// from the tap height, so every jump of a kind peaks at `time_to_peak` when tapped
     /// (RiftApart.exe).
     fn start_jump(&mut self, dt: f32, kind: MoveState, position: Vec3) {
+        self.jump_aimed = self.aiming.is_some();
         let params = self.params(kind).clone();
         let (mut h_min, mut h_max) = (params.height_min, params.height_max);
 
@@ -727,12 +751,17 @@ impl Ratchet {
         self.velocity.z = next.y;
     }
 
+    /// Turns towards the movement direction, or while aiming towards the aim (twice as fast).
     fn turn(&mut self, dt: f32) {
-        let h = Vec2::new(self.velocity.x, self.velocity.z);
-        if h.length() < 0.3 * self.tuning.scale {
-            return;
-        }
-        let target = h.x.atan2(h.y);
+        let (target, rate) = if let Some(aim) = self.aiming {
+            (aim.x.atan2(aim.y), self.tuning.turn_rate * 2.0)
+        } else {
+            let h = Vec2::new(self.velocity.x, self.velocity.z);
+            if h.length() < 0.3 * self.tuning.scale {
+                return;
+            }
+            (h.x.atan2(h.y), self.tuning.turn_rate)
+        };
         let mut diff = target - self.facing_yaw;
         while diff > std::f32::consts::PI {
             diff -= std::f32::consts::TAU;
@@ -740,7 +769,7 @@ impl Ratchet {
         while diff < -std::f32::consts::PI {
             diff += std::f32::consts::TAU;
         }
-        let max = self.tuning.turn_rate * dt;
+        let max = rate * dt;
         self.facing_yaw += diff.clamp(-max, max);
     }
 }

@@ -17,6 +17,10 @@ enum Act {
     Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool },
     /// Throw the wrench (straight ahead).
     Throw,
+    /// Pick a weapon.
+    Slot(crate::weapons::Slot),
+    /// Gun controls from here on: trigger held, aiming.
+    Gun { trigger: bool, aim: bool },
     Teleport(Vec3),
     ClearTrail,
     Scale(f32),
@@ -44,6 +48,7 @@ struct Demo {
 pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&str>) {
     let acts = match part {
         Some("wrench") => [vec![hold(1.5, Vec2::ZERO, false)], wrench_moves()].concat(),
+        Some("weapons") => [vec![hold(1.5, Vec2::ZERO, false)], weapon_moves()].concat(),
         _ => script(),
     };
     app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0 })
@@ -258,7 +263,64 @@ fn script() -> Vec<Act> {
     acts.push(Act::Wide { name: "04_dashes", focus: lane + Vec3::new(14.0, 1.5, 0.0), yaw: 0.0, pitch: 0.06, distance: 24.0, secs: 1.5 });
     acts.extend(close_ups());
     acts.extend(wrench_moves());
+    acts.extend(weapon_moves());
     acts
+}
+
+/// The Burst Pistol and the Shatterbomb on the dummies in the arena (Ratchet facing +X, the
+/// camera behind him, aiming where it looks).
+fn weapon_moves() -> Vec<Act> {
+    use crate::weapons::Slot;
+    // South of the dummy ring, facing it (+Z), so nothing stands between him and the camera.
+    let spot = spots::ARENA + Vec3::new(8.55, 0.0, -7.5);
+    let z = Vec2::Y;
+    let behind = std::f32::consts::PI;
+    vec![
+        Act::ClearTrail,
+        Act::Teleport(spot),
+        hold(0.12, z, false),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Slot(Slot::BurstPistol),
+        Act::Follow { yaw: behind, pitch: 0.06, distance: 4.5 },
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+        Act::Shot("21_burst_pistol_aim"),
+        Act::Gun { trigger: true, aim: true },
+        hold(1.0, Vec2::ZERO, false),
+        Act::Shot("22_burst_pistol_fire"),
+        // Strafing to his right (-X when facing +Z) while firing.
+        hold(0.6, Vec2::new(-1.0, 0.0), false),
+        Act::Shot("23_strafe_fire"),
+        hold(0.4, Vec2::new(-1.0, 0.0), false),
+        Act::Gun { trigger: false, aim: false },
+        hold(0.8, Vec2::ZERO, false),
+        // Side view of the stance.
+        Act::Follow { yaw: behind + 2.6, pitch: 0.12, distance: 3.5 },
+        Act::Gun { trigger: true, aim: false },
+        hold(0.5, Vec2::ZERO, false),
+        Act::Shot("24_pistol_side"),
+        Act::Gun { trigger: false, aim: false },
+        hold(1.5, Vec2::ZERO, false),
+        // Shatterbomb into the ring.
+        Act::Slot(Slot::Shatterbomb),
+        Act::Teleport(spot),
+        hold(0.12, z, false),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Follow { yaw: behind, pitch: 0.12, distance: 4.5 },
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+        Act::Gun { trigger: true, aim: true },
+        hold(0.1, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: true },
+        hold(0.3, Vec2::ZERO, false),
+        Act::Shot("25_shatterbomb_throw"),
+        hold(0.45, Vec2::ZERO, false),
+        Act::Shot("26_shatterbomb_blast"),
+        hold(1.5, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        Act::Slot(Slot::Wrench),
+        hold(0.5, Vec2::ZERO, false),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -267,6 +329,8 @@ fn run_script(
     mut demo: ResMut<Demo>,
     mut scripted: ResMut<ScriptedInput>,
     mut throw: ResMut<crate::wrench::ScriptedThrow>,
+    mut gun: ResMut<crate::weapons::ScriptedArsenal>,
+    mut arsenal: Option<ResMut<crate::weapons::Arsenal>>,
     mut rig: ResMut<CameraRig>,
     mut settings: ResMut<Settings>,
     mut players: Query<&mut Player>,
@@ -302,8 +366,14 @@ fn run_script(
                 rig.focus = p.feet;
             }
             Act::Throw => throw.0 = true,
+            Act::Slot(slot) => {
+                if let Some(a) = arsenal.as_mut() {
+                    a.slot = slot;
+                }
+            }
+            Act::Gun { trigger, aim } => *gun = crate::weapons::ScriptedArsenal { active: true, trigger, aim },
             Act::Hold { secs, dir, jump, dash, melee } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee });
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, aim: None });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

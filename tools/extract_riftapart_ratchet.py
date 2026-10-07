@@ -371,7 +371,37 @@ PRESETS = {
             "smash_intro": "weapon_wrench_hit_smash_intro_hero_ratchet",
             "smash": "weapon_wrench_hit_smash_hero_ratchet",
             "throw": "weapon_wrench_throw_hero_ratchet",
+            # One-handed guns (Burst Pistol): holding it (idle, run), the aiming stance and
+            # strafing in 8 directions. Grenades: the overhand glove throw. (The recoil clips
+            # are additive layers whose composition we haven't pinned down; not used yet.)
+            "pistol_idle": "relaxed_one_hand_idle_hero_ratchet",
+            "pistol_run": "run_forward_pistol_hero_ratchet",
+            "aim_idle": "strafe_one_hand_idle_hero_ratchet",
+            "strafe_n": "strafe_one_hand_run_n_hero_ratchet",
+            "strafe_ne": "strafe_one_hand_run_ne_hero_ratchet",
+            "strafe_e": "strafe_one_hand_run_e_hero_ratchet",
+            "strafe_se": "strafe_one_hand_run_se_hero_ratchet",
+            "strafe_s": "strafe_one_hand_run_s_hero_ratchet",
+            "strafe_sw": "strafe_one_hand_run_sw_hero_ratchet",
+            "strafe_w": "strafe_one_hand_run_w_hero_ratchet",
+            "strafe_nw": "strafe_one_hand_run_nw_hero_ratchet",
+            "grenade_throw": "weapon_glove_throw_overhand_hero_ratchet",
         },
+    },
+    "burstpistol": {
+        # Held like the wrench, in the right hand. Its own clip works the slide when it fires;
+        # the muzzle is the igLoc_bulletEmit locator on its CTR_chamber joint.
+        "model": "equipment/weapon/wpn_burstpistol/wpn_burstpistol.model",
+        "out": "burstpistol.glb",
+        "clip_dir": "characters/hero/hero_ratchet/animations/",
+        "clips": {"fire": "weapon_fire_burstpistol"},
+    },
+    "shatterbomb": {
+        # The thrown grenade (proto grenade in the game's files).
+        "model": "equipment/projectile/proj_protogrenade_grenade/proj_protogrenade_grenade.model",
+        "out": "shatterbomb.glb",
+        "clip_dir": "characters/hero/hero_ratchet/animations/",
+        "clips": {},
     },
     "wrench": {
         # Held in Ratchet's right hand (RT_handle_bound, the igLoc_RT_gunAttach locator). Its

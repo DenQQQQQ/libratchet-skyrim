@@ -3308,6 +3308,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "libarsenal"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde_json",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4588,6 +4596,7 @@ name = "sandbox"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "libarsenal",
  "libratchet",
 ]
 

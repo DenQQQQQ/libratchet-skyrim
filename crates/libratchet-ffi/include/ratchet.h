@@ -24,6 +24,8 @@ typedef struct RatchetInput {
     uint8_t jump;         /* jump button held */
     uint8_t dash;         /* dash button held */
     uint8_t melee;        /* melee (wrench) button held */
+    uint8_t aiming;       /* 1 while aiming a weapon: face (aim_x, aim_z) and strafe */
+    float aim_x, aim_z;
 } RatchetInput;
 
 typedef struct RatchetContact {

@@ -1,0 +1,10 @@
+[package]
+name = "libarsenal"
+description = "Ratchet-style weapons as an engine-independent library: triggers, ammo, spread, projectiles and explosions."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde_json.workspace = true

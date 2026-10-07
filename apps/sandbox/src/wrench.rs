@@ -144,15 +144,18 @@ fn held_wrench(
     }
 }
 
-/// Right mouse (with the mouse grabbed) or Q asks for a throw.
+/// Q, or right mouse while the wrench is selected (with a gun, right mouse aims), asks for a
+/// throw.
 fn throw_button(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    arsenal: Option<Res<crate::weapons::Arsenal>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut wrench: ResMut<Wrench>,
 ) {
     let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    if keys.just_pressed(KeyCode::KeyQ) || (grabbed && mouse.just_pressed(MouseButton::Right)) {
+    let wrench_out = arsenal.is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
+    if keys.just_pressed(KeyCode::KeyQ) || (grabbed && wrench_out && mouse.just_pressed(MouseButton::Right)) {
         wrench.throw_requested = true;
     }
 }
@@ -202,7 +205,7 @@ fn fly(
     let Some(flight) = wrench.flight.as_mut() else { return };
     let throw = p.sim.tuning().melee.throw.clone();
     let pos = flight.position();
-    let n = knock(&mut dummies, pos, throw.damage_radius, pos - flight.direction(), 2.0 * s, 1.0 * s, |d| d.pos.y < 0.5 && hit_ready(d));
+    let n = knock(&mut dummies, pos, throw.damage_radius, pos - flight.direction(), 2.0 * s, 1.0 * s, throw.damage, |d| d.pos.y < 0.5 && hit_ready(d));
     if n > 0 {
         hits.count += n as u32;
         hits.last = format!("thrown wrench hit {n} ({} damage)", throw.damage);

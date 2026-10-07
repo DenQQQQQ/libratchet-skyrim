@@ -8,13 +8,14 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
-//!   --demo-part wrench  with --demo: only the wrench section
+//!   --demo-part wrench|weapons  with --demo: only that section
 
 mod clank;
 mod combat;
 mod demo;
 mod level;
 mod ratchet_model;
+mod weapons;
 mod wrench;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -84,8 +85,10 @@ pub struct CameraRig {
     focus: Vec3,
     /// When set, the camera looks at this fixed spot instead of following (demo wide shots).
     fixed: Option<(Vec3, f32, f32, f32)>,
-    /// Seconds of camera shake left (Hyper-Strike landings).
+    /// Seconds of camera shake left (Hyper-Strike landings, explosions).
     pub shake: f32,
+    /// 0..1: how far the camera has moved in over the shoulder for aiming.
+    aim_blend: f32,
 }
 
 #[derive(Resource, Default)]
@@ -102,6 +105,16 @@ pub struct ScriptedInput(pub Option<MoveInput>);
 /// that grabs it doesn't swing).
 #[derive(Resource, Default)]
 pub struct MouseMelee(bool);
+
+impl MouseMelee {
+    /// The left button is down from a press that started with the mouse grabbed.
+    pub fn armed(&self) -> bool {
+        self.0
+    }
+}
+
+#[derive(Component)]
+struct Crosshair;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -141,17 +154,17 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, wrench::plugin, weapons::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.9)))
     .insert_resource(Settings { base, scale, configs_dir, load_note, model_dir })
-    .insert_resource(CameraRig { yaw: 0.6, pitch: 0.35, distance: 7.0, focus: spots::SPAWN, fixed: None, shake: 0.0 })
+    .insert_resource(CameraRig { yaw: 0.6, pitch: 0.35, distance: 7.0, focus: spots::SPAWN, fixed: None, shake: 0.0, aim_blend: 0.0 })
     .init_resource::<Trail>()
     .init_resource::<ScriptedInput>()
     .init_resource::<MouseMelee>()
     .add_systems(Startup, (level::spawn_level, setup).chain())
     .add_systems(FixedUpdate, simulate)
-    .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud).chain());
+    .add_systems(Update, (hotkeys, cursor_grab, camera_control, update_visuals, camera_follow, draw_trail, update_hud, crosshair).chain());
 
     if demo {
         let out = PathBuf::from("screenshots");
@@ -252,14 +265,31 @@ fn setup(
     commands.spawn((
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
-             Left mouse / E wrench (in the air: Hyper-Strike)  |  Right mouse / Q throw the wrench  |  Tab Ratchet/Dragonborn size  |  R reload tuning\n\
-             T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it",
+             1 wrench, 2 Burst Pistol, 3 Shatterbomb  |  wrench: left mouse / E swing (in the air: Hyper-Strike), right mouse / Q throw\n\
+             gun: left mouse fire, right mouse aim (E still swings, Q still throws)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it",
         ),
         TextFont::from_font_size(13.0),
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         Node { position_type: PositionType::Absolute, bottom: px(10.0), left: px(12.0), ..default() },
         TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.8) },
     ));
+    // Crosshair in the middle of the screen, shown while a gun is out.
+    commands.spawn((
+        Crosshair,
+        Text::new("+"),
+        TextFont::from_font_size(28.0),
+        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+        TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.8) },
+        Node { position_type: PositionType::Absolute, left: percent(50.0), top: percent(50.0), margin: UiRect::new(px(-8.0), px(0.0), px(-17.0), px(0.0)), ..default() },
+        Visibility::Hidden,
+    ));
+}
+
+fn crosshair(arsenal: Option<Res<weapons::Arsenal>>, mut q: Query<&mut Visibility, With<Crosshair>>) {
+    let show = arsenal.is_some_and(|a| a.slot.is_gun());
+    for mut v in &mut q {
+        v.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
+    }
 }
 
 fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, mouse_melee: bool, yaw: f32) -> MoveInput {
@@ -287,14 +317,17 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>,
         jump: keys.pressed(KeyCode::Space),
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
         melee: keys.pressed(KeyCode::KeyE) || (mouse_melee && mouse.pressed(MouseButton::Left)),
+        aim: None,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn simulate(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mouse_melee: Res<MouseMelee>,
+    arsenal: Option<Res<weapons::Arsenal>>,
     rig: Res<CameraRig>,
     scripted: Res<ScriptedInput>,
     level: Res<Level>,
@@ -306,7 +339,13 @@ pub fn simulate(
     let Ok(mut p) = players.single_mut() else { return };
     let s = settings.scale;
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
-    let input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0, rig.yaw));
+    // Left mouse swings the wrench only while the wrench is selected; with a gun it fires.
+    let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == weapons::Slot::Wrench);
+    let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0 && wrench_out, rig.yaw));
+    // Aiming or firing a gun: face where the camera looks and strafe.
+    if arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && (a.aiming || a.trigger)) {
+        input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
+    }
 
     let before = p.feet;
     let contact = p.contact;
@@ -478,6 +517,7 @@ fn update_visuals(
 fn camera_follow(
     time: Res<Time>,
     settings: Res<Settings>,
+    arsenal: Option<Res<weapons::Arsenal>>,
     mut rig: ResMut<CameraRig>,
     players: Query<&Player>,
     mut cams: Query<&mut Transform, With<Camera3d>>,
@@ -496,8 +536,16 @@ fn camera_follow(
     rig.shake = (rig.shake - time.delta_secs()).max(0.0);
     let wobble = (time.elapsed_secs() * 20.0 * std::f32::consts::TAU).sin() * (rig.shake / 0.25).min(1.0);
     let (yaw, pitch) = (rig.yaw + wobble * 0.012, rig.pitch + wobble * 0.004);
-    let offset = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()) * rig.distance;
-    *cam = Transform::from_translation(rig.focus + offset).looking_at(rig.focus, Vec3::Y);
+    // Aiming: in close over the right shoulder (blending in over about 0.13 s).
+    let aiming = arsenal.is_some_and(|a| a.aiming);
+    let k = 1.0 - (-time.delta_secs() / 0.13).exp();
+    rig.aim_blend += ((aiming as u8 as f32) - rig.aim_blend) * k;
+    let s = settings.scale;
+    let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+    let focus = rig.focus + (right * 0.55 * s + Vec3::Y * 0.2 * s) * rig.aim_blend;
+    let distance = rig.distance + (2.6 * s - rig.distance) * rig.aim_blend;
+    let offset = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()) * distance;
+    *cam = Transform::from_translation(focus + offset).looking_at(focus, Vec3::Y);
 }
 
 fn draw_trail(trail: Res<Trail>, mut gizmos: Gizmos) {
@@ -515,7 +563,13 @@ fn draw_trail(trail: Res<Trail>, mut gizmos: Gizmos) {
     }
 }
 
-fn update_hud(settings: Res<Settings>, hits: Res<combat::Hits>, players: Query<&Player>, mut hud: Query<&mut Text, With<HudText>>) {
+fn update_hud(
+    settings: Res<Settings>,
+    hits: Res<combat::Hits>,
+    arsenal: Option<Res<weapons::Arsenal>>,
+    players: Query<&Player>,
+    mut hud: Query<&mut Text, With<HudText>>,
+) {
     let (Ok(p), Ok(mut text)) = (players.single(), hud.single_mut()) else { return };
     let v = p.sim.velocity();
     let size = if (settings.scale - 1.0).abs() < 0.01 { "Ratchet-sized".to_string() } else { format!("{:.2}x, Dragonborn-sized", settings.scale) };
@@ -531,7 +585,8 @@ fn update_hud(settings: Res<Settings>, hits: Res<combat::Hits>, players: Query<&
          config: jump tap {:.2} m in {:.2} s, held up to {:.2} m  |  double +{:.2} m (max total {})  |  glide falls {:.1} m/s, moves {:.2} m/s  |  run {:.2} m/s\n\
          dash {:.1} m up to {:.1} m/s  |  air dash {:.1} m at {:.1} m/s\n\
          wrench: swings {}  |  Hyper-Strike hop {:.2} m, slam at {:.0} m/s², {:.1} m wide  |  throw {:.0} m/s out to {:.0} m
-         dummies hit: {}  {}",
+         dummies hit: {}  {}\n\
+         {}",
         settings.load_note,
         p.sim.state().name(),
         Vec2::new(v.x, v.z).length(),
@@ -561,5 +616,6 @@ fn update_hud(settings: Res<Settings>, hits: Res<combat::Hits>, players: Query<&
         t.melee.throw.max_distance,
         hits.count,
         if hits.last.is_empty() { String::new() } else { format!("(last: {})", hits.last) },
+        arsenal.map_or(String::new(), |a| weapons::hud_line(&a)),
     );
 }

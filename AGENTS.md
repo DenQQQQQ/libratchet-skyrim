@@ -24,6 +24,9 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
   `riftapart-assets/ratchet.glb` (gitignored game data). They need `tools/gdeflate-ffi` built
   in release (GDeflate decoder for the high-res data).
 - `crates/libratchet-ffi`: C API (`include/ratchet.h`) for the planned SKSE plugin.
+- `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
+  falloff). Pure Rust like libratchet; the host does aiming, collision and damage. Run
+  `cargo test -p libarsenal` after weapon changes.
 
 ## Workflow
 - Run `cargo test -p libratchet` after any sim change. The tests check the sim against the

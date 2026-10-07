@@ -29,6 +29,10 @@ pub struct RatchetInput {
     pub dash: u8,
     /// Melee (wrench) button held (0/1).
     pub melee: u8,
+    /// 1 while aiming a weapon: face (`aim_x`, `aim_z`) and strafe.
+    pub aiming: u8,
+    pub aim_x: f32,
+    pub aim_z: f32,
 }
 
 #[repr(C)]
@@ -175,6 +179,7 @@ pub unsafe extern "C" fn ratchet_step(
         jump: input.jump != 0,
         dash: input.dash != 0,
         melee: input.melee != 0,
+        aim: (input.aiming != 0).then(|| Vec2::new(input.aim_x, input.aim_z)),
     };
     let contact = Contact {
         grounded: contact.grounded != 0,

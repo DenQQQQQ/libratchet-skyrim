@@ -1,5 +1,5 @@
-//! Target dummies for the wrench: the combo, the Hyper-Strike and the throw knock them back by
-//! the distances from the melee config, then they walk back to their spot.
+//! Target dummies for the wrench and the weapons: hits knock them back by the configured
+//! distances and take health; at zero they fall over, then get back up at their spot.
 
 use crate::level::spots;
 use crate::{CameraRig, Player, Settings, simulate};
@@ -15,6 +15,9 @@ const SLIDE_DECEL: f32 = 20.0;
 const GRAVITY: f32 = 25.0;
 /// Seconds a hit dummy stays put before walking home.
 const STUN: f32 = 1.6;
+/// Health of a dummy (ours), and how long it lies down when it runs out.
+pub const DUMMY_HEALTH: f32 = 150.0;
+const DOWN_TIME: f32 = 2.5;
 
 #[derive(Component)]
 pub struct Dummy {
@@ -25,6 +28,10 @@ pub struct Dummy {
     stunned: f32,
     flash: f32,
     tilt: Vec3,
+    pub health: f32,
+    /// Seconds left lying down after running out of health.
+    down: f32,
+    fall_axis: Vec3,
 }
 
 impl Dummy {
@@ -62,7 +69,7 @@ fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
         let mat = materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.72, 0.62), perceptual_roughness: 0.7, ..default() });
         commands
             .spawn((
-                Dummy { home, pos: home, vel: Vec3::ZERO, stunned: 0.0, flash: 0.0, tilt: Vec3::ZERO },
+                Dummy { home, pos: home, vel: Vec3::ZERO, stunned: 0.0, flash: 0.0, tilt: Vec3::ZERO, health: DUMMY_HEALTH, down: 0.0, fall_axis: Vec3::X },
                 Transform::from_translation(home),
                 Visibility::default(),
             ))
@@ -75,22 +82,52 @@ fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
 }
 
 /// Knocks every dummy within `radius` of `center` (and passing `filter`) away from `from`, so it
-/// slides `knockback` metres; `lift` pops it up. Returns how many were hit.
-pub fn knock(dummies: &mut Query<&mut Dummy>, center: Vec3, radius: f32, from: Vec3, knockback: f32, lift: f32, filter: impl Fn(&Dummy) -> bool) -> usize {
+/// slides `knockback` metres; `lift` pops it up; `damage` comes off its health. Returns how many
+/// were hit. Dummies lying down are left alone.
+#[allow(clippy::too_many_arguments)]
+pub fn knock(
+    dummies: &mut Query<&mut Dummy>,
+    center: Vec3,
+    radius: f32,
+    from: Vec3,
+    knockback: f32,
+    lift: f32,
+    damage: f32,
+    filter: impl Fn(&Dummy) -> bool,
+) -> usize {
     let mut n = 0;
     for mut d in dummies.iter_mut() {
         let flat = Vec3::new(d.pos.x - center.x, 0.0, d.pos.z - center.z);
-        if flat.length() > radius + DUMMY_RADIUS || !filter(&d) {
+        if d.down > 0.0 || flat.length() > radius + DUMMY_RADIUS || !filter(&d) {
             continue;
         }
-        let away = Vec3::new(d.pos.x - from.x, 0.0, d.pos.z - from.z).normalize_or(Vec3::X);
-        let speed = (2.0 * SLIDE_DECEL * knockback).sqrt();
-        d.vel = away * speed + Vec3::Y * lift;
-        d.stunned = STUN;
-        d.flash = 0.15;
+        hit(&mut d, from, knockback, lift, damage);
         n += 1;
     }
     n
+}
+
+/// One dummy takes a hit from the direction of `from`.
+pub fn hit(d: &mut Dummy, from: Vec3, knockback: f32, lift: f32, damage: f32) {
+    let away = Vec3::new(d.pos.x - from.x, 0.0, d.pos.z - from.z).normalize_or(Vec3::X);
+    let speed = (2.0 * SLIDE_DECEL * knockback.max(0.0)).sqrt();
+    d.vel = away * speed + Vec3::Y * lift;
+    d.stunned = STUN;
+    d.flash = 0.15;
+    d.health -= damage;
+    if d.health <= 0.0 {
+        d.down = DOWN_TIME;
+        d.fall_axis = Vec3::new(away.z, 0.0, -away.x);
+    }
+}
+
+/// Whether a point is inside a dummy (a capsule standing on its base), for shots.
+pub fn dummy_contains(d: &Dummy, p: Vec3, margin: f32) -> bool {
+    if d.down > 0.0 {
+        return false;
+    }
+    let y = (p.y - d.pos.y).clamp(DUMMY_RADIUS, DUMMY_HEIGHT - DUMMY_RADIUS) + d.pos.y;
+    p.distance(Vec3::new(d.pos.x, y, d.pos.z)) <= DUMMY_RADIUS + margin
 }
 
 /// Applies the sim's melee events: swing hits in front of Ratchet, the Hyper-Strike all around.
@@ -106,7 +143,7 @@ fn melee_hits(settings: Res<Settings>, players: Query<&Player>, mut dummies: Que
                 let reach = SWING_REACH * s;
                 let center = p.feet + facing * reach * 0.5;
                 let feet = p.feet;
-                let n = knock(&mut dummies, center, reach * 0.6, feet - facing * 0.5 * s, w.knockback, 1.5 * s, |d| {
+                let n = knock(&mut dummies, center, reach * 0.6, feet - facing * 0.5 * s, w.knockback, 1.5 * s, w.damage, |d| {
                     let to = Vec3::new(d.pos.x - feet.x, 0.0, d.pos.z - feet.z);
                     to.length() <= reach + DUMMY_RADIUS && to.normalize_or_zero().dot(facing) > 0.2
                 });
@@ -117,7 +154,7 @@ fn melee_hits(settings: Res<Settings>, players: Query<&Player>, mut dummies: Que
             }
             MoveEvent::SmashImpact { .. } => {
                 rig.shake = 0.25;
-                let n = knock(&mut dummies, p.feet, t.smash_radius, p.feet, t.smash_radius, 6.0 * s, |_| true);
+                let n = knock(&mut dummies, p.feet, t.smash_radius, p.feet, t.smash_radius, 6.0 * s, t.smash_damage, |_| true);
                 hits.count += n as u32;
                 hits.last = format!("Hyper-Strike hit {n} ({} damage each, {:.1} m around)", t.smash_damage, t.smash_radius);
             }
@@ -131,6 +168,17 @@ fn dummy_physics(time: Res<Time>, mut dummies: Query<(&mut Dummy, &mut Transform
     for (mut d, mut tf) in &mut dummies {
         d.stunned = (d.stunned - dt).max(0.0);
         d.flash = (d.flash - dt).max(0.0);
+        if d.down > 0.0 {
+            d.down -= dt;
+            if d.down <= 0.0 {
+                // Back up at its spot, as good as new.
+                let home = d.home;
+                *d = Dummy { pos: home, health: DUMMY_HEALTH, ..*d };
+                d.vel = Vec3::ZERO;
+                d.tilt = Vec3::ZERO;
+                d.down = 0.0;
+            }
+        }
         let airborne = d.pos.y > 0.0 || d.vel.y > 0.0;
         if airborne {
             d.vel.y -= GRAVITY * dt;
@@ -152,11 +200,11 @@ fn dummy_physics(time: Res<Time>, mut dummies: Query<(&mut Dummy, &mut Transform
             d.pos.y = 0.0;
             d.vel.y = 0.0;
         }
-        // Lean with the knockback.
-        let lean = Vec3::new(d.vel.z, 0.0, -d.vel.x) * 0.06;
+        // Lean with the knockback, or lie flat when down.
+        let lean = if d.down > 0.0 { d.fall_axis * 1.45 } else { Vec3::new(d.vel.z, 0.0, -d.vel.x) * 0.06 };
         d.tilt = d.tilt.lerp(lean, (12.0 * dt).min(1.0));
         tf.translation = d.pos;
-        tf.rotation = if d.tilt.length() > 1e-4 { Quat::from_axis_angle(d.tilt.normalize(), d.tilt.length().min(1.2)) } else { Quat::IDENTITY };
+        tf.rotation = if d.tilt.length() > 1e-4 { Quat::from_axis_angle(d.tilt.normalize(), d.tilt.length().min(1.5)) } else { Quat::IDENTITY };
     }
 }
 

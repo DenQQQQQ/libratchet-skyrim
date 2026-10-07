@@ -347,6 +347,12 @@ pub struct Tuning {
     pub air_dash: DashParams,
     /// OmniWrench combo, Hyper-Strike and throw.
     pub melee: MeleeParams,
+    /// Aiming a weapon: strafing speeds (forward run/walk, and backing up) and the lower,
+    /// fixed-height jumps of aim mode.
+    pub aim_speeds: SpeedParams,
+    pub aim_back_speed: f32,
+    pub aim_single_jump: JumpParams,
+    pub aim_double_jump: JumpParams,
     /// Size multiplier applied by `scaled`; 1.0 means Ratchet-sized.
     pub scale: f32,
     /// Where these values came from, for display.
@@ -403,6 +409,10 @@ impl Default for Tuning {
             ground_dash: DashParams { distance: 6.5, max_speed: 28.0, accel: 100.0, decel: 50.0 },
             air_dash: DashParams { distance: 6.5, max_speed: 12.0, accel: 0.0, decel: 0.0 },
             melee: MeleeParams::default(),
+            aim_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.5, run_min: 4.0, run_max: 5.0, walk_run_threshold: 0.6 },
+            aim_back_speed: 4.0,
+            aim_single_jump: JumpParams { height_min: 0.9, height_max: 0.9, time_to_peak: 0.3, no_glide_time: 0.7, double_jump_time_start: 0.1, double_jump_height_min: 0.25, ..JumpParams::FALLBACK },
+            aim_double_jump: JumpParams { height_min: 0.9, height_max: 0.9, time_to_peak: 0.28, no_glide_time: 0.5, max_total_jump: Some(1.7), ..JumpParams::FALLBACK },
             scale: 1.0,
             source: "generic defaults".into(),
         }
@@ -435,6 +445,12 @@ impl Tuning {
             ground_dash: dash_from(&traversal["DodgeConfig"], &base.ground_dash),
             air_dash: dash_from(&traversal["AirDashConfig"], &base.air_dash),
             melee: melee_from(dir, &traversal, &shared, &base.melee),
+            // Two aim speed configs exist; StandAimSpeedConfig looks like the strafe one (the
+            // other, StandardSpeeds.AimSpeedConfig at 2 m/s, like precision aiming). Our pick.
+            aim_speeds: speeds_from(&shared["Motion"]["StandAimSpeedConfig"], &base.aim_speeds),
+            aim_back_speed: f(&shared["Motion"]["StandAimSpeedConfig"], "RunSpeedBackwardMax").unwrap_or(base.aim_back_speed),
+            aim_single_jump: jump_from(&jumps["AimModeSingleJumpConfig"]).unwrap_or(base.aim_single_jump),
+            aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
             source: format!("Rift Apart configs ({})", dir.display()),
             ..base
         })
@@ -458,6 +474,10 @@ impl Tuning {
             ground_dash: self.ground_dash.scaled(s),
             air_dash: self.air_dash.scaled(s),
             melee: self.melee.scaled(s),
+            aim_speeds: self.aim_speeds.scaled(s),
+            aim_back_speed: self.aim_back_speed * s,
+            aim_single_jump: self.aim_single_jump.scaled(s),
+            aim_double_jump: self.aim_double_jump.scaled(s),
             scale: self.scale * s,
             ..self.clone()
         }

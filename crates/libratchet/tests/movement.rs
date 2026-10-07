@@ -30,7 +30,7 @@ impl Flat {
     }
 
     fn tick(&mut self, jump: bool, stick: Vec2) {
-        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false });
+        self.tick_with(Input { move_dir: stick, jump, dash: false, melee: false, aim: None });
     }
 
     fn tick_with(&mut self, input: Input) {
@@ -306,12 +306,12 @@ fn ground_dash_covers_its_distance_including_braking() {
             h.tick(false, fwd);
         }
         let start = h.pos.z;
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
         assert_eq!(h.r.state(), MoveState::Dash);
         let mut peak: f32 = 0.0;
         let mut ticks = 1;
         while h.r.state() == MoveState::Dash && ticks < 240 {
-            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
+            h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
             peak = peak.max(h.r.velocity().z);
             ticks += 1;
         }
@@ -332,16 +332,16 @@ fn air_dash_is_flat_and_once_per_air_time() {
     let fwd = Vec2::new(0.0, 1.0);
     h.rise(true);
     let start = h.pos;
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
     assert_eq!(h.r.state(), MoveState::AirDash);
     while h.r.state() == MoveState::AirDash {
         assert!((h.pos.y - start.y).abs() < 0.05, "air dash changed height to {}", h.pos.y);
-        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false });
+        h.tick_with(Input { move_dir: fwd, jump: false, dash: false, melee: false, aim: None });
     }
     let travelled = h.pos.z - start.z;
     assert!((travelled - t.air_dash.distance).abs() < 0.3, "air dash went {travelled} m");
     // A second press in the same air time does nothing.
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
     assert_ne!(h.r.state(), MoveState::AirDash);
     assert_eq!(h.count(|e| *e == Event::AirDashed), 1);
     // After landing it's available again.
@@ -350,7 +350,7 @@ fn air_dash_is_flat_and_once_per_air_time() {
     }
     assert_eq!(h.r.state(), MoveState::Ground);
     h.jump(0.2, 0.25);
-    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false });
+    h.tick_with(Input { move_dir: fwd, jump: false, dash: true, melee: false, aim: None });
     assert_eq!(h.r.state(), MoveState::AirDash);
 }
 
@@ -519,4 +519,45 @@ fn loads_wrench_configs_when_present() {
     let mut h = Flat::new(t.clone());
     let lunged = one_swing(&mut h);
     assert!(close(lunged, *m.combo[0].lunge.last().unwrap(), 0.03), "lunged {lunged} m");
+}
+
+fn aim_input(stick: Vec2, aim: Vec2, jump: bool) -> Input {
+    Input { move_dir: stick, jump, aim: Some(aim), ..Default::default() }
+}
+
+#[test]
+fn aiming_faces_the_aim_while_strafing() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    let aim = Vec2::new(0.0, 1.0); // facing +Z
+    for _ in 0..240 {
+        h.tick_with(aim_input(Vec2::new(1.0, 0.0), aim, false)); // moving +X
+    }
+    assert!(h.r.facing_yaw().abs() < 0.02, "facing {}", h.r.facing_yaw());
+    let v = h.r.velocity();
+    assert!(close(v.x, t.aim_speeds.run_max, 0.05) && v.z.abs() < 0.05, "strafing at {v}");
+}
+
+#[test]
+fn aiming_backs_up_slower() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    let aim = Vec2::new(0.0, 1.0);
+    for _ in 0..240 {
+        h.tick_with(aim_input(Vec2::new(0.0, -1.0), aim, false));
+    }
+    assert!(close(-h.r.velocity().z, t.aim_back_speed, 0.05), "backing at {}", h.r.velocity().z);
+}
+
+#[test]
+fn aimed_jumps_use_the_aim_mode_heights() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    let aim = Vec2::new(0.0, 1.0);
+    let mut apex: f32 = 0.0;
+    for i in 0..180 {
+        h.tick_with(aim_input(Vec2::ZERO, aim, i < 60));
+        apex = apex.max(h.pos.y);
+    }
+    assert!(close(apex, t.aim_single_jump.height_max, 0.02), "aimed jump peaked at {apex}");
 }
