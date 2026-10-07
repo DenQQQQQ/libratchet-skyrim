@@ -1,0 +1,11 @@
+/target
+/screenshots
+/recordings
+*.local.json
+# Never commit anything taken from a game install.
+*.config
+*.toc
+/riftapart-configs
+/riftapart-assets
+__pycache__/
+*.pyc

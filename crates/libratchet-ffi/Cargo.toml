@@ -1,0 +1,13 @@
+[package]
+name = "libratchet-ffi"
+description = "C ABI for libratchet, for hosts written in C/C++ (e.g. an SKSE plugin)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "ratchet"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+libratchet = { path = "../libratchet" }

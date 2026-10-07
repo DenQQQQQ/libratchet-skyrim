@@ -1,0 +1,11 @@
+[package]
+name = "sandbox"
+description = "Bevy test scene for libratchet."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+libratchet = { path = "../../crates/libratchet" }
+bevy = { version = "0.19.1", features = ["jpeg"] }

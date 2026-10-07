@@ -1,0 +1,80 @@
+/* libratchet C API. Matches crates/libratchet-ffi/src/lib.rs; keep the two in sync.
+ *
+ * Coordinates: Y up, metres. Skyrim hosts convert (Z up, ~70 units per metre).
+ * Each tick: fill RatchetInput + RatchetContact, call ratchet_step, move the character by
+ * result.velocity * dt with your own collision, then report the new contacts next tick.
+ */
+#ifndef RATCHET_H
+#define RATCHET_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct RatchetSim RatchetSim;
+
+typedef struct RatchetVec3 {
+    float x, y, z;
+} RatchetVec3;
+
+typedef struct RatchetInput {
+    float move_x, move_z; /* world-space direction on the ground plane, length 0..1 */
+    uint8_t jump;         /* jump button held */
+    uint8_t dash;         /* dash button held */
+} RatchetInput;
+
+typedef struct RatchetContact {
+    uint8_t grounded;
+    uint8_t hit_ceiling;
+    uint8_t has_ground_distance;
+    float ground_distance; /* feet to ground, metres */
+} RatchetContact;
+
+enum {
+    RATCHET_STATE_GROUND = 0,
+    RATCHET_STATE_JUMP = 1,
+    RATCHET_STATE_DOUBLE_JUMP = 2,
+    RATCHET_STATE_FALL = 3,
+    RATCHET_STATE_GLIDE = 4,
+    RATCHET_STATE_DASH = 5,
+    RATCHET_STATE_AIR_DASH = 6,
+};
+
+enum {
+    RATCHET_EVENT_JUMPED = 1u << 0,
+    RATCHET_EVENT_DOUBLE_JUMPED = 1u << 1,
+    RATCHET_EVENT_LEFT_GROUND = 1u << 2,
+    RATCHET_EVENT_GLIDE_STARTED = 1u << 3,
+    RATCHET_EVENT_GLIDE_ENDED = 1u << 4,
+    RATCHET_EVENT_LANDED = 1u << 5,
+    RATCHET_EVENT_DASHED = 1u << 6,
+    RATCHET_EVENT_AIR_DASHED = 1u << 7,
+};
+
+typedef struct RatchetStepResult {
+    RatchetVec3 velocity;    /* move by velocity * dt */
+    uint32_t state;          /* RATCHET_STATE_* */
+    uint32_t events;         /* RATCHET_EVENT_* bits */
+    float facing_yaw;        /* radians, atan2(x, z) */
+    float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
+} RatchetStepResult;
+
+/* Generic default tuning, scaled (1 = Ratchet-sized). Free with ratchet_free. */
+RatchetSim *ratchet_new(float scale);
+void ratchet_free(RatchetSim *sim);
+
+/* Load extracted Rift Apart config JSON from dir (UTF-8). 0 = ok; on error the old tuning stays. */
+int32_t ratchet_load_configs(RatchetSim *sim, const char *dir, float scale);
+void ratchet_set_scale(RatchetSim *sim, float scale);
+
+RatchetStepResult ratchet_step(RatchetSim *sim, float dt, RatchetInput input, RatchetContact contact, RatchetVec3 feet);
+void ratchet_set_velocity(RatchetSim *sim, RatchetVec3 velocity);
+void ratchet_reset(RatchetSim *sim);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

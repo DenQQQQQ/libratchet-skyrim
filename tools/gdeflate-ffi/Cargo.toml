@@ -1,0 +1,13 @@
+[package]
+name = "gdeflate-ffi"
+description = "Tiny C ABI around the gdeflate crate, so the Python asset converter can read Rift Apart's GDeflate-compressed archives."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gdeflate = "0.4.1"

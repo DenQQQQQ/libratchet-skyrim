@@ -1,0 +1,10 @@
+[package]
+name = "libratchet"
+description = "Ratchet-style platformer movement as an engine-independent library (input + contacts in, velocity out)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde_json.workspace = true

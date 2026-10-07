@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/libratchet", "crates/libratchet-ffi", "apps/sandbox", "tools/gdeflate-ffi"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+glam = "0.32"
+serde_json = "1"
+
+# Bevy is slow in debug builds; optimise dependencies, keep our code debuggable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
