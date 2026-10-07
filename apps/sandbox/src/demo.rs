@@ -63,6 +63,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("face") => [vec![hold(1.5, Vec2::ZERO, false)], face()].concat(),
         Some("sounds") => [vec![hold(1.5, Vec2::ZERO, false)], sound_tour()].concat(),
         Some("carry") => [vec![hold(1.5, Vec2::ZERO, false)], carry()].concat(),
+        Some("dashjump") => [vec![hold(1.5, Vec2::ZERO, false)], dash_jumps()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -556,6 +557,28 @@ fn carry() -> Vec<Act> {
         Act::Shot("59_wrench_fidget"),
         hold(1.5, Vec2::ZERO, false),
     ]);
+    acts
+}
+
+/// A running jump beside jumps out of a dash (0.1 and 0.2 s into it), in three lanes watched
+/// from the side: a jump keeps the dash's speed for one tick, then goes at the jump's speeds, so
+/// all three land about as far. Run it without `--clean` to see the trails and the HUD.
+fn dash_jumps() -> Vec<Act> {
+    let x = Vec2::X;
+    let lane = spots::DEMO_LANE;
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::Watch { focus: lane + Vec3::new(7.0, 0.8, 3.0), yaw: 0.0, pitch: 0.35, distance: 17.0 },
+    ];
+    for (i, dash_for) in [None, Some(0.1), Some(0.2)].into_iter().enumerate() {
+        acts.extend([Act::Teleport(lane + Vec3::new(0.0, 0.0, 3.0 * i as f32)), hold(0.12, x, false), hold(0.4, Vec2::ZERO, false), hold(1.0, x, false)]);
+        if let Some(secs) = dash_for {
+            acts.extend([dash(x), hold(secs - 2.0 * TICK, x, false)]);
+        }
+        acts.extend([hold(0.05, x, true), hold(1.0, x, false), hold(0.5, Vec2::ZERO, false)]);
+    }
+    acts.push(Act::Shot("60_dash_jumps"));
+    acts.push(hold(0.5, Vec2::ZERO, false));
     acts
 }
 

@@ -83,7 +83,28 @@ helper that doesn't lock the project.
   - Both the clip and the strafing flag are set once, when the dash starts.
   - Without stick input the dash goes ahead (the aim, while strafing).
   - The dash suspends the weapon: no aim poses, no firing.
-  - A ground dash can be jumped out of from 0.1 s.
+  - A ground dash can be jumped out of from 0.1 s; a jump pressed earlier in it waits until
+    then.
+- **A jump's horizontal speed (RiftApart.exe):**
+  - It takes off at the speed he had (the last tick's real speed, a dash's included, with no
+    cap), toward where the stick points, or ahead without input.
+  - That lasts one tick. After that, each tick blends from the speed he has toward the stick's
+    target: StandardSpeeds' JumpSpeedConfig (4–6 m/s run, 1–3 walk) for the push, times the
+    push again. A share r of the difference is kept each tick:
+    `w = lerp(MomentumWeightMin, Max, s)`, `r = clamp((w^(0.5·dt/TimeToPeak) − Min)/(Max − Min))`.
+    Here s goes from 0 to 1 over MomentumMinTime + TransitionTime, and is 1 when both are 0.
+  - Single jump (1 → 1.2): r ≈ 0.03 a tick at 60 Hz, so the stick decides almost at once.
+    Double jump (0 → 1.4): r ≈ 0.72, so the old speed halves about every two ticks.
+  - With the stick left alone since take-off, the jump keeps its speed, up to 6 m/s; let go
+    after steering, it stops. NoInputTime holds the take-off velocity until it has passed.
+  - There's no other air-speed cap, and nothing dash-specific: a jump 0.15 s into a dash goes
+    at the dash's speed for one tick, then at about 6 m/s.
+- **Stale dash configs:** this build's traversal config has no DodgeConfig or AirDashConfig
+  field, so the asset's dash values (Distance 7, MaxSpeed 30, Accel 100, Decel 50; air dash 12)
+  look unused.
+  - The real HeroDashConfig sets only an immunity window and PhaseDash in the asset. Its
+    distance and air-dash speeds use defaults we haven't found.
+  - The ground dash follows the clip's root motion, which peaks around 15 m/s.
 
 ### Built
 - **Converter:**
@@ -108,11 +129,23 @@ helper that doesn't lock the project.
 - **Dashes (sim):**
   - a dash started while strafing keeps him facing the aim (snapped every tick);
   - a stick under 0.07 counts as no input;
-  - jumping out of a ground dash waits for 0.1 s.
+  - jumping out of a ground dash waits for 0.1 s, and a press before that is kept.
+- **Jumps (sim):** the game's horizontal step replaces our accelerate-and-drift air steering in
+  jumps and double jumps (`jump_air`, `JumpParams::momentum_keep`).
+  - A jump out of a dash now lands about as far as a running jump: 3.8 m against 3.6 m with
+    the game's configs, down from 11.7 m.
+  - The configs' momentum weights and NoInputTime are read; the built-in defaults carry the
+    game's weights.
+  - Falls and glides still use our steering.
 - **Dashes (sandbox):** each dash plays the clip for its direction. No firing, no aim layers,
   and the pistol and wrench are put away for its length; a cooked grenade waits.
-- **Tests:** 33 libratchet tests pass (new: the strafing dash, jumping out of a dash).
-- **Demo:** `--demo-part carry`, shots `50_wrench_idle` … `5b_dash_back_aiming`.
+- **Tests:** 35 libratchet tests pass. New ones cover the strafing dash, jumping out of a dash
+  (the wait, and the dash's speed for one tick only), and letting go of the stick in a single
+  jump versus a double jump.
+- **Demos:**
+  - `--demo-part carry`, shots `50_wrench_idle` … `5b_dash_back_aiming`;
+  - `--demo-part dashjump`: a running jump beside jumps 0.1 s and 0.2 s into a dash, side by
+    side, shot `60_dash_jumps`.
 
 ### Derived or assumed
 - **The wrench with the glove on:** we assume it isn't in his hand outside melee. The glove-hand
@@ -126,7 +159,13 @@ helper that doesn't lock the project.
 - **Steering a dash:** the game lets the stick steer a dash's direction while it runs; ours
   doesn't steer yet.
 - **The ground dash's movement:** the game moves it by the clip's root motion stretched to the
-  config distance. Ours is still the accelerate-and-brake profile from the overnight entry.
+  config distance. Ours is still the accelerate-and-brake profile from the overnight entry,
+  built on the stale DodgeConfig values (peak 28–30 m/s against the clip's ~15).
+- **Jump momentum, unconfirmed parts:** a global speed scale and a speed factor inside the
+  time to peak are taken as 1. JumpSpeedConfig's walk/run stick threshold isn't in the asset;
+  we use 0.6.
+- **Falls and glides** use the same per-frame functions in the game; we haven't switched them
+  over, since their configs' time to peak is gravity-based and wasn't checked.
 
 ## 2026-10-07: the game's sounds
 

@@ -695,12 +695,81 @@ fn a_dash_can_be_jumped_out_of_from_a_tenth_of_a_second() {
     for _ in 0..5 {
         h.tick(false, fwd);
     }
+    // Pressed 0.05 s in, the jump waits for the dash to allow it at 0.1 s.
     h.tick(true, fwd);
     assert_eq!(h.r.state(), MoveState::Dash, "jumped out 0.05 s in");
-    while h.time < 0.11 {
+    while h.r.state() == MoveState::Dash && h.time < 0.3 {
         h.tick(false, fwd);
     }
-    assert_eq!(h.r.state(), MoveState::Dash);
+    assert_eq!(h.r.state(), MoveState::Jump);
+    assert!((h.time - 0.1).abs() <= 2.0 * DT, "jumped at {}", h.time);
+}
+
+#[test]
+fn a_jump_out_of_a_dash_keeps_its_speed_for_one_tick_only() {
+    let t = Tuning::default();
+    let fwd = Vec2::new(0.0, 1.0);
+    // A running jump, for comparison.
+    let mut run = Flat::new(t.clone());
+    for _ in 0..240 {
+        run.tick(false, fwd);
+    }
+    let start = run.pos.z;
+    run.tick(true, fwd);
+    while run.r.state() != MoveState::Ground {
+        run.tick(false, fwd);
+    }
+    let running_jump = run.pos.z - start;
+    // Out of a dash: the first jump tick still has the dash's speed, the next the jump's.
+    let mut h = Flat::new(t.clone());
+    for _ in 0..240 {
+        h.tick(false, fwd);
+    }
+    h.tick_with(Input { move_dir: fwd, dash: true, ..Default::default() });
+    while h.time < 2.0 + 0.15 {
+        h.tick(false, fwd);
+    }
+    let dash_speed = h.r.velocity().z;
+    assert!(dash_speed > t.air_speeds.run_max * 2.0, "dash at {dash_speed}");
+    let start = h.pos.z;
     h.tick(true, fwd);
     assert_eq!(h.r.state(), MoveState::Jump);
+    h.tick(false, fwd);
+    assert!(close(h.r.velocity().z, dash_speed, 0.5), "first tick {} (dash {dash_speed})", h.r.velocity().z);
+    h.tick(false, fwd);
+    assert!(h.r.velocity().z < t.air_speeds.run_max + 0.5, "second tick {}", h.r.velocity().z);
+    while h.r.state() != MoveState::Ground {
+        h.tick(false, fwd);
+    }
+    let dash_jump = h.pos.z - start;
+    assert!(dash_jump < running_jump + 0.6, "dash jump {dash_jump:.2} m, running jump {running_jump:.2} m");
+}
+
+#[test]
+fn letting_go_of_the_stick_in_a_jump_stops_it_but_a_double_jump_drifts() {
+    let t = Tuning::default();
+    let fwd = Vec2::new(0.0, 1.0);
+    let mut h = Flat::new(t.clone());
+    for _ in 0..240 {
+        h.tick(false, fwd);
+    }
+    h.tick(true, fwd);
+    for _ in 0..6 {
+        h.tick(true, fwd);
+    }
+    // Steered, then let go: a single jump keeps almost none of its speed.
+    for _ in 0..3 {
+        h.tick(true, Vec2::ZERO);
+    }
+    assert!(h.r.velocity().z < 0.5, "single jump still at {}", h.r.velocity().z);
+    // A double jump steered forward, then let go: it keeps more for longer.
+    let mut h = Flat::new(t.clone());
+    h.rise(true);
+    h.tick(true, fwd);
+    assert_eq!(h.r.state(), MoveState::DoubleJump);
+    for _ in 0..12 {
+        h.tick(true, fwd);
+    }
+    h.tick(true, Vec2::ZERO);
+    assert!(h.r.velocity().z > 1.0, "double jump stopped at once: {}", h.r.velocity().z);
 }

@@ -37,6 +37,16 @@ pub struct JumpParams {
     pub double_jump_height_min: f32,
     /// Cap on the combined height of a jump chain, measured from the first take-off.
     pub max_total_jump: Option<f32>,
+    /// How much of the speed he had a jump keeps each tick (RiftApart.exe, see
+    /// [`JumpParams::momentum_keep`]): the weight goes from MomentumWeightMin to Max over
+    /// MomentumMinTime + MomentumTransitionTime.
+    pub momentum_weight_min: f32,
+    pub momentum_weight_max: f32,
+    pub momentum_min_time: f32,
+    pub momentum_transition_time: f32,
+    /// Seconds after take-off before the stick steers the jump (until then it keeps going as it
+    /// took off).
+    pub no_input_time: f32,
 }
 
 impl JumpParams {
@@ -54,6 +64,11 @@ impl JumpParams {
         double_jump_time_start: 0.0,
         double_jump_height_min: 0.0,
         max_total_jump: None,
+        momentum_weight_min: 0.0,
+        momentum_weight_max: 0.0,
+        momentum_min_time: 0.0,
+        momentum_transition_time: 0.0,
+        no_input_time: 0.0,
     };
 
     /// Gravity (m/s², positive = down) while this jump kind is active.
@@ -88,6 +103,29 @@ impl JumpParams {
             };
         }
         ((held - self.button_min_hold) / span).clamp(0.0, 1.0)
+    }
+
+    /// The share of the old horizontal speed a jump keeps over a tick of `dt`, `t` seconds after
+    /// take-off (RiftApart.exe): the momentum weight raised to half the tick over the time to
+    /// peak, mapped back onto the weights' range. A single jump (1 to 1.2) keeps about 0.03 a
+    /// tick at 60 Hz, so the stick decides almost at once; a double jump (0 to 1.4) about 0.72.
+    pub fn momentum_keep(&self, t: f32, dt: f32) -> f32 {
+        let (lo, hi) = (self.momentum_weight_min, self.momentum_weight_max);
+        // (Over MinTime + TransitionTime, as the game divides.)
+        let span = self.momentum_min_time + self.momentum_transition_time;
+        let s = if span >= 1e-4 { ((t - self.momentum_min_time) / span).clamp(0.0, 1.0) } else { 1.0 };
+        let w = lo + s * (hi - lo);
+        let peak_time = if self.time_to_peak_is_gravity {
+            (2.0 * self.height_min / self.time_to_peak.max(1e-6)).sqrt()
+        } else {
+            self.time_to_peak
+        };
+        let f = w.max(0.0).powf(0.5 * dt / if peak_time > 0.0 { peak_time } else { 1.0 });
+        if (hi - lo).abs() < 1e-6 {
+            // The game divides by zero here; IEEE rules then clamp to 0 or 1.
+            return if f > lo { 1.0 } else { 0.0 };
+        }
+        ((f - lo) / (hi - lo)).clamp(0.0, 1.0)
     }
 
     /// Apex height for a button held `held` seconds.
@@ -402,6 +440,9 @@ impl Default for Tuning {
                 no_glide_time: 0.6,
                 double_jump_time_start: 0.1,
                 double_jump_height_min: 0.25,
+                // The game's single-jump momentum weights.
+                momentum_weight_min: 1.0,
+                momentum_weight_max: 1.2,
                 ..JumpParams::FALLBACK
             },
             double_jump: JumpParams {
@@ -411,6 +452,7 @@ impl Default for Tuning {
                 button_max_hold: 0.2,
                 no_glide_time: 0.5,
                 max_total_jump: Some(2.8),
+                momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
             },
             fall: JumpParams {
@@ -434,8 +476,26 @@ impl Default for Tuning {
             melee: MeleeParams::default(),
             aim_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.5, run_min: 4.0, run_max: 5.0, walk_run_threshold: 0.6 },
             aim_back_speed: 4.0,
-            aim_single_jump: JumpParams { height_min: 0.9, height_max: 0.9, time_to_peak: 0.3, no_glide_time: 0.7, double_jump_time_start: 0.1, double_jump_height_min: 0.25, ..JumpParams::FALLBACK },
-            aim_double_jump: JumpParams { height_min: 0.9, height_max: 0.9, time_to_peak: 0.28, no_glide_time: 0.5, max_total_jump: Some(1.7), ..JumpParams::FALLBACK },
+            aim_single_jump: JumpParams {
+                height_min: 0.9,
+                height_max: 0.9,
+                time_to_peak: 0.3,
+                no_glide_time: 0.7,
+                double_jump_time_start: 0.1,
+                double_jump_height_min: 0.25,
+                momentum_weight_min: 1.0,
+                momentum_weight_max: 1.2,
+                ..JumpParams::FALLBACK
+            },
+            aim_double_jump: JumpParams {
+                height_min: 0.9,
+                height_max: 0.9,
+                time_to_peak: 0.28,
+                no_glide_time: 0.5,
+                max_total_jump: Some(1.7),
+                momentum_weight_max: 1.4,
+                ..JumpParams::FALLBACK
+            },
             scale: 1.0,
             source: "generic defaults".into(),
         }
@@ -535,6 +595,11 @@ fn jump_from(v: &Value) -> Result<JumpParams, String> {
         double_jump_time_start: f(v, "DoubleJumpTimeStart").unwrap_or(d.double_jump_time_start),
         double_jump_height_min: f(v, "DoubleJumpHeightMin").unwrap_or(d.double_jump_height_min),
         max_total_jump: f(v, "MaxTotalJump"),
+        momentum_weight_min: f(v, "MomentumWeightMin").unwrap_or(d.momentum_weight_min),
+        momentum_weight_max: f(v, "MomentumWeightMax").unwrap_or(d.momentum_weight_max),
+        momentum_min_time: f(v, "MomentumMinTime").unwrap_or(d.momentum_min_time),
+        momentum_transition_time: f(v, "MomentumTransitionTime").unwrap_or(d.momentum_transition_time),
+        no_input_time: f(v, "NoInputTime").unwrap_or(d.no_input_time),
     })
 }
 

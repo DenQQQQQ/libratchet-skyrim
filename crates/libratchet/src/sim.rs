@@ -148,7 +148,18 @@ pub struct Ratchet {
     /// Seconds into the dash, and whether he was strafing (aiming or firing) when it started.
     dash_time: f32,
     dash_strafe: bool,
+    /// A jump pressed early in the dash, waiting for it to allow one.
+    dash_jump_queued: bool,
     air_dash_used: bool,
+    /// The jump's take-off (RiftApart.exe): the speed he had, the stick's push and direction
+    /// (ahead without input), whether this is its first tick, whether the stick has been left
+    /// alone since, and the velocity it holds while it can't be steered yet.
+    jump_takeoff_speed: f32,
+    jump_stick: f32,
+    jump_dir: Vec2,
+    jump_first: bool,
+    jump_carry: bool,
+    jump_held: Vec2,
     prev_melee: bool,
     /// Seconds since the last melee press nothing used yet.
     since_melee_press: f32,
@@ -201,7 +212,14 @@ impl Ratchet {
             dash_braking: false,
             dash_time: 0.0,
             dash_strafe: false,
+            dash_jump_queued: false,
             air_dash_used: false,
+            jump_takeoff_speed: 0.0,
+            jump_stick: 0.0,
+            jump_dir: Vec2::ZERO,
+            jump_first: false,
+            jump_carry: false,
+            jump_held: Vec2::ZERO,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
             combo_next: 0,
@@ -342,8 +360,11 @@ impl Ratchet {
             }
             MoveState::Dash => {
                 self.dash_time += dt;
-                if pressed && self.dash_time >= DASH_JUMP_AFTER {
-                    // Jumping out of a dash keeps its speed.
+                // A jump pressed during the dash's first 0.1 s waits for it (RiftApart.exe). It
+                // takes off with the dash's speed, which the jump then blends away.
+                self.dash_jump_queued |= pressed;
+                if self.dash_jump_queued && self.dash_time >= DASH_JUMP_AFTER {
+                    self.dash_jump_queued = false;
                     self.start_jump(dt, MoveState::Jump, position);
                 } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
                     self.swing(dt, false, stick, position);
@@ -374,7 +395,7 @@ impl Ratchet {
                 let params = self.params(self.state).clone();
                 self.air_time += dt;
                 self.extend_jump(input.jump, &params, position);
-                self.air_steer(dt, stick);
+                self.jump_air(dt, stick, &params);
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
@@ -647,6 +668,14 @@ impl Ratchet {
             self.events.push(Event::Jumped);
         }
 
+        // Take-off (RiftApart.exe): from the speed he has, toward where the stick points, or
+        // ahead without input. `jump_air` does the rest.
+        let flat = Vec2::new(self.velocity.x, self.velocity.z);
+        self.jump_takeoff_speed = flat.length();
+        self.jump_stick = self.stick.length().min(1.0);
+        self.jump_dir = if self.jump_stick >= MOVE_STICK { self.stick.normalize() } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) };
+        self.jump_first = true;
+        self.jump_carry = true;
         let g = params.gravity_for(h_min);
         self.state = kind;
         self.air_time = 0.0;
@@ -673,6 +702,7 @@ impl Ratchet {
         self.dash_travelled = 0.0;
         self.dash_braking = false;
         self.dash_time = 0.0;
+        self.dash_jump_queued = false;
         self.extending = false;
         self.state = kind;
         if kind == MoveState::AirDash {
@@ -839,6 +869,47 @@ impl Ratchet {
         // Don't brake below the take-off speed (up to the air maximum); only steer.
         let speed = speeds.speed_for_stick(stick.length()).max(current.length().min(speeds.run_max));
         self.steer(dt, stick, speed, accel, accel * 0.25);
+    }
+
+    /// A jump's horizontal speed, the game's way (RiftApart.exe).
+    /// - The first tick goes on at the speed he took off with (unclamped: a dash's too),
+    ///   toward where the stick pointed.
+    /// - After that, each tick blends from the speed he has toward the stick's: the jump speeds
+    ///   for its push, times the push again. The share of the old speed kept is the jump's
+    ///   momentum (`JumpParams::momentum_keep`), almost none for a single jump.
+    /// - With the stick left alone since take-off, it keeps up to the jump run speed ahead;
+    ///   let go after steering, it stops.
+    fn jump_air(&mut self, dt: f32, stick: Vec2, params: &JumpParams) {
+        let v_last = Vec2::new(self.velocity.x, self.velocity.z);
+        let steerable = self.air_time >= params.no_input_time;
+        let (push, dir) = if self.jump_first || !steerable {
+            (self.jump_stick, self.jump_dir)
+        } else {
+            (stick.length().min(1.0), stick.normalize_or_zero())
+        };
+        let dir = if push < 0.01 { if self.jump_carry { self.jump_dir } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) } } else { dir };
+        let speeds = self.tuning.air_speeds.clone();
+        let (m, speed) = if push <= MOVE_STICK {
+            (1.0, if self.jump_carry { v_last.length().min(speeds.run_max) } else { 0.0 })
+        } else {
+            if steerable && !self.jump_first {
+                self.jump_carry = false;
+            }
+            (push, speeds.speed_for_stick(push))
+        };
+        let base = dir.normalize_or_zero() * speed;
+        let v = if self.jump_first {
+            self.jump_held = base.normalize_or_zero() * self.jump_takeoff_speed.max(v_last.length());
+            self.jump_held
+        } else if !steerable {
+            self.jump_held
+        } else {
+            let target = base * m;
+            target + (v_last - target) * params.momentum_keep(self.air_time, dt)
+        };
+        self.jump_first = false;
+        self.velocity.x = v.x;
+        self.velocity.z = v.y;
     }
 
     /// Moves horizontal velocity towards `stick` direction × `speed`, accelerating at `accel`
