@@ -53,8 +53,8 @@ python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --al
 That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatterbomb.glb`,
 `shatterbomb_glove.glb` and `testdummy.glb` (the game's test-dummy robot, which the combat dummies
 wear). The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
-double jump, fall, glide, land, dash (in eight directions), air-dash, wrench and gun clips, with
-the game's wrench-carrying versions while the wrench or the Shatterbomb is out. Clank rides on his
+double jump, fall, glide (the heli-pack's intro, swaying loop and lean), land, dash (in eight
+directions), air-dash, strafe-jump, wrench and gun clips, per weapon grip. Clank rides on his
 back (backpack idle, heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
 hand, and the Shatterbomb's glove on it. Without them, you get a capsule with Lombax ears. Never
 share the `.glb` files: they're game data.
@@ -93,10 +93,10 @@ cargo run -p sandbox
 | WASD | Move (camera-relative) |
 | Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide |
 | Shift | Dash (on the ground or once in the air) |
-| 1 / 2 / 3 | OmniWrench / Burst Pistol / Shatterbomb |
-| Left mouse | Wrench out: swing (while aiming: throw). Gun out: fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
-| Right mouse | Aim, with any weapon (aim mode: strafe at the game's aim pace, camera over the shoulder). Swinging while aiming throws the wrench, as in the game ("Hold Aim and Melee to Throw Wrench"), also in the air. Firing without aiming strafes too, at run speed, while the gun fires |
-| E | Swing the wrench: press again during a swing, or just after it, for the next hit (3-hit combo, with a short rest after the third); in the air it's the Hyper-Strike; while aiming it throws |
+| 1 / 2 | Burst Pistol / Shatterbomb (not while the wrench is thrown). The wrench isn't one to pick: as in the game, melee swings it whatever gun is out |
+| Left mouse | Fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
+| Right mouse | Aim (aim mode: strafe at the game's aim pace, camera over the shoulder; jumps flip sideways and backward). Melee while aiming throws the wrench, as in the game ("Hold Aim and Melee to Throw Wrench"), also in the air. Firing without aiming strafes too, at run speed, while the gun fires |
+| F | Melee, as in the game: press again during a swing, or just after it, for the next hit (3-hit combo, with a short rest after the third); in the air it's the Hyper-Strike; while aiming it throws the wrench |
 | Q | Throw the wrench along the camera in one press (the game's optional "Melee Throw" shortcut); it comes back to your hand |
 | Ctrl | Walk |
 | Mouse | Camera (click to grab the mouse, Esc to free it); scroll to zoom |
@@ -112,11 +112,12 @@ peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch` to play one
-section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the walk;
-face: his face through a jump; carry: the wrench in hand, the Shatterbomb's glove, dashing while
-aiming; dashjump: jumps out of a dash beside a running jump; throwswitch: switching weapons
-around a wrench throw).
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump` to
+play one section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the
+walk; face: his face through a jump; carry: the weapon in hand, the whole wrench after the
+combo, the Shatterbomb's glove, dashing while aiming; dashjump: jumps out of a dash beside a
+running jump; throwswitch: switching weapons around a wrench throw; strafejump: the strafe-jump
+flips and a long glide).
 
 ## Tests
 

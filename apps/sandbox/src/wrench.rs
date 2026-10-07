@@ -1,7 +1,8 @@
-//! The OmniWrench, when `riftapart-assets/wrench.glb` exists: held in Ratchet's right hand
-//! (`RT_handle_bound`, the game's gun-attach locator) while it's the weapon out, and with any
-//! weapon while he swings (playing its own squash-and-stretch clips in time with his), and thrown
-//! with aim + melee like the game (right mouse held, then E or left mouse), or Q, the game's
+//! The OmniWrench, when `riftapart-assets/wrench.glb` exists: in Ratchet's right hand
+//! (`RT_handle_bound`, the game's gun-attach locator) while he swings (playing its own
+//! squash-and-stretch clips in time with his). It isn't a weapon to pick: melee (F) swings it
+//! whatever gun is out, and it's thrown with aim + melee like the game (right mouse held, then
+//! F), or Q, the game's
 //! one-button "Melee Throw" shortcut (libratchet's `WrenchThrow`), knocking back the first dummy
 //! it meets.
 
@@ -11,7 +12,6 @@ use crate::vfx::{FxRng, VfxArt};
 use crate::{CameraRig, Player, Settings, simulate};
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use libratchet::{MoveState, ThrowStatus, WrenchThrow};
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub const MODEL_FILE: &str = "wrench.glb";
 /// holds in between, which also puts back what a swing scaled away (the third hit shrinks the back
 /// hammer to nothing).
 const CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3", "smash_intro", "smash", "idle"];
-/// With another weapon out, the wrench stays in hand this long after a swing or a catch.
+/// The wrench stays in hand this long after a swing or a catch.
 const SHOW_AFTER: f32 = 0.35;
 /// Ratchet's throw animation (until the catch).
 const THROW_ANIM: f32 = 1.4;
@@ -57,8 +57,6 @@ pub struct Wrench {
     /// Counts throws, so the animation can restart its layer for each one, and catches.
     pub throws: u32,
     pub catches: u32,
-    /// Counts throws a weapon switch ended (no return, no catch).
-    pub cancels: u32,
 }
 
 impl Wrench {
@@ -73,23 +71,10 @@ impl Wrench {
     }
 
     /// From the throw until just after the catch. A throw is the melee grip's "fire" in the
-    /// game's animset, and the wrench holds Ratchet's hand all that time: a gun stays put away and
-    /// can't fire.
+    /// game's animset, and the wrench holds Ratchet's hand all that time: a gun stays put away,
+    /// can't fire, and can't be switched.
     pub fn throwing(&self) -> bool {
         self.out_of_hand() || self.throw_anim > 0.0
-    }
-
-    /// Ends a throw on the spot, as switching weapons does in the game: equipping the new weapon
-    /// takes the wrench out of the hand, so it doesn't fly home and there's no catch
-    /// (RiftApart.exe).
-    pub fn end_throw(&mut self, cues: &mut MessageWriter<crate::sound::SoundCue>) {
-        if self.flight.take().is_some() {
-            cues.write(crate::sound::SoundCue::stop("wrench_throw_loop"));
-        }
-        self.releasing = None;
-        self.throw_anim = 0.0;
-        self.show = 0.0;
-        self.cancels += 1;
     }
 }
 
@@ -158,9 +143,9 @@ fn setup_clips(
     commands.entity(player).insert((AnimationGraphHandle(graphs.add(graph)), AnimationTransitions::new()));
 }
 
-/// Shows the held wrench while it's the weapon out, and during melee (and briefly after) with
-/// another one; hidden while it's thrown. Plays the wrench's clip for each of Ratchet's swings,
-/// and its idle in between.
+/// Shows the held wrench during melee (and briefly after), hidden while it's thrown (always out
+/// when there are no guns). Plays the wrench's clip for each of Ratchet's swings, and its idle in
+/// between.
 fn held_wrench(
     time: Res<Time>,
     arsenal: Option<Res<crate::weapons::Arsenal>>,
@@ -173,7 +158,7 @@ fn held_wrench(
     let in_melee = matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand);
     wrench.show = if in_melee { SHOW_AFTER } else { (wrench.show - time.delta_secs()).max(0.0) };
     wrench.throw_anim = (wrench.throw_anim - time.delta_secs()).max(0.0);
-    let out = arsenal.as_ref().is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
+    let out = arsenal.is_none();
     // A dash puts the weapon away for its length (as in the game).
     let dashing = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash);
     let want = wrench.flight.is_none() && !dashing && (out || wrench.show > 0.0);
@@ -201,19 +186,14 @@ fn held_wrench(
 }
 
 /// Melee while aiming asks for a throw, as in the game ("Hold [Aim] and [Melee] to Throw
-/// Wrench"): E, or left mouse with the wrench selected. Q is the game's optional one-button
-/// "Melee Throw" shortcut.
+/// Wrench"): F. Q is the game's optional one-button "Melee Throw" shortcut.
 fn throw_button(
     keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
     arsenal: Option<Res<crate::weapons::Arsenal>>,
-    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut wrench: ResMut<Wrench>,
 ) {
-    let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
     let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
-    let melee = keys.just_pressed(KeyCode::KeyE) || (grabbed && wrench_out && mouse.just_pressed(MouseButton::Left));
+    let melee = keys.just_pressed(KeyCode::KeyF);
     if keys.just_pressed(KeyCode::KeyQ) || (aiming && melee) {
         wrench.throw_requested = true;
     }

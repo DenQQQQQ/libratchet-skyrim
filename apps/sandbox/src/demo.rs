@@ -65,6 +65,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("carry") => [vec![hold(1.5, Vec2::ZERO, false)], carry()].concat(),
         Some("dashjump") => [vec![hold(1.5, Vec2::ZERO, false)], dash_jumps()].concat(),
         Some("throwswitch") => [vec![hold(1.5, Vec2::ZERO, false)], throw_switch()].concat(),
+        Some("strafejump") => [vec![hold(1.5, Vec2::ZERO, false)], strafe_jumps()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -355,7 +356,7 @@ fn combat() -> Vec<Act> {
     let mut acts = vec![
         Act::ClearTrail,
         Act::CloseUp(true),
-        Act::Slot(Slot::Wrench),
+        Act::Slot(Slot::BurstPistol),
         Act::Teleport(start),
         Act::Follow { yaw: 0.9, pitch: 0.2, distance: 5.5 },
         hold(0.12, x, false),
@@ -460,15 +461,14 @@ fn combat() -> Vec<Act> {
         Act::Gun { trigger: false, aim: false },
         Act::AimAt(None),
         hold(0.4, Vec2::ZERO, false),
-        Act::Slot(Slot::Wrench),
         Act::Follow { yaw: 0.9, pitch: 0.2, distance: 9.0 },
     ]);
     acts
 }
 
-/// The weapon in hand: the wrench carried while it's out (standing, walking, running, a jump), the
-/// whole wrench back after the combo (the third hit shrinks its back hammer away), melee presses
-/// doing nothing while it's thrown, and the Shatterbomb's glove on his right hand.
+/// The weapon in hand: the pistol out standing, walking, running and in a jump; the whole wrench
+/// back after the combo (the third hit shrinks its back hammer away); melee presses doing nothing
+/// while it's thrown; the Shatterbomb's glove on his right hand; dashing while aiming.
 fn carry() -> Vec<Act> {
     use crate::weapons::Slot;
     let arena = spots::ARENA;
@@ -478,20 +478,20 @@ fn carry() -> Vec<Act> {
     let mut acts = vec![
         Act::ClearTrail,
         Act::CloseUp(true),
-        Act::Slot(Slot::Wrench),
+        Act::Slot(Slot::BurstPistol),
         Act::Teleport(lane),
         hold(0.12, x, false),
         Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
         hold(1.2, Vec2::ZERO, false),
-        Act::Shot("50_wrench_idle"),
+        Act::Shot("50_idle"),
         hold(1.0, x * 0.3, false),
-        Act::Shot("51_wrench_walk"),
+        Act::Shot("51_walk"),
         hold(0.4, x * 0.3, false),
         hold(1.0, x, false),
-        Act::Shot("52_wrench_run"),
+        Act::Shot("52_run"),
         hold(0.25, x, true),
         hold(0.1, x, false),
-        Act::Shot("53_wrench_jump"),
+        Act::Shot("53_jump"),
         hold(0.8, x, false),
         hold(1.0, Vec2::ZERO, false),
         // The combo (mashed), then the wrench as it rests: whole again.
@@ -549,14 +549,7 @@ fn carry() -> Vec<Act> {
         Act::Shot("5b_dash_back_aiming"),
         hold(0.9, Vec2::ZERO, false),
         Act::Gun { trigger: false, aim: false },
-        // Standing a while with the wrench: his fidgets, with the wrench in hand.
-        Act::Slot(Slot::Wrench),
-        Act::Teleport(lane),
-        hold(0.12, x, false),
-        Act::Follow { yaw: 0.9, pitch: 0.15, distance: 3.5 },
-        hold(9.0, Vec2::ZERO, false),
-        Act::Shot("59_wrench_fidget"),
-        hold(1.5, Vec2::ZERO, false),
+        hold(0.6, Vec2::ZERO, false),
     ]);
     acts
 }
@@ -583,9 +576,9 @@ fn dash_jumps() -> Vec<Act> {
     acts
 }
 
-/// Switching weapons around a wrench throw: picking the pistol while the wrench flies ends the
-/// throw on the spot (no return, no catch) and draws the pistol; with the pistol out, a throw
-/// puts it away until the wrench is back.
+/// Switching weapons around a wrench throw, as in the game: with the pistol out, a throw puts it
+/// away until the wrench is back; picking another weapon while the wrench is out does nothing;
+/// after the catch, a switch works and draws the new weapon.
 fn throw_switch() -> Vec<Act> {
     use crate::weapons::Slot;
     let x = Vec2::X;
@@ -593,26 +586,79 @@ fn throw_switch() -> Vec<Act> {
     vec![
         Act::ClearTrail,
         Act::CloseUp(true),
-        Act::Slot(Slot::Wrench),
+        Act::Slot(Slot::BurstPistol),
         Act::Teleport(lane),
         hold(0.12, x, false),
         Act::Follow { yaw: 0.9, pitch: 0.15, distance: 4.0 },
         hold(0.8, Vec2::ZERO, false),
         Act::Throw,
         hold(0.3, Vec2::ZERO, false),
-        Act::Slot(Slot::BurstPistol),
+        Act::Slot(Slot::Shatterbomb),
         hold(0.4, Vec2::ZERO, false),
-        Act::Shot("62_switch_ends_the_throw"),
-        hold(1.3, Vec2::ZERO, false),
-        Act::Shot("63_pistol_out"),
-        hold(1.2, Vec2::ZERO, false),
-        Act::Throw,
-        hold(0.5, Vec2::ZERO, false),
-        Act::Shot("64_thrown_with_the_pistol_out"),
-        hold(2.2, Vec2::ZERO, false),
-        Act::Slot(Slot::Wrench),
+        Act::Shot("62_no_switch_while_thrown"),
+        hold(1.5, Vec2::ZERO, false),
+        Act::Shot("63_pistol_back_after_the_catch"),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Slot(Slot::Shatterbomb),
+        hold(0.3, Vec2::ZERO, false),
+        Act::Shot("64_switch_after_the_catch"),
+        hold(1.4, Vec2::ZERO, false),
+        Act::Slot(Slot::BurstPistol),
         hold(1.0, Vec2::ZERO, false),
     ]
+}
+
+/// Jumping while aiming: the game's strafe jumps by direction (side flips to his right and left, a
+/// back flip, ahead) and standing, a sideways double jump; then a glide off the tower under the
+/// heli-pack (its intro, the swaying loop, leaning into a turn).
+fn strafe_jumps() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let x = Vec2::X;
+    // Facing +X, his right is +Z.
+    let right = Vec2::Y;
+    let lane = spots::ARENA + Vec3::new(-8.0, 0.0, 10.0);
+    let behind = -std::f32::consts::FRAC_PI_2;
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::Slot(Slot::BurstPistol),
+        Act::Teleport(lane),
+        hold(0.12, x, false),
+        Act::Follow { yaw: behind + 0.7, pitch: 0.15, distance: 5.5 },
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+    ];
+    for (name, dir) in [
+        ("65_strafe_jump_right", right),
+        ("66_strafe_jump_left", -right),
+        ("67_strafe_jump_back", -x),
+        ("68_strafe_jump_ahead", x),
+        ("69_strafe_jump_standing", Vec2::ZERO),
+    ] {
+        acts.extend([hold(0.3, dir, false), hold(0.05, dir, true), hold(0.2, dir, false), Act::Shot(name), hold(0.5, dir, false), hold(0.5, Vec2::ZERO, false)]);
+    }
+    acts.extend([
+        hold(0.3, right, false),
+        hold(0.05, right, true),
+        hold(0.3, right, false),
+        hold(0.05, right, true),
+        hold(0.15, right, false),
+        Act::Shot("6a_strafe_double_jump"),
+        hold(0.8, right, false),
+        hold(0.5, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        // A long glide from high up (a mid-air jump, then holding it), turning partway.
+        Act::Teleport(lane + Vec3::new(0.0, 40.0, 0.0)),
+        Act::Follow { yaw: -1.9, pitch: 0.15, distance: 4.0 },
+        hold(0.3, x, false),
+        hold(1.2, x, true),
+        Act::Shot("6b_glide_intro"),
+        hold(2.6, x, true),
+        Act::Shot("6c_glide_loop"),
+        hold(1.0, x, true),
+    ]);
+    acts.extend((1..=16).map(|i| hold(0.05, Vec2::from_angle(0.1 * i as f32).rotate(x), true)));
+    acts.extend([Act::Shot("6d_glide_lean"), hold(1.5, Vec2::from_angle(1.6).rotate(x), true), hold(3.0, x, false)]);
+    acts
 }
 
 /// The moves that make the game's sounds: walking and running (steps, foley), jumps and a
@@ -748,7 +794,7 @@ fn weapon_moves() -> Vec<Act> {
         Act::Shot("26_shatterbomb_blast"),
         hold(1.5, Vec2::ZERO, false),
         Act::Gun { trigger: false, aim: false },
-        Act::Slot(Slot::Wrench),
+        Act::Slot(Slot::BurstPistol),
         hold(0.5, Vec2::ZERO, false),
     ]
 }

@@ -125,8 +125,8 @@ pub struct Trail {
 #[derive(Resource, Default)]
 pub struct ScriptedInput(pub Option<MoveInput>);
 
-/// Left mouse is melee only for presses that start with the mouse already grabbed (the click
-/// that grabs it doesn't swing).
+/// Left mouse fires only for presses that start with the mouse already grabbed (the click that
+/// grabs it doesn't shoot).
 #[derive(Resource, Default)]
 pub struct MouseMelee(bool);
 
@@ -334,8 +334,8 @@ fn setup(
     commands.spawn((
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
-             1 wrench, 2 Burst Pistol, 3 Shatterbomb  |  E (or left mouse with the wrench out) swing, in the air: Hyper-Strike  |  gun: left mouse fire\n\
-             right mouse aim; swing while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
+             1 Burst Pistol, 2 Shatterbomb  |  left mouse fire  |  F melee (the wrench), in the air: Hyper-Strike\n\
+             right mouse aim; melee while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
         ),
         DebugUi,
         TextFont::from_font_size(13.0),
@@ -365,13 +365,13 @@ fn debug_overlay(overlay: Res<DebugOverlay>, mut q: Query<&mut Visibility, With<
 }
 
 fn crosshair(arsenal: Option<Res<weapons::Arsenal>>, mut q: Query<&mut Visibility, With<Crosshair>>) {
-    let show = arsenal.is_some_and(|a| a.slot.is_gun() || a.aiming);
+    let show = arsenal.is_some();
     for mut v in &mut q {
         v.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
-fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, mouse_melee: bool, yaw: f32) -> MoveInput {
+fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
     let mut forward = 0.0;
     let mut side = 0.0;
     if keys.pressed(KeyCode::KeyW) {
@@ -395,7 +395,8 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>,
         move_dir: dir * if walk { 0.45 } else { 1.0 },
         jump: keys.pressed(KeyCode::Space),
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        melee: keys.pressed(KeyCode::KeyE) || (mouse_melee && mouse.pressed(MouseButton::Left)),
+        // Melee is F, as in the game.
+        melee: keys.pressed(KeyCode::KeyF),
         aim: None,
         aim_mode: false,
     }
@@ -405,8 +406,6 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>,
 pub fn simulate(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    mouse_melee: Res<MouseMelee>,
     arsenal: Option<Res<weapons::Arsenal>>,
     wrench: Option<Res<wrench::Wrench>>,
     rig: Res<CameraRig>,
@@ -421,16 +420,14 @@ pub fn simulate(
     let Ok(mut p) = players.single_mut() else { return };
     let s = settings.scale;
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
-    // Left mouse swings the wrench only while the wrench is selected; with a gun it fires.
-    let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == weapons::Slot::Wrench);
-    let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0 && wrench_out, rig.yaw));
+    let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, rig.yaw));
     // Aiming, or firing a gun (and just after the newest shot): face where the camera looks and
     // strafe, as in the game. While aiming, melee throws the wrench instead of swinging
     // (wrench.rs).
     let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
     // (A gun put away for a wrench throw doesn't fire, so it doesn't strafe either.)
     let throwing = wrench.as_ref().is_some_and(|w| w.throwing());
-    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)) {
+    if aiming || arsenal.as_ref().is_some_and(|a| !throwing && (a.trigger || a.stance > 0.0)) {
         input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
         input.aim_mode = aiming;
     }

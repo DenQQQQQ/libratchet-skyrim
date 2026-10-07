@@ -1,6 +1,5 @@
-//! Guns, through libarsenal: the Burst Pistol and the Shatterbomb. Keys 1/2/3 pick the wrench,
-//! the pistol or the grenade. With a gun out, left mouse fires and right mouse aims (strafing,
-//! over-the-shoulder camera). Shots go where the crosshair points: the camera ray's first hit on
+//! Guns, through libarsenal: the Burst Pistol and the Shatterbomb. Keys 1/2 pick the pistol or
+//! the grenade. Left mouse fires and right mouse aims (strafing, over-the-shoulder camera). Shots go where the crosshair points: the camera ray's first hit on
 //! the level or a dummy.
 //!
 //! Weapon numbers come from `riftapart-configs/wpn_burstpistol_weapon.json` and
@@ -38,9 +37,10 @@ const REFILL_AFTER: f32 = 1.5;
 /// then goes back to running; there's no lingering gun-up stance (RiftApart.exe).
 const STRAFE_AFTER_SHOT: f32 = 0.1;
 
+/// The weapons to pick from. The OmniWrench isn't one: as in the game, melee (F) swings it and
+/// aim + melee throws it, whatever gun is out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
-    Wrench,
     BurstPistol,
     Shatterbomb,
 }
@@ -48,13 +48,9 @@ pub enum Slot {
 impl Slot {
     pub fn name(self) -> &'static str {
         match self {
-            Slot::Wrench => "OmniWrench",
             Slot::BurstPistol => "Burst Pistol",
             Slot::Shatterbomb => "Shatterbomb",
         }
-    }
-    pub fn is_gun(self) -> bool {
-        self != Slot::Wrench
     }
 }
 
@@ -192,7 +188,7 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
     };
     commands.insert_resource(WeaponShakes { recoil: shake(&pistol.recoil_shake).map(|(sh, _, _)| sh), blast: shake(&grenade.blast_shake) });
     commands.insert_resource(Arsenal {
-        slot: Slot::Wrench,
+        slot: Slot::BurstPistol,
         requested: None,
         equips: 0,
         pistol: Weapon::new(pistol.scaled(s)),
@@ -303,39 +299,32 @@ fn controls(
     mouse_melee: Res<MouseMelee>,
     scripted: Res<ScriptedArsenal>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    wrench: Option<ResMut<crate::wrench::Wrench>>,
-    mut cues: MessageWriter<crate::sound::SoundCue>,
+    wrench: Option<Res<crate::wrench::Wrench>>,
     mut arsenal: ResMut<Arsenal>,
 ) {
-    for (key, slot) in [(KeyCode::Digit1, Slot::Wrench), (KeyCode::Digit2, Slot::BurstPistol), (KeyCode::Digit3, Slot::Shatterbomb)] {
+    for (key, slot) in [(KeyCode::Digit1, Slot::BurstPistol), (KeyCode::Digit2, Slot::Shatterbomb)] {
         if keys.just_pressed(key) {
             arsenal.requested = Some(slot);
         }
     }
-    // Switching while the wrench is thrown takes it out of the hand: the throw ends on the spot,
-    // with no return and no catch, and the new weapon comes out (RiftApart.exe). Picking the
-    // wrench itself leaves the throw be.
-    if let Some(slot) = arsenal.requested.take() {
-        let thrown = wrench.as_ref().is_some_and(|w| w.throwing());
-        let ends_throw = thrown && slot != Slot::Wrench;
-        if ends_throw && let Some(mut w) = wrench {
-            w.end_throw(&mut cues);
-        }
-        if ends_throw || (slot != arsenal.slot && !thrown) {
-            arsenal.equips += 1;
-        }
+    // While the wrench is out of the hand there's no switching: the game ignores it until the
+    // throw is over (the user's check in the game).
+    if let Some(slot) = arsenal.requested.take()
+        && slot != arsenal.slot
+        && !wrench.as_ref().is_some_and(|w| w.throwing())
+    {
         arsenal.slot = slot;
+        arsenal.equips += 1;
     }
-    let gun = arsenal.slot.is_gun();
     if scripted.active {
         arsenal.aiming = scripted.aim;
-        arsenal.trigger = gun && scripted.trigger;
+        arsenal.trigger = scripted.trigger;
     } else {
         let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
         arsenal.aiming = grabbed && mouse.pressed(MouseButton::Right);
-        arsenal.trigger = gun && grabbed && mouse_melee.armed() && mouse.pressed(MouseButton::Left);
+        arsenal.trigger = grabbed && mouse_melee.armed() && mouse.pressed(MouseButton::Left);
     }
-    arsenal.stance = if gun { (arsenal.stance - time.delta_secs()).max(0.0) } else { 0.0 };
+    arsenal.stance = (arsenal.stance - time.delta_secs()).max(0.0);
 }
 
 /// Camera ray: where the crosshair (screen centre) points.
@@ -527,17 +516,11 @@ fn fire(
                 arsenal.pending = Some(if standing { arsenal.grenade_release.0 } else { arsenal.grenade_release.1 });
             }
         }
-        Slot::Wrench => {
-            arsenal.pistol.step(dt, false, &aim);
-            arsenal.grenade.step(dt, false, &aim);
-            arsenal.cooking = false;
-        }
     }
     // Refill an empty weapon after a moment.
     let empty = match arsenal.slot {
         Slot::BurstPistol => arsenal.pistol.ammo() == 0,
         Slot::Shatterbomb => arsenal.grenade.ammo() == 0,
-        Slot::Wrench => false,
     };
     arsenal.refill = if empty { arsenal.refill + dt } else { 0.0 };
     if arsenal.refill > REFILL_AFTER {
@@ -867,7 +850,6 @@ fn gun_clips(
 /// Helper for other modules: the slot's display name and ammo.
 pub fn hud_line(arsenal: &Arsenal) -> String {
     let (ammo, max, extra) = match arsenal.slot {
-        Slot::Wrench => return "weapon: OmniWrench (1)  |  2 Burst Pistol, 3 Shatterbomb".into(),
         Slot::BurstPistol => {
             let w = &arsenal.pistol;
             (w.ammo(), w.params().ammo, format!("spread {:.2}°  |  {:.0}/s aimed, {:.0}/s from the hip", w.spread(), w.params().rate, w.params().rapid_rate))

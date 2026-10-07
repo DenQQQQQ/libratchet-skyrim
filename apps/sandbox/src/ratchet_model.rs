@@ -59,7 +59,13 @@ const CLIP_STATES: &[&str] = &[
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
     "wrench_idle", "wrench_walk", "wrench_run", "wrench_jump", "wrench_double_jump", "wrench_land", "wrench_land_walk", "wrench_land_run",
     "wrench_glide", "glove_glide", "dash_ne", "dash_e", "dash_se", "dash_s", "dash_sw", "dash_w", "dash_nw", "air_dash_ne", "air_dash_e",
-    "air_dash_se", "air_dash_s", "air_dash_sw", "air_dash_w", "air_dash_nw",
+    "air_dash_se", "air_dash_s", "air_dash_sw", "air_dash_w", "air_dash_nw", "glide_intro_pistol", "glide_pistol", "glide_intro_wrench",
+    "glide_intro_glove", "strafe_jump_n", "strafe_jump_e", "strafe_jump_s", "strafe_jump_w", "strafe_jump_idle", "wrench_strafe_jump_n",
+    "wrench_strafe_jump_e", "wrench_strafe_jump_s", "wrench_strafe_jump_w", "strafe_double_jump_n", "strafe_double_jump_e",
+    "strafe_double_jump_s", "strafe_double_jump_w", "wrench_strafe_double_jump_n", "wrench_strafe_double_jump_e",
+    "wrench_strafe_double_jump_s", "wrench_strafe_double_jump_w", "strafe_land_n", "strafe_land_e", "strafe_land_s", "strafe_land_w",
+    "strafe_land_idle", "wrench_strafe_land_n", "wrench_strafe_land_e", "wrench_strafe_land_s", "wrench_strafe_land_w",
+    "wrench_strafe_land_idle",
 ];
 /// Dashes by direction relative to where he faces (clockwise from ahead), on the ground and in
 /// the air: the game's Dash and Air_Dash drivers have one clip per direction.
@@ -82,6 +88,25 @@ const DRAW_LAYERS: [[&str; 2]; 3] = [
 /// The draw fades in and out over these (the driver's blend times).
 const DRAW_FADE_IN: f32 = 0.15;
 const DRAW_FADE_OUT: f32 = 0.25;
+/// Jumping while strafing (aiming or firing): by the jump's direction relative to where he faces
+/// (n ahead, e his right, s back, w his left; the sideways and backward ones flip), then
+/// standing still, for the one-handed grip and the wrench/glove grip. Double jumps have no
+/// standing version (ahead), and landings their own set.
+const STRAFE_JUMPS: [[&str; 5]; 2] = [
+    ["strafe_jump_n", "strafe_jump_e", "strafe_jump_s", "strafe_jump_w", "strafe_jump_idle"],
+    ["wrench_strafe_jump_n", "wrench_strafe_jump_e", "wrench_strafe_jump_s", "wrench_strafe_jump_w", "strafe_jump_idle"],
+];
+const STRAFE_DOUBLE_JUMPS: [[&str; 5]; 2] = [
+    ["strafe_double_jump_n", "strafe_double_jump_e", "strafe_double_jump_s", "strafe_double_jump_w", "strafe_double_jump_n"],
+    ["wrench_strafe_double_jump_n", "wrench_strafe_double_jump_e", "wrench_strafe_double_jump_s", "wrench_strafe_double_jump_w", "wrench_strafe_double_jump_n"],
+];
+const STRAFE_LANDINGS: [[&str; 5]; 2] = [
+    ["strafe_land_n", "strafe_land_e", "strafe_land_s", "strafe_land_w", "strafe_land_idle"],
+    ["wrench_strafe_land_n", "wrench_strafe_land_e", "wrench_strafe_land_s", "wrench_strafe_land_w", "wrench_strafe_land_idle"],
+];
+/// The glide's lean (additive, 11 poses, the middle one upright), scrubbed by how fast he turns,
+/// fully at FULL_LEAN_TURN_RATE.
+const GLIDE_LEAN: &str = "glide_lean_additive";
 /// Turn rate (rad/s) at which the run leans fully into the turn (ours).
 const FULL_LEAN_TURN_RATE: f32 = 5.0;
 /// Walk below this speed, run above that one, with some overlap (m/s at Ratchet's size; between
@@ -134,15 +159,14 @@ const LOOPING: &[&str] = &[
     "pistol_idle", "pistol_run", "walk", "glove_idle", "wrench_aim_idle", "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e",
     "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
-    "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide",
+    "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol",
 ];
 /// Played at the rate that keeps the feet planted.
 const SPEED_MATCHED: &[&str] = &["run", "walk", "pistol_run", "land_walk", "land_run", "wrench_run", "wrench_walk", "wrench_land_walk", "wrench_land_run"];
 
-/// With the wrench out or the glove on (the game's melee and thrown grips), the moves that have
-/// wrench-carrying versions use them, as the game's animset picks; gliding with the glove has its
-/// own.
-fn carried(clip: &'static str, glove: bool) -> &'static str {
+/// With the glove on, or the melee grip during swings and throws (the game's thrown and melee
+/// grips), the moves that have wrench-carrying versions use them, as the game's animset picks.
+fn carried(clip: &'static str) -> &'static str {
     match clip {
         "idle" => "wrench_idle",
         "walk" => "wrench_walk",
@@ -152,8 +176,6 @@ fn carried(clip: &'static str, glove: bool) -> &'static str {
         "land" => "wrench_land",
         "land_walk" => "wrench_land_walk",
         "land_run" => "wrench_land_run",
-        "glide" if glove => "glove_glide",
-        "glide" => "wrench_glide",
         other => other,
     }
 }
@@ -221,12 +243,23 @@ pub struct Rig {
     glove_hand: Option<AnimationNodeIndex>,
     glove_weight: f32,
     /// The draw layers (see DRAW_LAYERS), the one playing (grip, which, time), the weapon
-    /// switches seen, and a draw waiting for a swing to end. Also the ended throws seen.
+    /// switches seen, and a draw waiting for a swing to end.
     draw_layers: [[Option<(AnimationNodeIndex, f32)>; 2]; 3],
     draw: Option<(usize, usize, f32)>,
     equips_seen: u32,
     draw_pending: bool,
-    cancels_seen: u32,
+    /// The strafe jump picked as the jump (or double jump) started, and the strafe landing.
+    jump_clip: Option<(MoveState, Option<&'static str>)>,
+    strafe_landing: Option<&'static str>,
+    /// Gliding: how long, whether the intro is over, and the lean layer with its weight and
+    /// value (−1 right … 1 left).
+    glide_time: f32,
+    glide_looping: bool,
+    glide_lean: Option<(AnimationNodeIndex, f32)>,
+    glide_lean_weight: f32,
+    glide_lean_value: f32,
+    /// How fast he's turning (rad/s, + to his left).
+    turn_rate: f32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -415,7 +448,14 @@ fn on_ready(
         draw: None,
         equips_seen: 0,
         draw_pending: false,
-        cancels_seen: 0,
+        jump_clip: None,
+        strafe_landing: None,
+        glide_time: 0.0,
+        glide_looping: false,
+        glide_lean: None,
+        glide_lean_weight: 0.0,
+        glide_lean_value: 0.0,
+        turn_rate: 0.0,
         dash_clip: None,
         lower_body,
         idle_time: 0.0,
@@ -464,6 +504,10 @@ fn setup_clips(
                 rig.draw_layers[grip][which] = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
             }
         }
+    }
+    if let Some(clip) = gltf.named_animations.get(GLIDE_LEAN) {
+        let duration = clip_assets.get(clip).map_or(0.33, |c| c.duration());
+        rig.glide_lean = Some((graph.add_clip(clip.clone(), 1.0, layers), duration));
     }
     if let Some(clip) = gltf.named_animations.get(GLOVE_HAND) {
         rig.glove_hand = Some(graph.add_clip(clip.clone(), 1.0, base));
@@ -650,7 +694,7 @@ fn play_clips(
     // facing.
     // (Not while dashing: the dash clips are whole-body and the game puts the weapon away.)
     let throwing = wrench.throwing();
-    let aiming_now = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)))
+    let aiming_now = arsenal.as_ref().is_some_and(|a| a.aiming || (!throwing && (a.trigger || a.stance > 0.0)))
         && !matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash);
     let fade = time.delta_secs() / LAYER_FADE_IN;
     rig.aim_weight = if aiming_now { (rig.aim_weight + fade).min(1.0) } else { (rig.aim_weight - fade).max(0.0) };
@@ -691,13 +735,6 @@ fn play_clips(
             rig.throw_time = Some(0.0);
             player.start(node);
         }
-        // A switch that ended the throw lets the layer go right away.
-        if wrench.cancels != rig.cancels_seen {
-            rig.cancels_seen = wrench.cancels;
-            if let Some(t) = rig.throw_time {
-                rig.throw_time = Some(t.max(duration - LAYER_FADE_OUT));
-            }
-        }
         if let Some(t) = rig.throw_time {
             let t = t + time.delta_secs();
             let weight = (t / LAYER_FADE_IN).min(1.0).min(((duration - t) / LAYER_FADE_OUT).max(0.0));
@@ -716,7 +753,8 @@ fn play_clips(
     let speed = Vec2::new(v.x, v.z).length();
     let state = p.sim.state();
     let airborne = |s: Option<MoveState>| matches!(s, Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash));
-    if state == MoveState::Ground && airborne(rig.prev_state) {
+    let landed = state == MoveState::Ground && airborne(rig.prev_state);
+    if landed {
         rig.land_timer = if speed > 0.6 { 0.35 } else { 0.3 };
     }
     rig.prev_state = Some(state);
@@ -730,7 +768,7 @@ fn play_clips(
     let pistol_out = !melee_grip && arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
     let glove_out = !melee_grip && arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::Shatterbomb);
     let carrying = arsenal.is_some() && !pistol_out;
-    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (a.slot.is_gun() && !throwing && (a.trigger || a.stance > 0.0)));
+    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (!throwing && (a.trigger || a.stance > 0.0)));
     let (strafe_clips, aim_idle) = match (pistol_out, rig.walking) {
         (true, false) => (STRAFE_CLIPS, "aim_idle"),
         (true, true) => (STRAFE_WALK_CLIPS, "aim_idle"),
@@ -800,7 +838,53 @@ fn play_clips(
         let clip = clips[octant(p.sim.dash_dir())];
         rig.dash_clip = Some(if rig.clips.contains_key(clip) { clip } else { clips[0] });
     }
+    // Jumping while strafing: the clip for the jump's direction relative to his facing, picked as
+    // each jump starts (the game's Strafe_Jump drivers), and the landing for how he comes down.
+    let grip_set = if pistol_out { 0 } else { 1 };
+    let quarter = |d: Vec2| -> usize {
+        if d.length() < 0.6 {
+            return 4;
+        }
+        let yaw = p.sim.facing_yaw();
+        let (fwd, right) = (Vec2::new(yaw.sin(), yaw.cos()), Vec2::new(-yaw.cos(), yaw.sin()));
+        ((d.dot(right).atan2(d.dot(fwd)) / std::f32::consts::FRAC_PI_2).round() as i32).rem_euclid(4) as usize
+    };
+    let flat = Vec2::new(v.x, v.z);
+    if matches!(state, MoveState::Jump | MoveState::DoubleJump) {
+        if rig.jump_clip.is_none_or(|(s, _)| s != state) {
+            let set = if state == MoveState::Jump { STRAFE_JUMPS } else { STRAFE_DOUBLE_JUMPS };
+            let clip = Some(set[grip_set][quarter(flat)]).filter(|c| gun_aim && rig.clips.contains_key(c));
+            rig.jump_clip = Some((state, clip));
+        }
+    } else {
+        rig.jump_clip = None;
+    }
+    if landed {
+        rig.strafe_landing = Some(STRAFE_LANDINGS[grip_set][quarter(flat)]).filter(|c| gun_aim && !rig.walking && rig.clips.contains_key(c));
+    } else if rig.land_timer <= 0.0 {
+        rig.strafe_landing = None;
+    }
+    let strafe_jump = rig.jump_clip.and_then(|(_, c)| c);
+    // Gliding under the heli-pack: the intro for his grip, then its loop.
+    let (glide_intro, glide_loop) = if pistol_out {
+        ("glide_intro_pistol", "glide_pistol")
+    } else if glove_out {
+        ("glide_intro_glove", "glove_glide")
+    } else {
+        ("glide_intro_wrench", "wrench_glide")
+    };
+    if state == MoveState::Glide {
+        rig.glide_time += time.delta_secs();
+        if rig.current_clip == Some(glide_intro) && rig.clips.get(glide_intro).and_then(|&n| player.animation(n)).is_some_and(|a| a.is_finished()) {
+            rig.glide_looping = true;
+        }
+    } else {
+        rig.glide_time = 0.0;
+        rig.glide_looping = false;
+    }
+    let heli_glide = rig.clips.contains_key(glide_intro) && rig.clips.contains_key(glide_loop);
     let want: &'static str = match state {
+        MoveState::Ground if rig.land_timer > 0.0 && rig.strafe_landing.is_some() => rig.strafe_landing.unwrap_or("land"),
         MoveState::Ground if gun_aim && speed > 0.6 => strafe,
         MoveState::Ground if gun_aim => aim_idle,
         MoveState::Ground if pistol_out && speed > 0.6 => "pistol_run",
@@ -812,17 +896,20 @@ fn play_clips(
         MoveState::Ground if rig.land_timer > 0.0 => "land",
         MoveState::Ground if rig.idle_time > FIDGET_AFTER => FIDGETS[rig.fidgets_played % FIDGETS.len()],
         MoveState::Ground => "idle",
+        MoveState::Jump | MoveState::DoubleJump if strafe_jump.is_some() => strafe_jump.unwrap_or("jump"),
         MoveState::Jump if v.y < -5.0 => "fall",
         MoveState::Jump => "jump",
         MoveState::DoubleJump => "double_jump",
         MoveState::Fall => "fall",
+        MoveState::Glide if heli_glide && rig.glide_looping => glide_loop,
+        MoveState::Glide if heli_glide => glide_intro,
         MoveState::Glide => "glide",
         MoveState::Dash | MoveState::AirDash => rig.dash_clip.unwrap_or("dash"),
         MoveState::Melee => MELEE_CLIPS[p.sim.melee_swing().unwrap_or(0).min(MELEE_CLIPS.len() - 1)],
         MoveState::Smash => "smash_intro",
         MoveState::SmashLand => "smash",
     };
-    let want = match carried(want, glove_out) {
+    let want = match carried(want) {
         c if carrying && rig.clips.contains_key(c) => c,
         _ => want,
     };
@@ -881,7 +968,7 @@ fn play_clips(
 
     // Match the walk, run and strafe cycles (and the moving landings) to the actual speed: at
     // the speed a clip was authored for, it plays at 1x.
-    if (SPEED_MATCHED.contains(&want) || want.contains("strafe"))
+    if (SPEED_MATCHED.contains(&want) || (want.contains("strafe") && !want.contains("jump") && !want.contains("land")))
         && let Some(&node) = rig.clips.get(want)
     {
         let tuning = p.sim.tuning();
@@ -895,6 +982,23 @@ fn play_clips(
     }
     rig.walking = if rig.walking { speed < WALK_TO_RUN } else { speed < RUN_TO_WALK };
     lean_into_turns(&mut rig, &mut player, p.sim.facing_yaw(), want, time.delta_secs());
+    // The glide leans into turns: its lean poses scrubbed by the turn rate.
+    if let Some((node, duration)) = rig.glide_lean {
+        let dt = time.delta_secs();
+        let gliding = state == MoveState::Glide;
+        let target = if gliding { (rig.turn_rate / FULL_LEAN_TURN_RATE).clamp(-1.0, 1.0) } else { 0.0 };
+        rig.glide_lean_value += (target - rig.glide_lean_value) * (1.0 - (-dt / 0.2).exp());
+        rig.glide_lean_weight = if gliding { (rig.glide_lean_weight + dt / 0.25).min(1.0) } else { (rig.glide_lean_weight - dt / 0.25).max(0.0) };
+        if rig.glide_lean_weight > 0.0 {
+            let t = (duration / 2.0 * (1.0 - rig.glide_lean_value)).clamp(0.0, duration * 0.999);
+            let anim = if player.animation(node).is_some() { player.animation_mut(node) } else { Some(player.start(node).repeat()) };
+            if let Some(anim) = anim {
+                anim.set_speed(0.0).seek_to(t).set_weight(rig.glide_lean_weight);
+            }
+        } else if player.animation(node).is_some() {
+            player.stop(node);
+        }
+    }
     // Fidgets play once, then it's back to the idle (and a while until the next one).
     let idling = matches!(want, "idle" | "wrench_idle");
     rig.idle_time = if idling { rig.idle_time + time.delta_secs() } else { rig.idle_time };
@@ -928,6 +1032,7 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, clip: 
         d / dt.max(1e-4)
     });
     rig.prev_yaw = Some(yaw);
+    rig.turn_rate = rate;
     // Turning toward +yaw is to his left.
     let target = if running { (rate / FULL_LEAN_TURN_RATE).clamp(-1.0, 1.0) } else { 0.0 };
     rig.lean += (target - rig.lean) * (1.0 - (-dt / 0.15).exp());

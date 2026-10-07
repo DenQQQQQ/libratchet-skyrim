@@ -35,6 +35,57 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07 (late night): checked against the game: melee on F, strafe-jump flips, the glide
+
+The user played the game to compare, and found:
+- the wrench isn't a weapon you pick: F is melee, and aim + melee throws it;
+- jumping while strafing makes Ratchet flip sideways;
+- you can't switch weapons while the wrench is thrown;
+- the heli-pack glide sways.
+
+### Known
+- **The user's check in the game:** the four points above.
+- **Strafe jumps (animset):** the Strafe_Jump, Strafe_Jump_Double and Strafe_Jump_Land drivers
+  pick one clip per direction relative to his facing (ahead, right, back, left), per grip.
+  - Clips: `strafe_one_hand_jump_*` with a one-handed gun, `strafe_wrench_jump_*` with the wrench
+    or the glove. Standing still, both grips use `strafe_wrench_jump_idle`.
+  - The sideways and backward jumps turn his body 170–180°: they're the flips.
+  - Landings: `strafe_*_jump_land_*`, the idle landing standing still, and the strafe walk at
+    walking pace.
+- **The heli-pack glide (animset):** Helipack_Glide_Intro, then Helipack_Glide_Loop, per grip.
+  - Clips: `helipack_one_hand_glide(_loop)`, `helipack_wrench_glide(_loop)`, and
+    `helipack_glove_glide` / `helipack_glove_hand_glide_loop`. Both drivers also carry the
+    additive `glide_lean`.
+  - The intros last 2.7–4 s; the 1.3 s loops sway his body about 5°. Our old glide clip
+    (`fall_glide`) barely moves.
+  - `glide_lean` is 11 additive poses, the middle one upright, leaning one way and then the
+    other (up to 24° at the chest).
+
+### Built
+- **Controls:** the weapons are the Burst Pistol (1, the default) and the Shatterbomb (2), and
+  left mouse always fires. Melee is F (was E), and F while aiming throws the wrench; Q still
+  throws in one press.
+- **No switching during a throw:** a weapon picked while the wrench is out (until just after the
+  catch) is ignored. This replaces the entry below's "a switch ends the throw", which was read
+  from the equip code: the game's input doesn't let the switch through.
+- **Strafe jumps:** jumping while strafing (aiming or firing) plays the strafe jump for the
+  take-off direction relative to his facing, picked as the jump starts. Double jumps work the same
+  way, and landing while strafing plays the matching landing.
+- **Glide:** the heli-pack intro for his grip, then its loop, with the lean scrubbed by how fast
+  he turns.
+- **Demos:** `--demo-part strafejump`, shots `65_strafe_jump_right` … `6d_glide_lean`. The other
+  parts now start with the pistol out.
+
+### Derived or assumed
+- **Which way the glide leans:** the lean's sides are matched to turning by the poses (frames 6–10
+  roll him to his right). The game's lean parameter wasn't read.
+- **Strafe-jump directions:** the nearest of four directions is picked; the game may blend between
+  them.
+- **Strafe landings:** they play for our usual landing time (0.3–0.35 s), not until the clips' own
+  early exit.
+- **The ignored switch:** whether the game drops a switch pressed during a throw, or remembers it
+  for after the catch, isn't known. We drop it.
+
 ## 2026-10-07 (late night): switching weapons around a wrench throw
 
 The user threw the wrench, switched to the Burst Pistol while it flew, and got the
@@ -63,8 +114,8 @@ RiftApart.exe; the details are in the private JOURNAL.
   whatever weapon is out.
   - A gun that's out is put away, and it doesn't fire or strafe.
   - The moves use the wrench grip's clips.
-- **Switching mid-throw:** picking another weapon while the wrench is out ends the throw on the
-  spot.
+- **Switching mid-throw** (replaced in the entry above: the game doesn't allow it): picking
+  another weapon while the wrench is out ended the throw on the spot.
   - The wrench is gone from the air and its loop sound stops; there's no catch.
   - The throw layer fades out, and the new weapon comes out.
   - Picking the wrench itself leaves the throw be.
