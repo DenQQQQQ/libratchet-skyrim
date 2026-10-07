@@ -21,26 +21,7 @@ COMBO_CLIPS = ["weapon_wrench_hit_1_hero_ratchet", "weapon_wrench_hit_2_hero_rat
 SMASH_INTRO_CLIP = "weapon_wrench_hit_smash_intro_hero_ratchet"
 SMASH_LAND_CLIP = "weapon_wrench_hit_smash_hero_ratchet"
 RATCHET_MODEL = "characters/hero/hero_ratchet/hero_ratchet.model"
-MOTION = 0xE08AA35F
-
-
-def root_motion(sections):
-    """Root motion keys (Motion Data section) as a list of (x, y, z) positions, one per frame.
-    Layout from the game's sampler: byte 0 format (0 = 16-byte keys), byte 2 key count, keys at
-    0x7c + int32 @0x3c; key = int16 quat xyzw, int16 xyz scaled by 2^-byte14."""
-    raw = sections.get(MOTION)
-    if raw is None or raw[0] != 0:
-        return []
-    start = 0x7C + struct.unpack_from("<i", raw, 0x3C)[0]
-    keys = []
-    for k in range(raw[2]):
-        off = start + 16 * k
-        if off + 16 > len(raw):
-            break
-        x, y, z = struct.unpack_from("<3h", raw, off + 8)
-        s = 2.0 ** -raw[off + 14]
-        keys.append((x * s, y * s, z * s))
-    return keys
+from riftapart_anim import root_motion  # noqa: E402  (tools/ is on the path when run as a script)
 
 
 def analyse_clips(read, dat1lib):

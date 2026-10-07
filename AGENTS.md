@@ -41,6 +41,8 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - Mark anything not backed by the game's data as an assumption in code (`// Assumption`) and in
   `MODLOG.md`. Replace assumptions with facts from Ghidra or measurements.
 - Log every confirmed fact and every change in `MODLOG.md`.
+- Don't run `cargo fmt` over the repo: there's no rustfmt config and the code isn't
+  rustfmt-formatted (lines run to about 160 columns). Match the surrounding style by hand.
 
 ## Environment (owner's PC)
 - Rust: `RUSTUP_HOME=G:\dev\tools\rust\rustup`, `CARGO_HOME=G:\dev\tools\rust\cargo`.

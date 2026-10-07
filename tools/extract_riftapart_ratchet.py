@@ -360,6 +360,19 @@ PRESETS = {
             # Unarmed "neutral" versions where they exist.
             "idle": "neutral_idle_hero_ratchet",
             "run": "neutral_run_hero_ratchet",
+            # Walking, and the run's lean-into-a-turn versions (same length as the run, to blend
+            # in step with it).
+            "walk": "neutral_walk_hero_ratchet",
+            "run_lean_left": "neutral_run_lean_left_hero_ratchet",
+            "run_lean_right": "neutral_run_lean_right_hero_ratchet",
+            # Landing while walking or running.
+            "land_walk": "neutral_jump_single_land_walk_hero_ratchet",
+            "land_run": "neutral_jump_single_land_run_hero_ratchet",
+            # Idle fidgets after standing still a while.
+            "idle_look": "idle_look_around_quick_hero_ratchet",
+            "idle_shoe": "idle_color_clean_shoe_hero_ratchet",
+            # Catching the thrown wrench (upper body).
+            "throw_catch": "weapon_wrench_throw_catch_partial_hero_ratchet",
             "jump": "neutral_jump_single_hero_ratchet",
             "double_jump": "jump_double_hero_ratchet",
             "fall": "fall_loop_hero_ratchet",
@@ -472,7 +485,8 @@ def add_animations(game, w, model, preset):
             # rotation offsets work as-is with Bevy's rule (offset · base): the throw looks right
             # that way, while re-expressing them in each joint's own space bent the tail wrongly.
             add_animation(w, g, clip, state + "_additive", node_of_hash)
-            report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "additive": True}
+            report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "additive": True,
+                             "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4)}
             print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), additive")
             continue
         times = [f / clip.fps for f in range(clip.frames)]
@@ -503,7 +517,10 @@ def add_animations(game, w, model, preset):
                 anim.channels.append(pygltflib.AnimationChannel(
                     sampler=len(anim.samplers) - 1, target=pygltflib.AnimationChannelTarget(node=node, path=path)))
         g.animations.append(anim)
-        report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "joints": mapped}
+        # How far the clip's root motion travels: the speed it was authored for, so the sandbox
+        # can play it at the rate that keeps the feet planted.
+        report[state] = {"clip": clip_name, "frames": clip.frames, "seconds": round(clip.duration, 3), "joints": mapped,
+                         "root_distance": round(riftapart_anim.ground_distance(riftapart_anim.root_motion(sections)), 4)}
         print(f"  anim {state:12} {clip_name}: {clip.frames} frames ({clip.duration:.2f} s), {mapped} joints")
     return report
 

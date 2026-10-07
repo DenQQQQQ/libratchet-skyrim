@@ -48,6 +48,9 @@ struct Demo {
     record: Option<PathBuf>,
     frame: u32,
     finished_for: f32,
+    /// A screenshot to take on the next frame the recorder isn't saving (two screenshots in one
+    /// frame make Bevy drop one).
+    pending_shot: Option<PathBuf>,
 }
 
 /// `part`: run only one section ("wrench"), after a short warm-up.
@@ -55,9 +58,10 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
     let acts = match part {
         Some("wrench") => [vec![hold(1.5, Vec2::ZERO, false)], wrench_moves()].concat(),
         Some("weapons") => [vec![hold(1.5, Vec2::ZERO, false)], weapon_moves()].concat(),
+        Some("moves") => [vec![hold(1.5, Vec2::ZERO, false)], locomotion()].concat(),
         _ => script(),
     };
-    app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0 })
+    app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0, pending_shot: None })
         .add_systems(FixedUpdate, run_script.before(simulate))
         .add_systems(Update, record_frames);
 }
@@ -82,6 +86,8 @@ fn wrench_moves() -> Vec<Act> {
     let x = Vec2::X;
     vec![
         Act::ClearTrail,
+        // Framed on him rather than the game's pivot, to see the swings.
+        Act::CloseUp(true),
         Act::Teleport(arena + Vec3::new(-1.0, 0.0, 0.0)),
         Act::Follow { yaw: 0.75, pitch: 0.2, distance: 5.0 },
         hold(0.12, x, false),
@@ -134,6 +140,7 @@ fn wrench_moves() -> Vec<Act> {
         Act::Shot("21_running_throw"),
         hold(1.8, Vec2::Y, false),
         hold(0.8, Vec2::ZERO, false),
+        Act::CloseUp(false),
     ]
 }
 
@@ -177,6 +184,53 @@ fn jump_types() -> Vec<Act> {
         hold(0.6, x, false),
         hold(0.4, Vec2::ZERO, false),
     ]
+}
+
+/// Walking, running into curves (the run leans into turns), a running landing and an idle
+/// fidget.
+fn locomotion() -> Vec<Act> {
+    let x = Vec2::X;
+    // A run curving through `turn` radians over `secs`, starting along `from` (+ = to his left).
+    let curve = |from: Vec2, turn: f32, secs: f32| -> Vec<Act> {
+        let steps = (secs / 0.05).round() as usize;
+        (1..=steps).map(|i| hold(0.05, Vec2::from_angle(-turn * i as f32 / steps as f32).rotate(from), false)).collect()
+    };
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::CloseUp(true),
+        Act::Teleport(spots::DEMO_LANE),
+        Act::Follow { yaw: 1.2, pitch: 0.12, distance: 3.6 },
+        hold(0.6, Vec2::ZERO, false),
+        // Half stick: walking.
+        hold(2.2, x * 0.5, false),
+        Act::Shot("30_walk"),
+        hold(0.6, x * 0.5, false),
+        Act::CloseUp(false),
+        Act::Follow { yaw: 1.9, pitch: 0.2, distance: 5.0 },
+        hold(1.0, x, false),
+        Act::Shot("31_run"),
+    ];
+    // Curving left, then right: the run leans into each turn.
+    acts.extend(curve(x, 1.6, 0.6));
+    acts.push(Act::Shot("32_lean_left"));
+    acts.extend(curve(Vec2::from_angle(-1.6).rotate(x), -1.6, 0.6));
+    acts.push(Act::Shot("33_lean_right"));
+    acts.extend([
+        hold(0.5, x, false),
+        // A running jump and landing.
+        hold(0.2, x, true),
+        hold(0.5, x, false),
+        Act::Shot("34_land_run"),
+        hold(0.6, x, false),
+        // Standing still long enough for a fidget.
+        Act::CloseUp(true),
+        Act::Follow { yaw: 1.0, pitch: 0.15, distance: 3.4 },
+        hold(8.5, Vec2::ZERO, false),
+        Act::Shot("35_fidget"),
+        hold(3.0, Vec2::ZERO, false),
+        Act::CloseUp(false),
+    ]);
+    acts
 }
 
 /// Close follow-camera shots of the character in each move (front-right view while running +X).
@@ -367,7 +421,6 @@ fn run_script(
     mut settings: ResMut<Settings>,
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
-    mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     let dt = time.delta_secs();
@@ -415,17 +468,13 @@ fn run_script(
                 }
                 return;
             }
-            Act::Shot(name) => {
-                let path = demo.out.join(format!("{name}.png"));
-                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
-            }
+            Act::Shot(name) => demo.pending_shot = Some(demo.out.join(format!("{name}.png"))),
             Act::Wide { name, focus, yaw, pitch, distance, secs } => {
                 scripted.0 = Some(MoveInput::default());
                 rig.fixed = Some((focus, yaw, pitch, distance));
                 demo.elapsed += dt;
                 if !demo.shot_taken && demo.elapsed >= 0.3 {
-                    let path = demo.out.join(format!("{name}.png"));
-                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                    demo.pending_shot = Some(demo.out.join(format!("{name}.png")));
                     demo.shot_taken = true;
                 }
                 if demo.elapsed >= secs {
@@ -445,12 +494,16 @@ fn next(demo: &mut Demo) {
     demo.shot_taken = false;
 }
 
-/// Saves every other frame (30 fps of 60 fps virtual time) as PNG.
+/// Saves every other frame (30 fps of 60 fps virtual time) as PNG when recording, and takes the
+/// script's screenshots on the frames in between.
 fn record_frames(mut demo: ResMut<Demo>, mut commands: Commands) {
-    let Some(dir) = demo.record.clone() else { return };
     demo.frame += 1;
-    if demo.frame % 2 == 0 {
+    if let Some(dir) = demo.record.clone()
+        && demo.frame % 2 == 0
+    {
         let path = dir.join(format!("f_{:05}.png", demo.frame / 2));
+        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+    } else if let Some(path) = demo.pending_shot.take() {
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
     }
 }

@@ -35,6 +35,51 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: walking, leaning into turns, landings, fidgets and the wrench catch
+
+The user had flagged the throwing and the walking to come back to.
+
+### Known (the user's install)
+- **Locomotion clips.** The authored speed of each comes from its root motion over its length:
+  - `neutral_walk`: 4.27 s, 5.06 m of travel, so 1.18 m/s.
+  - `neutral_run`: 1.33 s, 7.35 m, so 5.51 m/s.
+  - The run's `lean_left` and `lean_right` versions: the same length, in place.
+  - Landings: while walking (`neutral_jump_single_land_walk`, 1.56 m/s) and while running
+    (`..._land_run`, 5.78 m/s).
+  - The game's walk speeds (1.25–1.5 m/s) and run speeds (4–5.75 m/s) bracket these.
+- **Idle fidgets.** `idle_look_around_quick` and `idle_color_clean_shoe` (he cleans his shoe).
+- **The wrench catch.** `weapon_wrench_throw_catch_partial` (0.33 s) is a full-body clip; the
+  "partial" in its name means it's meant for the upper body.
+- **Not used yet:**
+  - run starts by direction, 180° run turns and 90° turns in place;
+  - wrench-holding walk, run and idle;
+  - the throw's wind-up and its "waiting for the wrench" idle.
+
+### Ours (assumed or simplified)
+- **Walk or run.** Walk below 2.4 m/s, run above 3 m/s, keeping the current one in between.
+- **Leans.** Full lean at a 5 rad/s turn, smoothed over 0.15 s.
+- **Fidgets.** One plays after 7 s standing still.
+- **The catch.** It uses the upper body only (the `spine_1` branch), weighted 6:1 over the move
+  clip under it. Bevy's blend nodes average by weight. The throw layer fades out when the wrench
+  is caught.
+
+### Built
+- **Converter:**
+  - The new clips.
+  - `ratchet.json` records each clip's root-motion distance (`root_distance`).
+  - `root_motion` moved into `riftapart_anim.py`, shared with the configs tool.
+- **Sandbox (`ratchet_model.rs`):**
+  - Switches between walking and running.
+  - Plays walk, run, strafe and moving-landing clips at actual speed ÷ authored speed, so the
+    feet stay planted.
+  - Blends the leans in step with the run by turn rate, and picks the landing by speed.
+  - Plays the fidgets, and the catch through a joint mask.
+- **Demo:**
+  - `--demo-part moves`, shots `30_walk` … `35_fidget`.
+  - The wrench section is framed on him.
+  - The script's screenshots no longer make the recorder drop a frame.
+- **Video:** `recordings/walking_and_throwing.mp4`.
+
 ## 2026-10-07: the weapons' effects, shells and camera, from the game's data
 
 The user found the bullets and effects basic and asked to take more from the game. Everything

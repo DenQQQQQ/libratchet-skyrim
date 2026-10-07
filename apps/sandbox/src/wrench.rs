@@ -44,8 +44,9 @@ pub struct Wrench {
     throw_requested: bool,
     /// Seconds left of Ratchet's throw animation.
     pub throw_anim: f32,
-    /// Counts throws, so the animation can restart its layer for each one.
+    /// Counts throws, so the animation can restart its layer for each one, and catches.
     pub throws: u32,
+    pub catches: u32,
 }
 
 pub fn plugin(app: &mut App) {
@@ -214,6 +215,7 @@ fn fly(
     let wall = level.blocks.iter().skip(1).any(|b| pos.cmpge(b.min).all() && pos.cmple(b.max).all());
     if flight.step(time.delta_secs(), hand, n > 0 || wall) == ThrowStatus::Caught {
         wrench.flight = None;
+        wrench.catches += 1;
         wrench.show = SHOW_AFTER;
         wrench.throw_anim = wrench.throw_anim.min(0.3);
     }

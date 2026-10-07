@@ -8,6 +8,7 @@
 //! that stays attached to its parent (a proper hinge), whatever the rig's local axes are.
 
 use crate::{Player, Settings};
+use bevy::animation::AnimationTargetId;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
@@ -52,8 +53,24 @@ struct ModelGltf(Handle<Gltf>);
 const CLIP_STATES: &[&str] = &[
     "idle", "run", "jump", "double_jump", "fall", "glide", "land", "dash", "air_dash", "melee_1", "melee_2", "melee_3", "smash_intro", "smash",
     "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw", "grenade_throw",
-    "pistol_idle", "pistol_run",
+    "pistol_idle", "pistol_run", "walk", "land_walk", "land_run", "idle_look", "idle_shoe",
 ];
+/// The run's lean-into-a-turn versions (left, right), blended in step with it by how fast he
+/// turns.
+const LEAN_CLIPS: [&str; 2] = ["run_lean_left", "run_lean_right"];
+/// Turn rate (rad/s) at which the run leans fully into the turn (ours).
+const FULL_LEAN_TURN_RATE: f32 = 5.0;
+/// Walk below this speed, run above that one, with some overlap (m/s at Ratchet's size; between
+/// the game's walk and run speed bands; ours).
+const RUN_TO_WALK: f32 = 2.4;
+const WALK_TO_RUN: f32 = 3.0;
+/// Idle fidgets, after standing still this long (ours).
+const FIDGETS: &[&str] = &["idle_look", "idle_shoe"];
+const FIDGET_AFTER: f32 = 7.0;
+/// Catching the thrown wrench: a full-body clip of which only the upper body (the `spine_1`
+/// branch) is used, weighted well over the move clip under it.
+const CATCH_CLIP: &str = "throw_catch";
+const CATCH_WEIGHT: f32 = 6.0;
 /// Strafing while aiming, by direction relative to where Ratchet faces (clockwise from ahead).
 const STRAFE_CLIPS: &[&str] = &["strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw"];
 /// The one-handed fire recoil: an additive layer, restarted with every shot (when the model has
@@ -68,7 +85,7 @@ const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
 const LOOPING: &[&str] = &[
     "idle", "run", "fall", "glide", "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw",
-    "pistol_idle", "pistol_run",
+    "pistol_idle", "pistol_run", "walk",
 ];
 
 struct Bone {
@@ -99,6 +116,23 @@ pub struct Rig {
     fire_layer: Option<(AnimationNodeIndex, f32)>,
     fire_time: Option<f32>,
     shots_seen: u32,
+    /// The speed each clip was authored for (its root motion over its length, from the
+    /// converter's ratchet.json), to play it at the rate that keeps the feet planted.
+    authored_speed: HashMap<String, f32>,
+    walking: bool,
+    /// The run's lean: −1 (right) … 1 (left), its two clips, and the yaw it was last measured at.
+    lean: f32,
+    lean_nodes: Option<[AnimationNodeIndex; 2]>,
+    lean_blend: f32,
+    prev_yaw: Option<f32>,
+    /// The wrench catch (upper body), how long it has played, and the catch count it belongs to.
+    catch_layer: Option<(AnimationNodeIndex, f32)>,
+    catch_time: Option<f32>,
+    catches_seen: u32,
+    /// Joints outside the upper body, masked out of the catch.
+    lower_body: Vec<Entity>,
+    idle_time: f32,
+    fidgets_played: usize,
 }
 
 const BONES: &[&str] = &[
@@ -230,6 +264,11 @@ fn on_ready(
         }
     };
     let arm_rest_angle = [arm_angle("LF_uparm", "LF_loarm"), arm_angle("RT_uparm", "RT_loarm")];
+    // The upper body is the spine_1 branch; the root, pelvis, legs and tail are the rest.
+    let upper: std::collections::HashSet<Entity> =
+        by_name.get("spine_1").map(|&s| std::iter::once(s).chain(children.iter_descendants(s)).collect()).unwrap_or_default();
+    let lower_body = if upper.is_empty() { vec![] } else { children.iter_descendants(root).filter(|e| !upper.contains(e)).collect() };
+    let authored_speed = settings.model_dir.as_ref().map(|d| authored_speeds(&d.join("ratchet.json"))).unwrap_or_default();
     info!("ratchet model ready: {} bones rigged, arm rest angles {:.0}°/{:.0}°", bones.len(), arm_rest_angle[0].to_degrees(), arm_rest_angle[1].to_degrees());
     commands.insert_resource(Rig {
         bones,
@@ -247,6 +286,18 @@ fn on_ready(
         fire_layer: None,
         fire_time: None,
         shots_seen: 0,
+        authored_speed,
+        walking: false,
+        lean: 0.0,
+        lean_nodes: None,
+        lean_blend: 0.0,
+        prev_yaw: None,
+        catch_layer: None,
+        catch_time: None,
+        catches_seen: 0,
+        lower_body,
+        idle_time: 0.0,
+        fidgets_played: 0,
     });
     for e in &placeholders {
         commands.entity(e).insert(Visibility::Hidden);
@@ -260,6 +311,7 @@ fn setup_clips(
     model: Option<Res<ModelGltf>>,
     gltfs: Res<Assets<Gltf>>,
     clip_assets: Res<Assets<AnimationClip>>,
+    targets: Query<&AnimationTargetId>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let (Some(mut rig), Some(model)) = (rig, model) else { return };
@@ -277,6 +329,21 @@ fn setup_clips(
         if let Some(clip) = gltf.named_animations.get(name) {
             clips.insert(name, graph.add_clip(clip.clone(), 1.0, base));
         }
+    }
+    if let [Some(left), Some(right)] = LEAN_CLIPS.map(|n| gltf.named_animations.get(n)) {
+        rig.lean_nodes = Some([graph.add_clip(left.clone(), 1.0, base), graph.add_clip(right.clone(), 1.0, base)]);
+    }
+    if let Some(clip) = gltf.named_animations.get(CATCH_CLIP)
+        && !rig.lower_body.is_empty()
+    {
+        // Mask group 1 is everything below the waist; the catch node leaves it alone.
+        for e in &rig.lower_body {
+            if let Ok(&id) = targets.get(*e) {
+                graph.add_target_to_mask_group(id, 1);
+            }
+        }
+        let duration = clip_assets.get(clip).map_or(0.33, |c| c.duration());
+        rig.catch_layer = Some((graph.add_clip_with_mask(clip.clone(), 1 << 1, 1.0, base), duration));
     }
     let layer = THROW_LAYER;
     if let Some(clip) = gltf.named_animations.get(layer) {
@@ -338,6 +405,31 @@ fn play_clips(
         }
     }
 
+    // Catching the wrench: the upper body reaches for it; the throw layer gives way.
+    if let Some((node, duration)) = rig.catch_layer {
+        if wrench.catches != rig.catches_seen {
+            rig.catches_seen = wrench.catches;
+            rig.catch_time = Some(0.0);
+            player.start(node);
+            if let (Some(t), Some((_, throw_duration))) = (rig.throw_time, rig.throw_layer) {
+                rig.throw_time = Some(t.max(throw_duration - LAYER_FADE_OUT));
+            }
+        }
+        if let Some(t) = rig.catch_time {
+            let t = t + time.delta_secs();
+            if t >= duration {
+                player.stop(node);
+                rig.catch_time = None;
+            } else {
+                let weight = CATCH_WEIGHT * (t / 0.05).min(1.0).min(((duration - t) / 0.12).max(0.0));
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+                rig.catch_time = Some(t);
+            }
+        }
+    }
+
     // The throw layer: restart it with each throw, fade it in and out over its length.
     if let Some((node, duration)) = rig.throw_layer {
         if wrench.throws != rig.throws_seen {
@@ -364,7 +456,7 @@ fn play_clips(
     let state = p.sim.state();
     let airborne = |s: Option<MoveState>| matches!(s, Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash));
     if state == MoveState::Ground && airborne(rig.prev_state) {
-        rig.land_timer = 0.3;
+        rig.land_timer = if speed > 0.6 { 0.35 } else { 0.3 };
     }
     rig.prev_state = Some(state);
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
@@ -386,8 +478,12 @@ fn play_clips(
         MoveState::Ground if gun_aim => "aim_idle",
         MoveState::Ground if pistol_out && speed > 0.6 => "pistol_run",
         MoveState::Ground if pistol_out && rig.land_timer <= 0.0 => "pistol_idle",
+        MoveState::Ground if rig.land_timer > 0.0 && speed > WALK_TO_RUN => "land_run",
+        MoveState::Ground if rig.land_timer > 0.0 && speed > 0.6 => "land_walk",
+        MoveState::Ground if speed > 0.6 && rig.walking => "walk",
         MoveState::Ground if speed > 0.6 => "run",
         MoveState::Ground if rig.land_timer > 0.0 => "land",
+        MoveState::Ground if rig.idle_time > FIDGET_AFTER => FIDGETS[rig.fidgets_played % FIDGETS.len()],
         MoveState::Ground => "idle",
         MoveState::Jump if v.y < -5.0 => "fall",
         MoveState::Jump => "jump",
@@ -400,16 +496,25 @@ fn play_clips(
         MoveState::Smash => "smash_intro",
         MoveState::SmashLand => "smash",
     };
-    let want = if rig.clips.contains_key(want) { want } else { "idle" };
+    let want = if rig.clips.contains_key(want) {
+        want
+    } else if want == "walk" || want.starts_with("land_") {
+        if speed > 0.6 { "run" } else { "land" }
+    } else {
+        "idle"
+    };
     if rig.current_clip != Some(want)
         && let Some(&node) = rig.clips.get(want)
     {
         // Wrench moves, the grenade throw and strafe changes cut in quickly.
         let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash") || c.starts_with("strafe") || c == "grenade_throw");
+        let landing = |c: Option<&str>| c.is_some_and(|c| c.starts_with("land"));
         let fade = if quick(Some(want)) || quick(rig.current_clip) {
             60
-        } else if want == "land" || rig.current_clip == Some("land") {
+        } else if landing(Some(want)) || landing(rig.current_clip) {
             90
+        } else if FIDGETS.contains(&want) || rig.current_clip.is_some_and(|c| FIDGETS.contains(&c)) {
+            400
         } else {
             160
         };
@@ -419,15 +524,94 @@ fn play_clips(
         }
         rig.current_clip = Some(want);
     }
-    // Match the run (and strafe) cycles to the actual speed.
-    if (want == "run" || want == "pistol_run" || want.starts_with("strafe"))
+    // Match the walk, run and strafe cycles (and the moving landings) to the actual speed: at
+    // the speed a clip was authored for, it plays at 1x.
+    if (["run", "walk", "pistol_run", "land_walk", "land_run"].contains(&want) || want.starts_with("strafe"))
         && let Some(&node) = rig.clips.get(want)
-        && let Some(active) = player.animation_mut(node)
     {
         let tuning = p.sim.tuning();
-        let run_max = if want.starts_with("strafe") { tuning.aim_speeds.run_max } else { tuning.ground_speeds.run_max } / settings.scale;
-        active.set_speed((speed / run_max.max(0.1)).clamp(0.5, 1.5));
+        let authored = rig.authored_speed.get(want).copied().unwrap_or_else(|| {
+            (if want.starts_with("strafe") { tuning.aim_speeds.run_max } else { tuning.ground_speeds.run_max }) / settings.scale
+        });
+        if let Some(active) = player.animation_mut(node) {
+            let range = if want.starts_with("land") { (0.7, 1.3) } else { (0.5, 1.5) };
+            active.set_speed((speed / authored.max(0.1)).clamp(range.0, range.1));
+        }
     }
+    rig.walking = if rig.walking { speed < WALK_TO_RUN } else { speed < RUN_TO_WALK };
+    lean_into_turns(&mut rig, &mut player, p.sim.facing_yaw(), want == "run", time.delta_secs());
+    // Fidgets play once, then it's back to the idle (and a while until the next one).
+    rig.idle_time = if want == "idle" { rig.idle_time + time.delta_secs() } else { rig.idle_time };
+    if FIDGETS.contains(&want)
+        && let Some(&node) = rig.clips.get(want)
+        && player.animation(node).is_none_or(|a| a.is_finished())
+    {
+        rig.idle_time = 0.0;
+        rig.fidgets_played += 1;
+    } else if !FIDGETS.contains(&want) && want != "idle" {
+        rig.idle_time = 0.0;
+    }
+}
+
+/// Blends the run's lean-left and lean-right clips in by how fast he turns, kept in step with
+/// the run (same length, same time), and fades them out when he stops running.
+fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, running: bool, dt: f32) {
+    let Some(nodes) = rig.lean_nodes else { return };
+    let rate = rig.prev_yaw.map_or(0.0, |prev| {
+        let mut d = yaw - prev;
+        while d > PI {
+            d -= TAU;
+        }
+        while d < -PI {
+            d += TAU;
+        }
+        d / dt.max(1e-4)
+    });
+    rig.prev_yaw = Some(yaw);
+    // Turning toward +yaw is to his left.
+    let target = if running { (rate / FULL_LEAN_TURN_RATE).clamp(-1.0, 1.0) } else { 0.0 };
+    rig.lean += (target - rig.lean) * (1.0 - (-dt / 0.15).exp());
+    rig.lean_blend += ((running as u8 as f32) - rig.lean_blend) * (1.0 - (-dt / 0.08).exp());
+    let run = rig.clips.get("run").and_then(|&n| player.animation(n)).map(|a| (a.seek_time(), a.speed(), a.weight()));
+    let weights = [rig.lean.max(0.0), (-rig.lean).max(0.0)];
+    for (node, w) in nodes.into_iter().zip(weights) {
+        let w = w * rig.lean_blend;
+        match run {
+            Some((time, speed, run_weight)) if w > 1e-3 => {
+                if player.animation(node).is_none() {
+                    player.start(node).repeat();
+                }
+                if let Some(active) = player.animation_mut(node) {
+                    active.seek_to(time).set_speed(speed).set_weight(w * run_weight);
+                }
+            }
+            _ => {
+                player.stop(node);
+            }
+        }
+    }
+    // The run itself gives up what the lean takes.
+    if running
+        && let Some(&node) = rig.clips.get("run")
+        && let Some(active) = player.animation_mut(node)
+    {
+        active.set_weight(1.0 - rig.lean.abs() * rig.lean_blend);
+    }
+}
+
+/// Reads each clip's authored ground speed (root motion over its length) from the converter's
+/// manifest.
+fn authored_speeds(manifest: &std::path::Path) -> HashMap<String, f32> {
+    let Ok(text) = std::fs::read_to_string(manifest) else { return HashMap::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return HashMap::new() };
+    let Some(anims) = v["animations"].as_object() else { return HashMap::new() };
+    anims
+        .iter()
+        .filter_map(|(name, a)| {
+            let (d, t) = (a["root_distance"].as_f64()?, a["seconds"].as_f64()?);
+            (d > 0.5 && t > 0.0).then(|| (name.clone(), (d / t) as f32))
+        })
+        .collect()
 }
 
 fn target_pose(state: MoveState, speed: f32, vy: f32, run_max: f32, phase: f32, t: f32) -> Pose {

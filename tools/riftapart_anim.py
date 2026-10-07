@@ -27,6 +27,34 @@ import struct
 import numpy as np
 
 BUILT, HASHES, BASE, ELEMS, DATA = 0x9DF23F77, 0xA3B26640, 0x2BB5BC8F, 0xD070D358, 0x3A7B4855
+MOTION = 0xE08AA35F
+
+
+def root_motion(sections):
+    """Root motion keys (Motion Data section) as a list of (x, y, z) positions, one per frame.
+    Layout from the game's sampler: byte 0 format (0 = 16-byte keys), byte 2 key count, keys at
+    0x7c + int32 @0x3c; key = int16 quat xyzw, int16 xyz scaled by 2^-byte14."""
+    raw = sections.get(MOTION)
+    if raw is None or raw[0] != 0:
+        return []
+    start = 0x7C + struct.unpack_from("<i", raw, 0x3C)[0]
+    keys = []
+    for k in range(raw[2]):
+        off = start + 16 * k
+        if off + 16 > len(raw):
+            break
+        x, y, z = struct.unpack_from("<3h", raw, off + 8)
+        s = 2.0 ** -raw[off + 14]
+        keys.append((x * s, y * s, z * s))
+    return keys
+
+
+def ground_distance(keys):
+    """How far the root travels along the ground over the clip (metres)."""
+    if len(keys) < 2:
+        return 0.0
+    k = np.asarray(keys)
+    return float(np.linalg.norm(np.diff(k[:, [0, 2]], axis=0), axis=1).sum())
 
 
 class Clip:
