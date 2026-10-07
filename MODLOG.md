@@ -38,35 +38,51 @@ A running log of what changed, what was tested, and what's known vs. assumed.
 ## 2026-10-07 (late night): switching weapons around a wrench throw
 
 The user threw the wrench, switched to the Burst Pistol while it flew, and got the
-waiting-for-the-wrench pose with the pistol in his hand.
+waiting-for-the-wrench pose with the pistol in his hand. A research subagent read the switch in
+RiftApart.exe; the details are in the private JOURNAL.
 
-### Known (the user's install)
-- **The throw is the melee grip's "fire".** In Ratchet's animset it sits on the weapon-fire track
-  (Strafe_Fire), and only kGripStyleMelee has it: `weapon_wrench_throw_b` standing,
-  `weapon_wrench_throw_partial` moving. No gun grip has a throw.
-- **Weapon draws:** switching weapons plays the new grip's draw on its own track (Weapon_Draw, an
-  additive layer, 0.93 s). Standing uses the whole-body draw (`weapon_one_hand_draw`,
-  `weapon_wrench_draw`, `weapon_glove_draw`) and moving the upper-body `_partial` one.
+### Known
+- **The throw is the melee grip's "fire" (animset).** In Ratchet's animset it sits on the
+  weapon-fire track (Strafe_Fire), and only kGripStyleMelee has it: `weapon_wrench_throw_b`
+  standing, `weapon_wrench_throw_partial` moving. No gun grip has a throw.
+- **A switch during a throw ends it at once (RiftApart.exe).** The switch isn't blocked or queued.
+  - Equipping the new weapon first unequips the one in that hand, and the wrench's unequip ends a
+    live throw: no flight home, no catch. The throw-end event still fires.
+  - Then the new weapon is equipped as usual.
+  - Equips are only queued while a dodge or air dash suspends the weapons, never for a throw.
+- **While the wrench is out (RiftApart.exe):** the hero's holster and draw do nothing.
+  - The weapon-use check fails while a throw bit is set, which is the likely fire gate. That
+    fire gate wasn't traced.
+- **Weapon draws (animset):** switching weapons plays the new grip's draw on its own track
+  (Weapon_Draw), an additive layer of 0.93 s.
+  - Standing uses the whole-body draw (`weapon_one_hand_draw`, `weapon_wrench_draw`,
+    `weapon_glove_draw`); moving uses the upper-body `_partial` one.
 
 ### Built
 - **During a wrench throw:** from the throw until just after the catch, it's the melee grip
   whatever weapon is out.
   - A gun that's out is put away, and it doesn't fire or strafe.
   - The moves use the wrench grip's clips.
-- **Switches wait for the catch:** a weapon switch made while the wrench is out applies after the
-  catch. The HUD shows it waiting ("Burst Pistol after the catch").
+- **Switching mid-throw:** picking another weapon while the wrench is out ends the throw on the
+  spot.
+  - The wrench is gone from the air and its loop sound stops; there's no catch.
+  - The throw layer fades out, and the new weapon comes out.
+  - Picking the wrench itself leaves the throw be.
 - **Draws:** switching weapons plays the game's draw for the new grip (the converter adds the six
-  draw clips). A switch made during a swing, or one that waited for the catch, draws once that's
-  over.
-- **Demo:** `--demo-part throwswitch`, shots `62_pistol_picked_while_thrown` …
+  draw clips). A switch during a swing draws once the swing is over.
+- **Demo:** `--demo-part throwswitch`, shots `62_switch_ends_the_throw` …
   `64_thrown_with_the_pistol_out`.
 
 ### Derived or assumed
-- **Switching while the wrench is out:** that it waits for the catch is inferred from the throw
-  being the melee grip's fire. Whether the game queues, ignores or cancels such a switch hasn't
-  been confirmed in RiftApart.exe yet.
+- **The wrench after a cancelled throw:** in the game it may snap back to the hand for an
+  instant before the new weapon replaces it (a branch of the throw-end routine wasn't read). We
+  simply hide it.
+- **The draw's trigger:** that the gun's draw comes from the equip (the manager's after-equip
+  hook) is inferred.
 - **No draw after a swing or a throw:** a gun coming back after a swing or a throw, without a
   switch, just reappears. When the game plays its draw outside switches isn't known.
+- **Quick select during a throw:** whether the game's quick-select or weapon-wheel input filters
+  switches during a throw wasn't found. We let them through.
 
 ## 2026-10-07 (night): playtest fixes: the wrench in hand, the Shatterbomb's glove, dashes
 

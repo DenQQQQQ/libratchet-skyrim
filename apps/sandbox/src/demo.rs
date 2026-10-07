@@ -583,9 +583,9 @@ fn dash_jumps() -> Vec<Act> {
     acts
 }
 
-/// Switching weapons around a wrench throw: the pistol picked while the wrench flies comes out
-/// after the catch (with the game's draw), and with the pistol out a throw puts it away until the
-/// wrench is back.
+/// Switching weapons around a wrench throw: picking the pistol while the wrench flies ends the
+/// throw on the spot (no return, no catch) and draws the pistol; with the pistol out, a throw
+/// puts it away until the wrench is back.
 fn throw_switch() -> Vec<Act> {
     use crate::weapons::Slot;
     let x = Vec2::X;
@@ -602,9 +602,9 @@ fn throw_switch() -> Vec<Act> {
         hold(0.3, Vec2::ZERO, false),
         Act::Slot(Slot::BurstPistol),
         hold(0.4, Vec2::ZERO, false),
-        Act::Shot("62_pistol_picked_while_thrown"),
+        Act::Shot("62_switch_ends_the_throw"),
         hold(1.3, Vec2::ZERO, false),
-        Act::Shot("63_pistol_drawn_after_the_catch"),
+        Act::Shot("63_pistol_out"),
         hold(1.2, Vec2::ZERO, false),
         Act::Throw,
         hold(0.5, Vec2::ZERO, false),

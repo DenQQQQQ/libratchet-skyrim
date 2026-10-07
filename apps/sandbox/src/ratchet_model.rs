@@ -220,12 +220,13 @@ pub struct Rig {
     /// The glove's hand pose and how far it's faded in.
     glove_hand: Option<AnimationNodeIndex>,
     glove_weight: f32,
-    /// The draw layers (see DRAW_LAYERS), the one playing (grip, which, time), the weapon last
-    /// seen out, and a draw waiting for a swing or a wrench throw to end.
+    /// The draw layers (see DRAW_LAYERS), the one playing (grip, which, time), the weapon
+    /// switches seen, and a draw waiting for a swing to end. Also the ended throws seen.
     draw_layers: [[Option<(AnimationNodeIndex, f32)>; 2]; 3],
     draw: Option<(usize, usize, f32)>,
-    slot_seen: Option<crate::weapons::Slot>,
+    equips_seen: u32,
     draw_pending: bool,
+    cancels_seen: u32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -412,8 +413,9 @@ fn on_ready(
         glove_weight: 0.0,
         draw_layers: [[None; 2]; 3],
         draw: None,
-        slot_seen: None,
+        equips_seen: 0,
         draw_pending: false,
+        cancels_seen: 0,
         dash_clip: None,
         lower_body,
         idle_time: 0.0,
@@ -689,6 +691,13 @@ fn play_clips(
             rig.throw_time = Some(0.0);
             player.start(node);
         }
+        // A switch that ended the throw lets the layer go right away.
+        if wrench.cancels != rig.cancels_seen {
+            rig.cancels_seen = wrench.cancels;
+            if let Some(t) = rig.throw_time {
+                rig.throw_time = Some(t.max(duration - LAYER_FADE_OUT));
+            }
+        }
         if let Some(t) = rig.throw_time {
             let t = t + time.delta_secs();
             let weight = (t / LAYER_FADE_IN).min(1.0).min(((duration - t) / LAYER_FADE_OUT).max(0.0));
@@ -729,12 +738,11 @@ fn play_clips(
     };
 
     // Switching weapons draws the new one: the game's draw for its grip, whole-body standing,
-    // upper-body moving. A switch during a swing (or one that waited for a thrown wrench) draws
-    // once that's over.
-    let slot = arsenal.as_ref().map(|a| a.slot);
-    if slot != rig.slot_seen {
-        rig.draw_pending = rig.slot_seen.is_some();
-        rig.slot_seen = slot;
+    // upper-body moving. A switch during a swing draws once the swing is over.
+    let equips = arsenal.as_ref().map_or(0, |a| a.equips);
+    if equips != rig.equips_seen {
+        rig.equips_seen = equips;
+        rig.draw_pending = true;
     }
     if rig.draw_pending && !melee_grip {
         rig.draw_pending = false;

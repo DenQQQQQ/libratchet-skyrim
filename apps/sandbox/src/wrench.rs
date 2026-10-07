@@ -57,6 +57,8 @@ pub struct Wrench {
     /// Counts throws, so the animation can restart its layer for each one, and catches.
     pub throws: u32,
     pub catches: u32,
+    /// Counts throws a weapon switch ended (no return, no catch).
+    pub cancels: u32,
 }
 
 impl Wrench {
@@ -71,9 +73,23 @@ impl Wrench {
     }
 
     /// From the throw until just after the catch. A throw is the melee grip's "fire" in the
-    /// game's animset, so all that time a gun stays put away and weapon switches wait.
+    /// game's animset, and the wrench holds Ratchet's hand all that time: a gun stays put away and
+    /// can't fire.
     pub fn throwing(&self) -> bool {
         self.out_of_hand() || self.throw_anim > 0.0
+    }
+
+    /// Ends a throw on the spot, as switching weapons does in the game: equipping the new weapon
+    /// takes the wrench out of the hand, so it doesn't fly home and there's no catch
+    /// (RiftApart.exe).
+    pub fn end_throw(&mut self, cues: &mut MessageWriter<crate::sound::SoundCue>) {
+        if self.flight.take().is_some() {
+            cues.write(crate::sound::SoundCue::stop("wrench_throw_loop"));
+        }
+        self.releasing = None;
+        self.throw_anim = 0.0;
+        self.show = 0.0;
+        self.cancels += 1;
     }
 }
 

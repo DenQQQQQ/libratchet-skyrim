@@ -71,8 +71,10 @@ pub struct ScriptedArsenal {
 #[derive(Resource)]
 pub struct Arsenal {
     pub slot: Slot,
-    /// A weapon switch waiting for the thrown wrench to be caught.
+    /// A weapon picked this frame (keys or the demo script), and a count of weapons coming out,
+    /// for the draw animation.
     pub requested: Option<Slot>,
+    pub equips: u32,
     pub pistol: Weapon,
     pub grenade: Weapon,
     /// Aiming (right mouse, with any weapon) and trigger (left mouse, with a gun out) this frame.
@@ -192,6 +194,7 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
     commands.insert_resource(Arsenal {
         slot: Slot::Wrench,
         requested: None,
+        equips: 0,
         pistol: Weapon::new(pistol.scaled(s)),
         grenade: Weapon::new(grenade.scaled(s)),
         aiming: false,
@@ -300,7 +303,8 @@ fn controls(
     mouse_melee: Res<MouseMelee>,
     scripted: Res<ScriptedArsenal>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    wrench: Option<Res<crate::wrench::Wrench>>,
+    wrench: Option<ResMut<crate::wrench::Wrench>>,
+    mut cues: MessageWriter<crate::sound::SoundCue>,
     mut arsenal: ResMut<Arsenal>,
 ) {
     for (key, slot) in [(KeyCode::Digit1, Slot::Wrench), (KeyCode::Digit2, Slot::BurstPistol), (KeyCode::Digit3, Slot::Shatterbomb)] {
@@ -308,10 +312,18 @@ fn controls(
             arsenal.requested = Some(slot);
         }
     }
-    // A switch waits while the wrench is thrown, until it's caught.
-    if !wrench.as_ref().is_some_and(|w| w.throwing())
-        && let Some(slot) = arsenal.requested.take()
-    {
+    // Switching while the wrench is thrown takes it out of the hand: the throw ends on the spot,
+    // with no return and no catch, and the new weapon comes out (RiftApart.exe). Picking the
+    // wrench itself leaves the throw be.
+    if let Some(slot) = arsenal.requested.take() {
+        let thrown = wrench.as_ref().is_some_and(|w| w.throwing());
+        let ends_throw = thrown && slot != Slot::Wrench;
+        if ends_throw && let Some(mut w) = wrench {
+            w.end_throw(&mut cues);
+        }
+        if ends_throw || (slot != arsenal.slot && !thrown) {
+            arsenal.equips += 1;
+        }
         arsenal.slot = slot;
     }
     let gun = arsenal.slot.is_gun();
@@ -854,14 +866,6 @@ fn gun_clips(
 
 /// Helper for other modules: the slot's display name and ammo.
 pub fn hud_line(arsenal: &Arsenal) -> String {
-    let line = slot_line(arsenal);
-    match arsenal.requested {
-        Some(next) if next != arsenal.slot => format!("{line}  |  {} after the catch", next.name()),
-        _ => line,
-    }
-}
-
-fn slot_line(arsenal: &Arsenal) -> String {
     let (ammo, max, extra) = match arsenal.slot {
         Slot::Wrench => return "weapon: OmniWrench (1)  |  2 Burst Pistol, 3 Shatterbomb".into(),
         Slot::BurstPistol => {
