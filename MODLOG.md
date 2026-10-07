@@ -35,6 +35,94 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-07: playtest fixes: the combo's timing, aim + melee throws, throwing on the move, the jump's eyes
+
+The user playtested. They reported:
+- the combo needs a pause after it, and its timing window felt bigger in Rift Apart;
+- they asked whether you can jump and throw the wrench, and whether you have to crouch to throw it;
+- firing while moving snaps Ratchet around;
+- the Shatterbomb throw slides;
+- his eyes look odd while jumping.
+
+Everything below comes from the game's files and code; anything ours is marked.
+
+### Known (the user's install)
+- **Clip events:** each animation clip has a triggers section listing timed events.
+  - The layout was worked out from the files: an 8-byte header, the event records, then a row
+    per event with its time (a fraction of the clip) and record.
+  - Every record starts with its event type's hash. The game's type tables name them:
+    `AllowEarlyTransitionEvent`, `MeleeDamageImpactEvent`, `MeleeDamageBegin/EndEvent`,
+    `MeleeStreakBegin/EndEvent`, `WeaponThrownEvent` and so on.
+  - `tools/riftapart_anim.py` reads them, and `hero_melee_clips.json` lists them per clip.
+- **The swings:**
+  - Hits (MeleeDamageImpact) are at 0.085 s, 0.091 s and 0.366 s. The old estimate from the
+    wrench's motion was 0.05 s, 0.12 s and 0.30 s.
+  - Each swing has two AllowEarlyTransition events: 0.205/0.534 s, 0.233/0.490 s and
+    0.600/0.903 s. The Hyper-Strike landing's are 0.212/0.414 s.
+- **Throw controls:**
+  - The game's own text says "Hold [Aim] and [Melee] to Throw Wrench" and lists "Melee Throw:
+    [Aim] + [Melee]".
+  - There's also an optional one-button "Melee Throw" shortcut.
+  - There's no crouch button: Ratchet only crouches by himself in crawl-space volumes. Crouch +
+    melee is from the older games.
+  - The wrench's weapon config gates the throw on aim mode (`kRequireAimMode`), and aim mode
+    works in the air, so you can jump and throw.
+- **Throw clips:**
+  - `weapon_wrench_throw_partial` is an upper-body additive throw; it lets go of the wrench at
+    0.068 s (WeaponThrown).
+  - `weapon_glove_throw_overhand_partial` is the grenade throw for the arm only (30 joints).
+- **Eyes:**
+  - Ratchet's animation set drives his eyes with a layer of their own over the body: Eye_Aim,
+    blinks and eyebrow gestures, naming the eye-socket and eyeball joints.
+  - The jump and double-jump clips scale the eyeballs to half size, which shrank his irises to
+    pinpricks. That never shows in the game, because the eye layer drives those joints.
+  - The helmet's squash and stretch in the same clips (0.80 × 1.44 × 0.83, about volume-neutral)
+    is authored.
+
+### Read from RiftApart.exe (Ghidra)
+- **The melee state:**
+  - It reads its clip's first two AllowEarlyTransition events.
+  - At the first, an event handler unlocks the next swing. The next swing then starts at once if
+    a melee press is queued, or as soon as one comes.
+  - From the first, the stick moves you out too (only with no press queued), as do the
+    swingshot and aim.
+  - At the second, or at the clip's end, the swing is over.
+  - A jump cuts a swing at any time. Phantom Dash is never checked during a swing.
+- **The melee component:**
+  - It catches presses up to 0.25 s old and queues one swing ahead; the last swing takes none.
+  - After a swing ends, the combo stays alive for 0.35 s.
+  - The third swing arms a 0.4 s rest at its first window and again at its second; presses are
+    ignored during the rest, then the combo starts over.
+  - Melee while aiming isn't a swing.
+  - When mashing, hit 2 starts 0.205 s into hit 1, hit 3 0.233 s into hit 2, and hit 1 again
+    1.3 s into hit 3.
+
+### Built
+- libratchet's combo follows that:
+  - `chain_delay` and `cancel_delay` (ours) are gone.
+  - `SwingParams` has `early_exit`/`exit`. `MeleeParams` has `press_buffer`, `combo_timeout`
+    and `combo_cooldown`.
+  - The C API's `RatchetSwingInfo` reports both windows.
+- **Throwing:**
+  - Right mouse aims with any weapon. Melee while aiming (E, or left mouse with the wrench out)
+    throws, on the ground or in the air.
+  - Q is the one-button shortcut.
+  - The throw uses the game's upper-body clip, and the wrench leaves the hand at the clip's
+    WeaponThrown time (`ThrowParams.release`).
+- A Shatterbomb thrown while walking, strafing or jumping plays the arm-only throw over the move.
+  Standing still, the full-body throw plays as before.
+- The converter keeps the eye joints at their rest scale in every clip. The game's eye layer
+  isn't played yet: its clips are a kind our decoder doesn't read.
+- **Demo parts:**
+  - `--demo-part combat`: mashing (three swings, the rest, the first again), a press just after a
+    swing, aiming and throwing mid-jump, and a Shatterbomb thrown on the walk.
+  - `--demo-part face`: his face up close through a jump.
+
+### Derived or assumed
+- The run transition's stick threshold is 0.07 (the game's), applied to our keyboard stick.
+- When the third swing's rest is re-armed at its second window, both happen on the same frame
+  in the game. We re-arm it.
+
 ## 2026-10-07: the game's test dummy as the combat dummies
 
 The capsule dummies are replaced by the game's test-dummy enemy.
@@ -547,8 +635,10 @@ current vertical speed (we replace), and the dash, which looks animation-driven 
 13. Clank's rotors spin at 22 rad/s. The blur discs are translucent grey. The heli looks
     (4–6) are only on while the heli-pack is out. Looks 1–3 (body without arms, left arm,
     right arm) aren't used.
-14. Swing hit times come from the wrench's fastest moment near each lunge peak.
-15. Combo chaining is 0.1 s after the hit; cancelling is 0.25 s after the hit.
+14. ~~Swing hit times come from the wrench's fastest moment near each lunge peak.~~ Replaced by
+    the clips' MeleeDamageImpact events (see the playtest-fixes entry).
+15. ~~Combo chaining is 0.1 s after the hit; cancelling is 0.25 s after the hit.~~ Replaced by the
+    clips' AllowEarlyTransition events and the game's melee rules (playtest-fixes entry).
 16. The Hyper-Strike drifts forward only while rising, then drops straight down.
 17. The thrown wrench flies out at constant speed, then returns with the configured jerk and
     top speed.

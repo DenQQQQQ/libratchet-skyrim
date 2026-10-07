@@ -67,7 +67,7 @@ pub struct Arsenal {
     pub slot: Slot,
     pub pistol: Weapon,
     pub grenade: Weapon,
-    /// Aiming (right mouse) and trigger (left mouse) this frame, with a gun out.
+    /// Aiming (right mouse, with any weapon) and trigger (left mouse, with a gun out) this frame.
     pub aiming: bool,
     pub trigger: bool,
     /// Counters the animation watches to start the recoil layer / grenade throw.
@@ -219,7 +219,8 @@ fn on_gun_ready(
     }
 }
 
-/// Number keys pick the weapon; with a gun out, the mouse aims and fires.
+/// Number keys pick the weapon; right mouse aims (with any weapon, as in the game, where aim + melee
+/// throws the wrench); with a gun out, left mouse fires.
 #[allow(clippy::too_many_arguments)]
 fn controls(
     time: Res<Time>,
@@ -237,11 +238,11 @@ fn controls(
     }
     let gun = arsenal.slot.is_gun();
     if scripted.active {
-        arsenal.aiming = gun && scripted.aim;
+        arsenal.aiming = scripted.aim;
         arsenal.trigger = gun && scripted.trigger;
     } else {
         let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-        arsenal.aiming = gun && grabbed && mouse.pressed(MouseButton::Right);
+        arsenal.aiming = grabbed && mouse.pressed(MouseButton::Right);
         arsenal.trigger = gun && grabbed && mouse_melee.armed() && mouse.pressed(MouseButton::Left);
     }
     arsenal.grenade_anim = (arsenal.grenade_anim - time.delta_secs()).max(0.0);

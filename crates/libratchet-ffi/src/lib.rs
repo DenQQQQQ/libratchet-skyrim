@@ -89,6 +89,10 @@ pub struct RatchetSwingInfo {
     pub damage: f32,
     /// How far it knocks a standard enemy back (metres, scaled).
     pub knockback: f32,
+    /// From here the next swing may start and the stick may cut this one short.
+    pub early_exit: f32,
+    /// The swing is over here.
+    pub exit: f32,
 }
 
 /// Opaque handle owned by the host. Create with `ratchet_new`, free with `ratchet_free`.
@@ -236,7 +240,14 @@ pub unsafe extern "C" fn ratchet_swing_info(sim: *const RatchetSim, index: u32, 
     let combo = &sim.sim.tuning().melee.combo;
     let Some(w) = combo.get(index as usize) else { return 0 };
     if let Some(out) = unsafe { out.as_mut() } {
-        *out = RatchetSwingInfo { duration: w.duration, hit_time: w.hit_time, damage: w.damage, knockback: w.knockback };
+        *out = RatchetSwingInfo {
+            duration: w.duration,
+            hit_time: w.hit_time,
+            damage: w.damage,
+            knockback: w.knockback,
+            early_exit: w.early_exit,
+            exit: w.exit,
+        };
     }
     combo.len() as u32
 }

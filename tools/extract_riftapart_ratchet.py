@@ -387,7 +387,9 @@ PRESETS = {
             "melee_3": "weapon_wrench_hit_3_hero_ratchet",
             "smash_intro": "weapon_wrench_hit_smash_intro_hero_ratchet",
             "smash": "weapon_wrench_hit_smash_hero_ratchet",
-            "throw": "weapon_wrench_throw_hero_ratchet",
+            # The upper-body throw (an additive layer), the one for throwing while aiming or
+            # moving; it lets go of the wrench at 0.07 s (its WeaponThrown event).
+            "throw": "weapon_wrench_throw_partial_hero_ratchet",
             # One-handed guns (Burst Pistol): holding it (idle, run), the aiming stance and
             # strafing in 8 directions. Grenades: the overhand glove throw. (The recoil clips
             # are additive layers whose composition we haven't pinned down; not used yet.)
@@ -403,6 +405,8 @@ PRESETS = {
             "strafe_w": "strafe_one_hand_run_w_hero_ratchet",
             "strafe_nw": "strafe_one_hand_run_nw_hero_ratchet",
             "grenade_throw": "weapon_glove_throw_overhand_hero_ratchet",
+            # The same throw for the throwing arm only, layered over walking and strafing.
+            "grenade_throw_arm": "weapon_glove_throw_overhand_partial_hero_ratchet",
         },
     },
     "burstpistol": {
@@ -479,6 +483,13 @@ PRESETS = {
 }
 
 
+# The game drives Ratchet's eyes with a layer of their own (the animset's Eye_Aim and blink
+# clips) over the body clips. Some body clips carry eye scales that never show in the game (the
+# jumps shrink the eyeballs to half size). We don't play that layer yet, so the eyes keep their
+# rest scale.
+EYE_JOINTS = {"LF_eyeSocket", "RT_eyeSocket", "LF_eyeball", "RT_eyeball", "LF_iris", "RT_iris", "LF_pupil", "RT_pupil"}
+
+
 def add_animations(game, w, model, preset):
     """Decodes the preset's clips from the install and adds them as named glTF animations."""
     import riftapart_anim
@@ -520,11 +531,12 @@ def add_animations(game, w, model, preset):
             if node is None:
                 continue
             mapped += 1
+            scales = np.ones_like(clip.scales[:, j]) if g.nodes[node].name in EYE_JOINTS else clip.scales[:, j]
             for path, values, kind, fmt in (
                 ("rotation", clip.rotations[:, j], pygltflib.VEC4, "<4f"),
                 ("translation", clip.translations[:, j], pygltflib.VEC3, "<3f"),
                 # Keyed on every joint in every clip, so a scale never sticks after a switch.
-                ("scale", clip.scales[:, j], pygltflib.VEC3, "<3f"),
+                ("scale", scales, pygltflib.VEC3, "<3f"),
             ):
                 v_data = w.make_buffer_func(values.tolist(), lambda x, fmt=fmt: struct.pack(fmt, *x))
                 _, v_view = w.create_buffer_view(v_data, None)

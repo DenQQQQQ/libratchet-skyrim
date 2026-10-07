@@ -8,7 +8,7 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
-//!   --demo-part wrench|weapons|moves  with --demo: only that section
+//!   --demo-part wrench|weapons|moves|combat|face  with --demo: only that section
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;
@@ -316,8 +316,8 @@ fn setup(
     commands.spawn((
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
-             1 wrench, 2 Burst Pistol, 3 Shatterbomb  |  wrench: left mouse / E swing (in the air: Hyper-Strike), right mouse / Q throw\n\
-             gun: left mouse fire, right mouse aim (E still swings, Q still throws)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
+             1 wrench, 2 Burst Pistol, 3 Shatterbomb  |  E (or left mouse with the wrench out) swing, in the air: Hyper-Strike  |  gun: left mouse fire\n\
+             right mouse aim; swing while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
         ),
         DebugUi,
         TextFont::from_font_size(13.0),
@@ -347,7 +347,7 @@ fn debug_overlay(overlay: Res<DebugOverlay>, mut q: Query<&mut Visibility, With<
 }
 
 fn crosshair(arsenal: Option<Res<weapons::Arsenal>>, mut q: Query<&mut Visibility, With<Crosshair>>) {
-    let show = arsenal.is_some_and(|a| a.slot.is_gun());
+    let show = arsenal.is_some_and(|a| a.slot.is_gun() || a.aiming);
     for mut v in &mut q {
         v.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
     }
@@ -403,9 +403,14 @@ pub fn simulate(
     // Left mouse swings the wrench only while the wrench is selected; with a gun it fires.
     let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == weapons::Slot::Wrench);
     let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, &mouse, mouse_melee.0 && wrench_out, rig.yaw));
-    // Aiming or firing a gun: face where the camera looks and strafe.
-    if arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && (a.aiming || a.trigger)) {
+    // Aiming, or firing a gun: face where the camera looks and strafe. While aiming, melee
+    // throws the wrench instead of swinging (wrench.rs), as in the game.
+    let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
+    if aiming || arsenal.as_ref().is_some_and(|a| a.slot.is_gun() && a.trigger) {
         input.aim = Some(Vec2::new(-rig.yaw.sin(), -rig.yaw.cos()));
+    }
+    if aiming {
+        input.melee = false;
     }
 
     let before = p.feet;
@@ -719,7 +724,7 @@ fn update_hud(
         t.melee
             .combo
             .iter()
-            .map(|w| format!("{:.2} s (hit {:.2} s, lunge {:.2} m)", w.duration, w.hit_time, w.lunge.last().copied().unwrap_or(0.0)))
+            .map(|w| format!("hit {:.2} s, free {:.2} s, over {:.2} s, lunge {:.2} m", w.hit_time, w.early_exit, w.exit, w.lunge.last().copied().unwrap_or(0.0)))
             .collect::<Vec<_>>()
             .join(", "),
         t.melee.smash_hop.height_min,

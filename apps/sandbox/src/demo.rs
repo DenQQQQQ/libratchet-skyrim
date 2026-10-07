@@ -59,6 +59,8 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("wrench") => [vec![hold(1.5, Vec2::ZERO, false)], wrench_moves()].concat(),
         Some("weapons") => [vec![hold(1.5, Vec2::ZERO, false)], weapon_moves()].concat(),
         Some("moves") => [vec![hold(1.5, Vec2::ZERO, false)], locomotion()].concat(),
+        Some("combat") => [vec![hold(1.5, Vec2::ZERO, false)], combat()].concat(),
+        Some("face") => [vec![hold(1.5, Vec2::ZERO, false)], face()].concat(),
         _ => script(),
     };
     app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0, pending_shot: None })
@@ -331,6 +333,110 @@ fn script() -> Vec<Act> {
 
 /// The Burst Pistol and the Shatterbomb on the dummies in the arena (Ratchet facing +X, the
 /// camera behind him, aiming where it looks).
+/// The playtest fixes: the combo at the game's timing (mashing, then a press just after a
+/// swing), throwing the wrench while aiming (mid-jump too) and a Shatterbomb thrown on the walk.
+/// Ratchet faces +X.
+fn combat() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let arena = spots::ARENA;
+    let x = Vec2::X;
+    // Aiming follows the camera: from behind (-X), he faces +X.
+    let behind = -std::f32::consts::FRAC_PI_2;
+    let start = arena + Vec3::new(-1.5, 0.0, 0.0);
+    let mut acts = vec![
+        Act::ClearTrail,
+        Act::CloseUp(true),
+        Act::Slot(Slot::Wrench),
+        Act::Teleport(start),
+        Act::Follow { yaw: 0.9, pitch: 0.2, distance: 5.5 },
+        hold(0.12, x, false),
+        hold(0.8, Vec2::ZERO, false),
+    ];
+    // Mashing, a press every 0.1 s: each swing hands over at its first window (0.2 s in), the
+    // third plays out and the combo rests, then it starts over.
+    for i in 0..30 {
+        acts.push(swing());
+        acts.push(hold(0.1 - 2.0 * TICK, Vec2::ZERO, false));
+        match i {
+            2 => acts.push(Act::Shot("40_mash_swing_2")),
+            6 => acts.push(Act::Shot("41_mash_swing_3")),
+            14 => acts.push(Act::Shot("42_combo_rest")),
+            19 => acts.push(Act::Shot("43_combo_again")),
+            _ => {}
+        }
+    }
+    acts.extend([
+        hold(1.4, Vec2::ZERO, false),
+        // One swing, then a press 0.2 s after it ended: still the second swing.
+        Act::Teleport(start),
+        hold(0.12, x, false),
+        hold(1.0, Vec2::ZERO, false),
+        swing(),
+        hold(0.75, Vec2::ZERO, false),
+        swing(),
+        hold(0.15, Vec2::ZERO, false),
+        Act::Shot("45_late_press_swing_2"),
+        hold(1.2, Vec2::ZERO, false),
+        Act::CloseUp(false),
+        // Aim, jump, and swing at the top: the wrench flies along the aim.
+        Act::Teleport(arena + Vec3::new(12.0, 0.0, 4.0)),
+        hold(0.12, x, false),
+        Act::Follow { yaw: behind, pitch: 0.12, distance: 4.5 },
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+        Act::Shot("46_aiming_with_the_wrench"),
+        hold(0.3, Vec2::ZERO, true),
+        Act::Throw,
+        hold(0.15, Vec2::ZERO, false),
+        Act::Shot("47_air_throw"),
+        hold(1.8, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        // A Shatterbomb thrown while walking past the ring, filmed from his right.
+        Act::Slot(Slot::Shatterbomb),
+        Act::Teleport(arena + Vec3::new(1.0, 0.0, 3.5)),
+        hold(0.12, x, false),
+        Act::Follow { yaw: behind, pitch: 0.12, distance: 4.5 },
+        Act::AimAt(Some(arena + Vec3::new(8.0, 0.3, 1.6))),
+        Act::Watch { focus: arena + Vec3::new(3.5, 0.6, 3.5), yaw: 0.0, pitch: 0.12, distance: 7.0 },
+        hold(0.4, Vec2::ZERO, false),
+        hold(0.6, x * 0.45, false),
+        Act::Gun { trigger: true, aim: false },
+        hold(0.1, x * 0.45, false),
+        Act::Gun { trigger: false, aim: false },
+        hold(0.15, x * 0.45, false),
+        Act::Shot("48_walking_shatterbomb"),
+        hold(1.2, x * 0.45, false),
+        hold(1.0, Vec2::ZERO, false),
+        Act::AimAt(None),
+        Act::Slot(Slot::Wrench),
+        Act::Follow { yaw: 0.9, pitch: 0.2, distance: 9.0 },
+    ]);
+    acts
+}
+
+/// His face up close: standing, then through a jump and a double jump (facing the camera).
+fn face() -> Vec<Act> {
+    let front = Act::Follow { yaw: 0.0, pitch: -0.05, distance: 1.1 };
+    vec![
+        Act::CloseUp(true),
+        Act::Teleport(spots::DEMO_LANE),
+        hold(0.12, Vec2::Y, false),
+        front,
+        hold(1.5, Vec2::ZERO, false),
+        Act::Shot("50_face_idle"),
+        hold(0.1, Vec2::ZERO, true),
+        hold(0.12, Vec2::ZERO, false),
+        Act::Shot("51_face_jump"),
+        hold(0.1, Vec2::ZERO, false),
+        Act::Shot("52_face_jump_top"),
+        hold(0.1, Vec2::ZERO, true),
+        hold(0.15, Vec2::ZERO, false),
+        Act::Shot("53_face_double_jump"),
+        hold(1.5, Vec2::ZERO, false),
+        Act::CloseUp(false),
+    ]
+}
+
 fn weapon_moves() -> Vec<Act> {
     use crate::weapons::Slot;
     // South of the dummy ring, facing it (+Z), so nothing stands between him and the camera.

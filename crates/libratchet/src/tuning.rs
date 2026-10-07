@@ -165,12 +165,18 @@ impl DashParams {
 }
 
 /// One swing of the wrench combo, shaped by its animation in the game: how long it lasts, when
-/// the wrench connects, and the forward lunge (the clip's root motion).
+/// the wrench connects, when other moves may cut it short, and the forward lunge (the clip's
+/// root motion).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SwingParams {
     pub duration: f32,
-    /// Seconds into the swing when the wrench connects.
+    /// Seconds into the swing when the wrench connects (the clip's MeleeDamageImpact event).
     pub hit_time: f32,
+    /// The clip's two AllowEarlyTransition events, which RiftApart.exe's melee state reads:
+    /// from `early_exit` the next swing may start and the stick may cut the swing short; at
+    /// `exit` it's over.
+    pub early_exit: f32,
+    pub exit: f32,
     /// Forward distance from where the swing started, one sample every `1 / lunge_rate` s.
     /// Empty: no lunge.
     pub lunge: Vec<f32>,
@@ -192,13 +198,16 @@ impl SwingParams {
         lerp(self.lunge[i], self.lunge[i + 1], x - i as f32)
     }
 
-    /// A swing that lunges `distance` at an even speed over its first `lunge_time` seconds.
+    /// A swing that lunges `distance` at an even speed over its first `lunge_time` seconds and
+    /// plays out in full (no early exit).
     fn even(duration: f32, hit_time: f32, distance: f32, lunge_time: f32, damage: f32, knockback: f32) -> SwingParams {
         let rate = 30.0;
         let n = ((lunge_time * rate).ceil() as usize).max(1);
         SwingParams {
             duration,
             hit_time,
+            early_exit: duration,
+            exit: duration,
             lunge: (0..=n).map(|k| distance * k as f32 / n as f32).collect(),
             lunge_rate: rate,
             damage,
@@ -227,6 +236,9 @@ pub struct ThrowParams {
     pub damage_radius: f32,
     /// The wrench is caught once it's this close to the hand (ours, not from the game).
     pub catch_radius: f32,
+    /// Seconds from the start of the throw animation until the wrench leaves the hand (the
+    /// clip's WeaponThrown event).
+    pub release: f32,
 }
 
 impl ThrowParams {
@@ -249,12 +261,15 @@ impl ThrowParams {
 pub struct MeleeParams {
     /// The ground combo in order. Pressing on after the last swing starts it over.
     pub combo: Vec<SwingParams>,
-    /// A press during a swing queues the next one, which starts this long after the hit.
-    /// (Ours: the game's value isn't known.)
-    pub chain_delay: f32,
-    /// This long after the hit, moving, jumping or dashing cuts the rest of the swing.
-    /// (Ours: the game's value isn't known.)
-    pub cancel_delay: f32,
+    /// A press this long before Ratchet can swing still counts (RiftApart.exe: the melee
+    /// component looks back up to 0.25 s).
+    pub press_buffer: f32,
+    /// After a swing (not the last) ends or is cut short, a press within this long goes on
+    /// with the combo; later presses start it over (RiftApart.exe: 0.35 s).
+    pub combo_timeout: f32,
+    /// The combo's rest: presses are ignored this long from the last swing's first
+    /// AllowEarlyTransition, again from its second (RiftApart.exe: 0.4 s).
+    pub combo_cooldown: f32,
     /// Hyper-Strike: melee in the air hops like this jump...
     pub smash_hop: JumpParams,
     /// ...when at least this far above the ground...
@@ -263,7 +278,10 @@ pub struct MeleeParams {
     pub smash_gravity: f32,
     /// Forward drift during the hop (the intro animation's root motion).
     pub smash_intro: SwingParams,
-    /// Seconds spent on the ground after the slam.
+    /// On the ground after the slam: from `smash_land_early_exit` a jump, a swing or the
+    /// stick cut it short; at `smash_land_time` it's over (the landing clip's
+    /// AllowEarlyTransition events).
+    pub smash_land_early_exit: f32,
     pub smash_land_time: f32,
     /// For hosts: the slam's damage and radius.
     pub smash_damage: f32,
@@ -274,13 +292,15 @@ pub struct MeleeParams {
 impl Default for MeleeParams {
     fn default() -> Self {
         MeleeParams {
+            // Ours, roughly shaped like the game's clips (they load from hero_melee_clips.json).
             combo: vec![
-                SwingParams::even(0.7, 0.1, 0.6, 0.15, 10.0, 2.0),
-                SwingParams::even(0.6, 0.12, 0.8, 0.25, 10.0, 2.0),
-                SwingParams::even(0.9, 0.3, 1.2, 0.45, 15.0, 3.5),
+                SwingParams { early_exit: 0.2, exit: 0.5, ..SwingParams::even(0.9, 0.1, 0.6, 0.15, 10.0, 2.0) },
+                SwingParams { early_exit: 0.25, exit: 0.45, ..SwingParams::even(0.6, 0.12, 0.8, 0.25, 10.0, 2.0) },
+                SwingParams { early_exit: 0.55, exit: 0.85, ..SwingParams::even(0.95, 0.3, 1.2, 0.45, 15.0, 3.5) },
             ],
-            chain_delay: 0.1,
-            cancel_delay: 0.25,
+            press_buffer: 0.25,
+            combo_timeout: 0.35,
+            combo_cooldown: 0.4,
             smash_hop: JumpParams {
                 height_min: 0.8,
                 height_max: 0.8,
@@ -291,7 +311,8 @@ impl Default for MeleeParams {
             smash_min_height: 0.4,
             smash_gravity: 800.0,
             smash_intro: SwingParams::even(0.45, 0.0, 1.0, 0.4, 0.0, 0.0),
-            smash_land_time: 0.6,
+            smash_land_early_exit: 0.2,
+            smash_land_time: 0.4,
             smash_damage: 25.0,
             smash_radius: 2.5,
             throw: ThrowParams {
@@ -303,6 +324,7 @@ impl Default for MeleeParams {
                 damage: 15.0,
                 damage_radius: 0.5,
                 catch_radius: 0.6,
+                release: 0.1,
             },
         }
     }
@@ -548,7 +570,13 @@ fn melee_from(dir: &Path, traversal: &Value, shared: &Value, base: &MeleeParams)
         if let Some(intro) = swing_from(&clips["SmashIntro"], &base.smash_intro) {
             m.smash_intro = intro;
         }
-        m.smash_land_time = f(&clips["SmashLand"], "Duration").unwrap_or(m.smash_land_time);
+        let land = &clips["SmashLand"];
+        let (early, end) = early_transitions(land);
+        m.smash_land_time = end.or(f(land, "Duration")).unwrap_or(m.smash_land_time);
+        m.smash_land_early_exit = early.unwrap_or(m.smash_land_early_exit).min(m.smash_land_time);
+        if let Some(t) = clips["Throw"]["Events"]["WeaponThrown"].get(0).and_then(Value::as_f64) {
+            m.throw.release = t as f32;
+        }
     }
 
     let attacks = read_json(&dir.join("wpn_wrench_melee.json")).map(|v| v["MeleeAttackList"].clone()).unwrap_or(Value::Null);
@@ -579,16 +607,28 @@ fn melee_from(dir: &Path, traversal: &Value, shared: &Value, base: &MeleeParams)
 }
 
 /// A swing's timing and lunge from `hero_melee_clips.json`; damage and knockback stay `base`'s.
+/// Without a second AllowEarlyTransition the swing plays to the clip's end (as in the game).
 fn swing_from(v: &Value, base: &SwingParams) -> Option<SwingParams> {
     let duration = f(v, "Duration")?;
     let lunge: Vec<f32> = v["Lunge"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|x| x as f32).collect()).unwrap_or_default();
+    let (early, end) = early_transitions(v);
+    let exit = end.unwrap_or(duration).min(duration);
     Some(SwingParams {
         duration,
         hit_time: f(v, "HitTime").unwrap_or(base.hit_time.min(duration)),
+        early_exit: early.unwrap_or(exit).min(exit),
+        exit,
         lunge,
         lunge_rate: f(v, "Rate").unwrap_or(30.0),
         ..base.clone()
     })
+}
+
+/// The first two AllowEarlyTransition events of a clip in `hero_melee_clips.json`.
+fn early_transitions(v: &Value) -> (Option<f32>, Option<f32>) {
+    let times: Vec<f32> =
+        v["Events"]["AllowEarlyTransition"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|x| x as f32).collect()).unwrap_or_default();
+    (times.first().copied(), times.get(1).copied())
 }
 
 fn speeds_from(v: &Value, base: &SpeedParams) -> SpeedParams {

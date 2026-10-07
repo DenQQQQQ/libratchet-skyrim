@@ -105,6 +105,8 @@ const OVER_CAP_DOUBLE_JUMP: f32 = 0.5;
 /// range and stays for the whole glide (RiftApart.exe).
 const GLIDE_ENTRY_FALL_MIN: f32 = 4.0;
 const GLIDE_ENTRY_FALL_MAX: f32 = 12.0;
+/// The stick counts as moving past this (RiftApart.exe: the run transition out of a swing).
+const MOVE_STICK: f32 = 0.07;
 
 #[derive(Clone, Debug)]
 pub struct Ratchet {
@@ -134,6 +136,13 @@ pub struct Ratchet {
     dash_braking: bool,
     air_dash_used: bool,
     prev_melee: bool,
+    /// Seconds since the last melee press nothing used yet.
+    since_melee_press: f32,
+    /// After a swing: the one a press starts while the combo is alive, the seconds it stays
+    /// alive, and the seconds presses are ignored after the combo's last swing.
+    combo_next: usize,
+    combo_alive: f32,
+    combo_rest: f32,
     /// Current combo swing, seconds into it (or into the Hyper-Strike / its landing), a press
     /// waiting for the next swing, and whether this swing's hit already happened.
     swing: usize,
@@ -173,6 +182,10 @@ impl Ratchet {
             dash_braking: false,
             air_dash_used: false,
             prev_melee: false,
+            since_melee_press: f32::INFINITY,
+            combo_next: 0,
+            combo_alive: 0.0,
+            combo_rest: 0.0,
             swing: 0,
             swing_time: 0.0,
             swing_queued: false,
@@ -250,6 +263,9 @@ impl Ratchet {
         self.prev_dash = input.dash;
         let melee_pressed = input.melee && !self.prev_melee;
         self.prev_melee = input.melee;
+        self.since_melee_press = if melee_pressed { 0.0 } else { self.since_melee_press + dt };
+        self.combo_alive = (self.combo_alive - dt).max(0.0);
+        self.combo_rest = (self.combo_rest - dt).max(0.0);
         let stick = input.move_dir.clamp_length_max(1.0);
         self.aiming = input.aim.filter(|a| a.length_squared() > 1e-6).map(Vec2::normalize);
 
@@ -279,8 +295,8 @@ impl Ratchet {
                 self.steer(dt, stick, speed, accel, decel);
                 if pressed {
                     self.start_jump(dt, MoveState::Jump, position);
-                } else if melee_pressed && self.start_swing(0, stick) {
-                    self.swing(dt, false, false, false, stick, position);
+                } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
+                    self.swing(dt, false, stick, position);
                 } else if dash_pressed {
                     self.start_dash(MoveState::Dash, stick);
                     self.ground_dash(dt);
@@ -292,21 +308,22 @@ impl Ratchet {
                 if pressed {
                     // Jumping out of a dash keeps its speed.
                     self.start_jump(dt, MoveState::Jump, position);
-                } else if melee_pressed && self.start_swing(0, stick) {
-                    self.swing(dt, false, false, false, stick, position);
+                } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
+                    self.swing(dt, false, stick, position);
                 } else {
                     self.ground_dash(dt);
                 }
             }
             MoveState::Melee => {
-                self.swing(dt, melee_pressed, pressed, dash_pressed, stick, position);
+                // A dash press during a swing is lost: the game's melee state never checks it.
+                self.swing(dt, pressed, stick, position);
             }
             MoveState::Smash => {
                 self.air_time += dt;
                 self.smash(dt);
             }
             MoveState::SmashLand => {
-                self.smash_landing(dt, melee_pressed, pressed, stick, position);
+                self.smash_landing(dt, pressed, stick, position);
             }
             MoveState::AirDash => {
                 self.air_time += dt;
@@ -390,23 +407,67 @@ impl Ratchet {
         self.swing = index;
         self.swing_time = 0.0;
         self.swing_queued = false;
+        self.since_melee_press = f32::INFINITY;
+        self.combo_alive = 0.0;
         self.swing_hit = false;
         self.extending = false;
         self.events.push(Event::MeleeSwing { index });
         true
     }
 
-    /// One tick of a swing: the lunge along the facing direction (the animation's root motion),
-    /// the hit, and what comes next. A press during the swing queues the next swing for
-    /// `chain_delay` after the hit; from `cancel_delay` after the hit, moving, jumping or
-    /// dashing cuts the swing short.
-    fn swing(&mut self, dt: f32, melee_pressed: bool, jump_pressed: bool, dash_pressed: bool, stick: Vec2, position: Vec3) {
-        let combo_len = self.tuning.melee.combo.len();
-        let w: SwingParams = self.tuning.melee.combo[self.swing].clone();
+    /// A melee press now, or one made within `press_buffer` that nothing used yet; none while
+    /// the combo rests after its last swing.
+    fn melee_wanted(&self) -> bool {
+        self.combo_rest <= 0.0 && self.since_melee_press <= self.tuning.melee.press_buffer
+    }
+
+    /// The swing a press starts: the next one while the combo is alive, else the first.
+    fn combo_swing(&self) -> usize {
+        if self.combo_alive > 0.0 { self.combo_next } else { 0 }
+    }
+
+    /// The current swing is over (played out or cut short): the combo stays alive for
+    /// `combo_timeout`, or after its last swing it starts over, resting `combo_cooldown` first
+    /// if that swing didn't reach its first AllowEarlyTransition (RiftApart.exe's melee
+    /// component).
+    fn end_swing(&mut self) {
+        let m = &self.tuning.melee;
+        if self.swing + 1 >= m.combo.len() {
+            if self.swing_time < m.combo[self.swing].early_exit {
+                self.combo_rest = m.combo_cooldown;
+            }
+            self.combo_next = 0;
+            self.combo_alive = 0.0;
+        } else {
+            self.combo_next = self.swing + 1;
+            self.combo_alive = m.combo_timeout;
+        }
+        self.swing_queued = false;
+        self.state = MoveState::Ground;
+    }
+
+    /// One tick of a swing, timed by its clip's events like RiftApart.exe's melee state: the
+    /// lunge along the facing direction (the clip's root motion) and the hit.
+    /// - A press (or one made up to `press_buffer` earlier) asks for the next swing, which
+    ///   starts at the first AllowEarlyTransition (`early_exit`), or right away once that has
+    ///   passed. The last swing takes no press: from its `early_exit` (and again from its
+    ///   `exit`) the combo rests for `combo_cooldown`.
+    /// - A jump cuts the swing short at any time; from `early_exit` the stick does too, unless
+    ///   the next swing was asked for.
+    /// - At the second AllowEarlyTransition (`exit`) the swing is over.
+    fn swing(&mut self, dt: f32, jump_pressed: bool, stick: Vec2, position: Vec3) {
+        let m = &self.tuning.melee;
+        let (cooldown, last) = (m.combo_cooldown, self.swing + 1 >= m.combo.len());
+        let w: SwingParams = m.combo[self.swing].clone();
         let before = self.swing_time;
         self.swing_time += dt;
-        if melee_pressed {
+        let reached = |t: f32| before < t && t <= before + dt;
+        if last && (reached(w.early_exit) || reached(w.exit)) {
+            self.combo_rest = cooldown;
+        }
+        if !last && self.melee_wanted() {
             self.swing_queued = true;
+            self.since_melee_press = f32::INFINITY;
         }
         if !self.swing_hit && self.swing_time >= w.hit_time {
             self.swing_hit = true;
@@ -416,19 +477,16 @@ impl Ratchet {
         let v = self.facing_dir() * forward;
         self.velocity = Vec3::new(v.x, -STICK_DOWN_SPEED * self.tuning.scale, v.z);
 
-        let after_hit = self.swing_time - w.hit_time;
-        if self.swing_queued && after_hit >= self.tuning.melee.chain_delay {
-            self.start_swing((self.swing + 1) % combo_len, stick);
-        } else if after_hit >= self.tuning.melee.cancel_delay && (jump_pressed || dash_pressed || stick.length() > 0.1) {
-            self.state = MoveState::Ground;
-            if jump_pressed {
-                self.start_jump(dt, MoveState::Jump, position);
-            } else if dash_pressed {
-                self.start_dash(MoveState::Dash, stick);
-                self.ground_dash(dt);
-            }
-        } else if self.swing_time >= w.duration {
-            self.state = MoveState::Ground;
+        let free = self.swing_time >= w.early_exit;
+        if jump_pressed {
+            self.end_swing();
+            self.start_jump(dt, MoveState::Jump, position);
+        } else if free && self.swing_queued {
+            let next = self.swing + 1;
+            self.end_swing();
+            self.start_swing(next, stick);
+        } else if (free && stick.length() > MOVE_STICK) || self.swing_time >= w.exit {
+            self.end_swing();
         }
     }
 
@@ -442,6 +500,7 @@ impl Ratchet {
         let g = hop.gravity_for(hop.height_min);
         self.state = MoveState::Smash;
         self.swing_time = 0.0;
+        self.since_melee_press = f32::INFINITY;
         self.smash_descending = false;
         self.extending = false;
         self.jump_gravity = g;
@@ -481,20 +540,20 @@ impl Ratchet {
         self.events.push(Event::SmashImpact { fall_speed });
     }
 
-    /// Stays put for `smash_land_time`; from `cancel_delay` in, moving, jumping or another
+    /// Stays put until `smash_land_time`; from `smash_land_early_exit` the stick, a jump or a
     /// swing cut it short.
-    fn smash_landing(&mut self, dt: f32, melee_pressed: bool, jump_pressed: bool, stick: Vec2, position: Vec3) {
+    fn smash_landing(&mut self, dt: f32, jump_pressed: bool, stick: Vec2, position: Vec3) {
         self.swing_time += dt;
         self.velocity = Vec3::new(0.0, -STICK_DOWN_SPEED * self.tuning.scale, 0.0);
         let m = &self.tuning.melee;
-        let can_cancel = self.swing_time >= m.cancel_delay;
-        if self.swing_time >= m.smash_land_time || (can_cancel && stick.length() > 0.1) {
+        let can_cut = self.swing_time >= m.smash_land_early_exit;
+        if self.swing_time >= m.smash_land_time || (can_cut && stick.length() > MOVE_STICK) {
             self.state = MoveState::Ground;
-        } else if can_cancel && jump_pressed {
+        } else if can_cut && jump_pressed {
             self.state = MoveState::Ground;
             self.start_jump(dt, MoveState::Jump, position);
-        } else if can_cancel && melee_pressed && self.start_swing(0, stick) {
-            self.swing(dt, false, false, false, stick, position);
+        } else if can_cut && self.melee_wanted() && self.start_swing(0, stick) {
+            self.swing(dt, false, stick, position);
         }
     }
 

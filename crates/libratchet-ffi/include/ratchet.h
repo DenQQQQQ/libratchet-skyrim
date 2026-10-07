@@ -77,6 +77,8 @@ typedef struct RatchetSwingInfo {
     float hit_time;  /* seconds into the swing when it connects */
     float damage;
     float knockback; /* how far a standard enemy is knocked back, metres */
+    float early_exit; /* from here the next swing may start and the stick may cut this one short */
+    float exit;       /* the swing is over here */
 } RatchetSwingInfo;
 
 typedef struct RatchetWrench RatchetWrench;

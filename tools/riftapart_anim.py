@@ -28,6 +28,39 @@ import numpy as np
 
 BUILT, HASHES, BASE, ELEMS, DATA = 0x9DF23F77, 0xA3B26640, 0x2BB5BC8F, 0xD070D358, 0x3A7B4855
 MOTION = 0xE08AA35F
+TRIGGERS = 0x6962F7DE
+
+# Clip event types (the records in the triggers section), named after the game's own event
+# classes (their names sit next to these hashes in the game's type tables).
+EVENT_NAMES = {
+    0x3BFF28C9: "AllowEarlyTransition", 0xD1B59C64: "MeleeDamageImpact", 0xCAE55255: "MeleeDamageBegin",
+    0x5A7BE124: "MeleeDamageEnd", 0xEB0AD990: "MeleeStreakBegin", 0xFBA5C89B: "MeleeStreakEnd",
+    0x3425FD39: "AnimScaleTranslationOn", 0xA2DB0E32: "AnimScaleTranslationOff", 0x654CD1BC: "AnimScaleRotationOff",
+    0xE3A0E468: "HeroFootIKOn", 0xBE60EA49: "HeroFootIKOff", 0x23158C8F: "HeroBounceEarlyTransition",
+    0x84094AB6: "WeaponThrown", 0x9C111707: "WeaponThrowStart", 0xE6B0FF70: "WeaponThrowEnd",
+    0x4CA735F3: "JumpPeak", 0x3609711F: "Sound", 0xD0D37C85: "ConduitAnim", 0x4673A5C8: "CameraShakeAnim",
+}
+
+
+def clip_events(sections, duration):
+    """The clip's events as (seconds, event type hash), in time order. Triggers section layout:
+    u16 0, u16 count, u32 data size, the event records (data size bytes), then count rows of
+    (u32 name hash, u32 0, u16 flags, u16 time, u16 record offset in words from byte 8, u16).
+    Time is a fraction of the clip (u16 / 65535); every record starts (u32 0, u32 type hash)."""
+    raw = sections.get(TRIGGERS)
+    if raw is None or len(raw) < 8:
+        return []
+    count, size = struct.unpack_from("<2xHI", raw, 0)
+    out = []
+    for i in range(count):
+        row = 8 + size + 16 * i
+        if row + 16 > len(raw):
+            break
+        t, words = struct.unpack_from("<2xHH", raw, row + 8)
+        rec = 8 + 4 * words
+        if rec + 8 <= len(raw):
+            out.append((t / 65535.0 * duration, struct.unpack_from("<I", raw, rec + 4)[0]))
+    return sorted(out)
 
 
 def root_motion(sections):

@@ -375,29 +375,57 @@ fn a_swing_lunges_by_its_root_motion_and_hits_once() {
     let mut h = Flat::new(t.clone());
     let lunged = one_swing(&mut h);
     assert!(close(lunged, *w.lunge.last().unwrap(), 0.03), "lunged {lunged} m");
-    assert!(close(h.time, w.duration, 2.0 * DT), "swing lasted {} s", h.time);
+    assert!(close(h.time, w.exit, 2.0 * DT), "swing lasted {} s", h.time);
     let hits: Vec<f32> = h.events.iter().filter(|(_, e)| matches!(e, Event::MeleeHit { index: 0 })).map(|(t, _)| *t).collect();
     assert_eq!(hits.len(), 1);
     assert!(close(hits[0], w.hit_time, 2.0 * DT), "hit at {} s", hits[0]);
     assert_eq!(h.r.state(), MoveState::Ground);
 }
 
+/// Swing starts as (time, index).
+fn swing_starts(h: &Flat) -> Vec<(f32, usize)> {
+    h.events.iter().filter_map(|(t, e)| if let Event::MeleeSwing { index } = e { Some((*t, *index)) } else { None }).collect()
+}
+
 #[test]
-fn mashing_melee_runs_the_combo_in_order_and_starts_over() {
-    let mut h = Flat::new(Tuning::default());
+fn mashing_melee_runs_the_combo_in_order_and_rests_before_starting_over() {
+    let t = Tuning::default();
+    let m = t.melee.clone();
+    let mut h = Flat::new(t);
     for i in 0..480 {
         // A press every 0.1 s.
         h.tick_with(Input { melee: i % 12 == 0, ..Default::default() });
     }
-    let swings: Vec<usize> = h.events.iter().filter_map(|(_, e)| if let Event::MeleeSwing { index } = e { Some(*index) } else { None }).collect();
-    assert!(swings.len() >= 4, "swings {swings:?}");
-    assert_eq!(&swings[..4], &[0, 1, 2, 0]);
-    // A swing only hands over to the next one after its own hit.
-    assert!(h.count(|e| matches!(e, Event::MeleeHit { .. })) + 1 >= swings.len());
+    let starts = swing_starts(&h);
+    let order: Vec<usize> = starts.iter().map(|s| s.1).collect();
+    assert!(order.len() >= 4, "swings {order:?}");
+    assert_eq!(&order[..4], &[0, 1, 2, 0]);
+    // Each swing hands over at its first AllowEarlyTransition.
+    assert!(close(starts[1].0 - starts[0].0, m.combo[0].early_exit, 2.0 * DT), "second swing at {:?}", starts[1]);
+    assert!(close(starts[2].0 - starts[1].0, m.combo[1].early_exit, 2.0 * DT), "third swing at {:?}", starts[2]);
+    // The last swing plays out, and the rest it started at its second window runs out first.
+    let gap = starts[3].0 - starts[2].0;
+    assert!(close(gap, m.combo[2].exit + m.combo_cooldown, 3.0 * DT), "started over after {gap} s");
 }
 
 #[test]
-fn moving_cuts_a_swing_short_after_the_hit() {
+fn a_press_soon_after_a_swing_goes_on_with_the_combo() {
+    let t = Tuning::default();
+    let m = t.melee.clone();
+    for (wait, expected) in [(m.combo_timeout * 0.5, 1), (m.combo_timeout + 0.1, 0)] {
+        let mut h = Flat::new(t.clone());
+        one_swing(&mut h);
+        let end = h.time;
+        while h.time - end < wait {
+            h.tick(false, Vec2::ZERO);
+        }
+        h.tick_with(melee_press());
+        assert_eq!(swing_starts(&h).last().map(|s| s.1), Some(expected), "press {wait} s after the swing");
+    }
+}
+
+#[test]
+fn moving_cuts_a_swing_at_its_early_exit_unless_a_press_waits() {
     let t = Tuning::default();
     let w = t.melee.combo[0].clone();
     let mut h = Flat::new(t.clone());
@@ -409,8 +437,40 @@ fn moving_cuts_a_swing_short_after_the_hit() {
             left = Some(h.time);
         }
     }
-    let left = left.expect("moving should cancel the swing");
-    assert!(close(left, w.hit_time + t.melee.cancel_delay, 2.0 * DT), "cancelled at {left} s");
+    let left = left.expect("moving should cut the swing short");
+    assert!(close(left, w.early_exit, 2.0 * DT), "cut at {left} s");
+
+    // With the next swing asked for, the stick doesn't cut the swing: the next one starts.
+    let mut h = Flat::new(t.clone());
+    h.tick_with(melee_press());
+    h.tick(false, Vec2::ZERO);
+    h.tick_with(melee_press());
+    while h.time < w.exit + 4.0 * DT {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    let starts = swing_starts(&h);
+    assert_eq!(starts.len(), 2, "swings {starts:?}");
+    assert!(close(starts[1].0, w.early_exit, 2.0 * DT), "second swing at {} s", starts[1].0);
+}
+
+#[test]
+fn a_jump_cuts_a_swing_any_time_and_a_dash_never_does() {
+    let t = Tuning::default();
+    let w = t.melee.combo[0].clone();
+    let mut h = Flat::new(t.clone());
+    h.tick_with(melee_press());
+    h.tick(false, Vec2::ZERO);
+    assert!(h.time < w.hit_time);
+    h.tick(true, Vec2::ZERO);
+    assert_eq!(h.r.state(), MoveState::Jump);
+
+    let mut h = Flat::new(t);
+    h.tick_with(melee_press());
+    while h.time < w.exit - 2.0 * DT {
+        let dash = h.time > w.early_exit && h.time < w.early_exit + 2.0 * DT;
+        h.tick_with(Input { dash, ..Default::default() });
+        assert_eq!(h.r.state(), MoveState::Melee, "left the swing at {} s", h.time);
+    }
 }
 
 #[test]

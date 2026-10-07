@@ -71,6 +71,9 @@ const FIDGET_AFTER: f32 = 7.0;
 /// branch) is used, weighted well over the move clip under it.
 const CATCH_CLIP: &str = "throw_catch";
 const CATCH_WEIGHT: f32 = 6.0;
+/// The game's arm-only grenade throw, layered (like the catch) over walking, strafing or a jump;
+/// standing still, the full-body throw plays instead.
+const GRENADE_ARM_CLIP: &str = "grenade_throw_arm";
 /// Strafing while aiming, by direction relative to where Ratchet faces (clockwise from ahead).
 const STRAFE_CLIPS: &[&str] = &["strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw"];
 /// The one-handed fire recoil: an additive layer, restarted with every shot (when the model has
@@ -129,6 +132,10 @@ pub struct Rig {
     catch_layer: Option<(AnimationNodeIndex, f32)>,
     catch_time: Option<f32>,
     catches_seen: u32,
+    /// The arm-only grenade throw, how long it has played, and the throw count it belongs to.
+    grenade_layer: Option<(AnimationNodeIndex, f32)>,
+    grenade_time: Option<f32>,
+    grenades_seen: u32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -295,6 +302,9 @@ fn on_ready(
         catch_layer: None,
         catch_time: None,
         catches_seen: 0,
+        grenade_layer: None,
+        grenade_time: None,
+        grenades_seen: 0,
         lower_body,
         idle_time: 0.0,
         fidgets_played: 0,
@@ -344,6 +354,11 @@ fn setup_clips(
         }
         let duration = clip_assets.get(clip).map_or(0.33, |c| c.duration());
         rig.catch_layer = Some((graph.add_clip_with_mask(clip.clone(), 1 << 1, 1.0, base), duration));
+    }
+    if let Some(clip) = gltf.named_animations.get(GRENADE_ARM_CLIP) {
+        // Only the arm's joints are in the clip; everything else keeps the move clip.
+        let duration = clip_assets.get(clip).map_or(0.47, |c| c.duration());
+        rig.grenade_layer = Some((graph.add_clip(clip.clone(), 1.0, base), duration));
     }
     let layer = THROW_LAYER;
     if let Some(clip) = gltf.named_animations.get(layer) {
@@ -430,6 +445,33 @@ fn play_clips(
         }
     }
 
+    // A grenade thrown on the move or in the air: the arm-only throw over the move clip.
+    let flat_speed = Vec2::new(p.sim.velocity().x, p.sim.velocity().z).length() / settings.scale;
+    let standing = p.sim.state() == MoveState::Ground && flat_speed <= 0.6;
+    if let Some((node, duration)) = rig.grenade_layer {
+        let throws = arsenal.as_ref().map_or(0, |a| a.throws);
+        if throws != rig.grenades_seen {
+            rig.grenades_seen = throws;
+            if !standing {
+                rig.grenade_time = Some(0.0);
+                player.start(node);
+            }
+        }
+        if let Some(t) = rig.grenade_time {
+            let t = t + time.delta_secs();
+            if t >= duration {
+                player.stop(node);
+                rig.grenade_time = None;
+            } else {
+                let weight = CATCH_WEIGHT * (t / 0.04).min(1.0).min(((duration - t) / 0.1).max(0.0));
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+                rig.grenade_time = Some(t);
+            }
+        }
+    }
+
     // The throw layer: restart it with each throw, fade it in and out over its length.
     if let Some((node, duration)) = rig.throw_layer {
         if wrench.throws != rig.throws_seen {
@@ -461,10 +503,10 @@ fn play_clips(
     rig.prev_state = Some(state);
     rig.land_timer = (rig.land_timer - time.delta_secs()).max(0.0);
 
-    // With the pistol aimed or firing: the one-handed stance, strafing by direction.
+    // Aiming (any weapon), or the pistol firing: the one-handed stance, strafing by direction.
     let pistol_out = arsenal.as_ref().is_some_and(|a| a.slot == crate::weapons::Slot::BurstPistol);
-    let gun_aim = pistol_out && arsenal.as_ref().is_some_and(|a| a.aiming || a.trigger || a.stance > 0.0);
-    let throwing_grenade = arsenal.as_ref().is_some_and(|a| a.grenade_anim > 0.0);
+    let gun_aim = arsenal.as_ref().is_some_and(|a| a.aiming || (pistol_out && (a.trigger || a.stance > 0.0)));
+    let throwing_grenade = arsenal.as_ref().is_some_and(|a| a.grenade_anim > 0.0) && rig.grenade_time.is_none();
     let strafe = {
         let yaw = p.sim.facing_yaw();
         let (fwd, right) = (Vec2::new(yaw.sin(), yaw.cos()), Vec2::new(-yaw.cos(), yaw.sin()));

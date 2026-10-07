@@ -1,6 +1,8 @@
 //! The OmniWrench, when `riftapart-assets/wrench.glb` exists: held in Ratchet's right hand
 //! (`RT_handle_bound`, the game's gun-attach locator) while he swings (playing its own squash-and-stretch clips in time with his), and thrown
-//! with right mouse / Q (libratchet's `WrenchThrow`), knocking back the first dummy it meets.
+//! with aim + melee like the game (right mouse held, then E or left mouse), or Q, the game's
+//! one-button "Melee Throw" shortcut (libratchet's `WrenchThrow`), knocking back the first dummy
+//! it meets.
 
 use crate::combat::{Dummy, Hits, knock};
 use crate::level::Level;
@@ -43,6 +45,9 @@ pub struct Wrench {
     thrown: Option<Entity>,
     pub flight: Option<WrenchThrow>,
     throw_requested: bool,
+    /// A throw whose animation has started: seconds until the wrench leaves the hand, and
+    /// where it goes.
+    releasing: Option<(f32, Vec3)>,
     /// Seconds left of Ratchet's throw animation.
     pub throw_anim: f32,
     /// Counts throws, so the animation can restart its layer for each one, and catches.
@@ -153,8 +158,9 @@ fn held_wrench(
     }
 }
 
-/// Q, or right mouse while the wrench is selected (with a gun, right mouse aims), asks for a
-/// throw.
+/// Melee while aiming asks for a throw, as in the game ("Hold [Aim] and [Melee] to Throw
+/// Wrench"): E, or left mouse with the wrench selected. Q is the game's optional one-button
+/// "Melee Throw" shortcut.
 fn throw_button(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -163,8 +169,10 @@ fn throw_button(
     mut wrench: ResMut<Wrench>,
 ) {
     let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    let wrench_out = arsenal.is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
-    if keys.just_pressed(KeyCode::KeyQ) || (grabbed && wrench_out && mouse.just_pressed(MouseButton::Right)) {
+    let wrench_out = arsenal.as_ref().is_none_or(|a| a.slot == crate::weapons::Slot::Wrench);
+    let aiming = arsenal.as_ref().is_some_and(|a| a.aiming);
+    let melee = keys.just_pressed(KeyCode::KeyE) || (grabbed && wrench_out && mouse.just_pressed(MouseButton::Left));
+    if keys.just_pressed(KeyCode::KeyQ) || (aiming && melee) {
         wrench.throw_requested = true;
     }
 }
@@ -173,8 +181,11 @@ fn hand_position(wrench: &Wrench, globals: &Query<&GlobalTransform>, p: &Player,
     wrench.hand.and_then(|h| globals.get(h).ok()).map_or(p.feet + Vec3::Y * 0.9 * scale, |g| g.translation())
 }
 
-/// Throws along the camera (the demo throws straight ahead), turning Ratchet to face it.
+/// Throws along the camera (the demo throws straight ahead), turning Ratchet to face it; the
+/// wrench leaves the hand partway into the animation.
+#[allow(clippy::too_many_arguments)]
 fn start_throw(
+    time: Res<Time>,
     settings: Res<Settings>,
     rig: Res<CameraRig>,
     mut scripted: ResMut<ScriptedThrow>,
@@ -185,13 +196,25 @@ fn start_throw(
     let from_script = std::mem::take(&mut scripted.0);
     let requested = std::mem::take(&mut wrench.throw_requested) || from_script;
     let Ok(mut p) = players.single_mut() else { return };
-    if !requested || wrench.flight.is_some() || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand) {
+    // The wrench leaves the hand at the throw clip's WeaponThrown event.
+    if let Some((left, dir)) = wrench.releasing {
+        let left = left - time.delta_secs();
+        if left > 0.0 {
+            wrench.releasing = Some((left, dir));
+        } else {
+            wrench.releasing = None;
+            let from = hand_position(&wrench, &globals, &p, settings.scale);
+            wrench.flight = Some(WrenchThrow::new(&p.sim.tuning().melee.throw, from, dir));
+        }
+    }
+    let busy = wrench.flight.is_some() || wrench.releasing.is_some();
+    if !requested || busy || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand) {
         return;
     }
     let dir = if from_script { p.sim.facing_dir() } else { Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos()) };
     p.sim.set_facing_yaw(dir.x.atan2(dir.z));
-    let from = hand_position(&wrench, &globals, &p, settings.scale);
-    wrench.flight = Some(WrenchThrow::new(&p.sim.tuning().melee.throw, from, dir));
+    wrench.releasing = Some((p.sim.tuning().melee.throw.release, dir));
+    wrench.show = SHOW_AFTER;
     wrench.throw_anim = THROW_ANIM;
     wrench.throws += 1;
 }

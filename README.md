@@ -36,8 +36,8 @@ python tools/extract_riftapart_configs.py --game "<your Rift Apart folder>" --al
 That writes JSON into `riftapart-configs/` (gitignored): the movement configs, the wrench's
 melee and throw configs, the Burst Pistol's and Shatterbomb's weapon configs, the camera's
 placement and shakes, and
-`hero_melee_clips.json` (each swing's length, hit time and lunge, read from Ratchet's wrench
-animations). Without it, the sandbox uses generic default values and
+`hero_melee_clips.json` (each swing's length, lunge and events, read from Ratchet's wrench
+animations: the hit, the two combo windows, the throw's release). Without it, the sandbox uses generic default values and
 says so on screen.
 
 ### Ratchet's model, textures and animations (optional)
@@ -80,10 +80,10 @@ cargo run -p sandbox
 | Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide |
 | Shift | Dash (on the ground or once in the air) |
 | 1 / 2 / 3 | OmniWrench / Burst Pistol / Shatterbomb |
-| Left mouse | Wrench out: swing. Gun out: fire (where the crosshair points) |
-| Right mouse | Wrench out: throw it. Gun out: aim (strafe, camera over the shoulder) |
-| E | Swing the wrench (any time): press again during a swing for the next hit (3-hit combo); in the air it's the Hyper-Strike |
-| Q | Throw the wrench along the camera; it comes back to your hand |
+| Left mouse | Wrench out: swing (while aiming: throw). Gun out: fire (where the crosshair points) |
+| Right mouse | Aim, with any weapon: strafe, camera over the shoulder. Swinging while aiming throws the wrench, as in the game ("Hold Aim and Melee to Throw Wrench"), also in the air |
+| E | Swing the wrench: press again during a swing, or just after it, for the next hit (3-hit combo, with a short rest after the third); in the air it's the Hyper-Strike; while aiming it throws |
+| Q | Throw the wrench along the camera in one press (the game's optional "Melee Throw" shortcut); it comes back to your hand |
 | Ctrl | Walk |
 | Mouse | Camera (click to grab the mouse, Esc to free it); scroll to zoom |
 | Tab | Toggle Ratchet-sized / Dragonborn-sized (all distances ×1.55, same timing) |
@@ -97,7 +97,9 @@ red = fall, cyan = glide, purple = dash, green = air dash. White crosses mark ea
 peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
-Add `--record frames` to also save 30 fps frames for a video.
+Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
+`--demo-part wrench|weapons|moves|combat|face` to play one section (combat: the combo's timing,
+aiming and throwing mid-jump, a Shatterbomb on the walk; face: his face through a jump).
 
 ## Tests
 

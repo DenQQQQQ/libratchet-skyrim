@@ -20,14 +20,17 @@ CLIP_DIR = "characters/hero/hero_ratchet/animations/"
 COMBO_CLIPS = ["weapon_wrench_hit_1_hero_ratchet", "weapon_wrench_hit_2_hero_ratchet", "weapon_wrench_hit_3_hero_ratchet"]
 SMASH_INTRO_CLIP = "weapon_wrench_hit_smash_intro_hero_ratchet"
 SMASH_LAND_CLIP = "weapon_wrench_hit_smash_hero_ratchet"
+THROW_CLIP = "weapon_wrench_throw_partial_hero_ratchet"
 RATCHET_MODEL = "characters/hero/hero_ratchet/hero_ratchet.model"
 from riftapart_anim import root_motion  # noqa: E402  (tools/ is on the path when run as a script)
 
 
 def analyse_clips(read, dat1lib):
-    """Durations, forward lunge (root motion) and hit time of the wrench swings. The hit time
-    isn't stored anywhere we know of: we take the moment the wrench (prop_attach joint) moves
-    fastest around the swing's biggest lunge."""
+    """Durations, forward lunge (root motion) and events of the wrench swings. Events are the
+    clips' own (seconds per event name): MeleeDamageImpact is the hit, AllowEarlyTransition
+    the combo windows (see libratchet's MeleeParams). A clip without an impact event gets an
+    estimated hit time: the moment the wrench (prop_attach joint) moves fastest around the
+    swing's biggest lunge."""
     import numpy as np
     import riftapart_anim
 
@@ -47,7 +50,15 @@ def analyse_clips(read, dat1lib):
         lunge = [round(z - keys[0][2], 4) for _, _, z in keys] if keys else []
         drop = round(keys[-1][1] - keys[0][1], 4) if keys else 0.0
         info = {"Clip": name, "Duration": round(clip.duration, 4), "Rate": round(clip.fps, 3), "Lunge": lunge, "Drop": drop}
-        if want_hit:
+        events = {}
+        for t, kind in riftapart_anim.clip_events(sections, clip.duration):
+            name_of = riftapart_anim.EVENT_NAMES.get(kind)
+            if name_of and name_of not in ("Sound", "ConduitAnim"):
+                events.setdefault(name_of, []).append(round(t, 4))
+        info["Events"] = events
+        if want_hit and events.get("MeleeDamageImpact"):
+            info["HitTime"] = events["MeleeDamageImpact"][0]
+        elif want_hit:
             p = clip.translations[:, list(clip.hashes).index(prop_hash)]
             speed = np.linalg.norm(np.diff(p, axis=0), axis=1)
             lunge_speed = np.diff(np.array(lunge)) if len(lunge) > 1 else np.zeros(1)
@@ -59,10 +70,12 @@ def analyse_clips(read, dat1lib):
             info["HitTime"] = round((k + 0.5) / clip.fps, 4)
         return info
 
-    out = {"_note": "Derived from Ratchet's wrench clips by extract_riftapart_configs.py; HitTime is an estimate.",
+    out = {"_note": "Derived from Ratchet's wrench clips by extract_riftapart_configs.py. Event times are the "
+                    "clips' own; HitTime is the MeleeDamageImpact event (estimated only for clips without one).",
            "Combo": [clip_info(c, True) for c in COMBO_CLIPS],
            "SmashIntro": clip_info(SMASH_INTRO_CLIP, False),
-           "SmashLand": clip_info(SMASH_LAND_CLIP, False)}
+           "SmashLand": clip_info(SMASH_LAND_CLIP, False),
+           "Throw": clip_info(THROW_CLIP, False)}
     out["Combo"] = [c for c in out["Combo"] if c]
     return out
 
