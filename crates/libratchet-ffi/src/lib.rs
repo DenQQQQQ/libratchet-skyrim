@@ -54,6 +54,9 @@ pub struct RatchetContact {
     pub wall_sticky: u8,
     pub wall_normal_x: f32,
     pub wall_normal_z: f32,
+    /// 1 inside one of the level's wall-jump zones (where the game's designers placed
+    /// wall-jump stretches): wall jumps keep their line there.
+    pub wall_jump_zone: u8,
 }
 
 pub const RATCHET_EVENT_JUMPED: u32 = 1 << 0;
@@ -212,6 +215,7 @@ pub unsafe extern "C" fn ratchet_step(
             normal: Vec2::new(contact.wall_normal_x, contact.wall_normal_z).normalize_or_zero(),
             sticky: contact.wall_sticky != 0,
         }),
+        wall_jump_zone: contact.wall_jump_zone != 0,
     };
     let v = sim.sim.step(dt, &input, &contact, Vec3::new(position.x, position.y, position.z));
     let mut events = 0;

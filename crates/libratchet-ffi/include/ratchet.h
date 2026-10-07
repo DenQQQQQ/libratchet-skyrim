@@ -40,6 +40,7 @@ typedef struct RatchetContact {
     uint8_t wall_sticky;   /* that wall takes wall jumps */
     float wall_normal_x;   /* out of the wall, on the ground plane */
     float wall_normal_z;
+    uint8_t wall_jump_zone; /* inside a level's wall-jump zone: wall jumps keep their line there */
 } RatchetContact;
 
 enum {

@@ -14,7 +14,8 @@ back how to move.
   [docs/skyrim-plan.md](docs/skyrim-plan.md).
 
 Moves so far: run/walk, variable-height jump, double jump, glide, ground dash (Phantom Dash),
-air dash, wall jumps (on the teal walls of the wall-jump shaft), and the OmniWrench: 3-hit
+air dash, wall jumps (on the teal walls of the wall-jump shaft, a wall-jump zone whose camera
+swings round to look along it, as in the game), and the OmniWrench: 3-hit
 combo, Hyper-Strike (melee in the air) and the wrench throw. Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
 over-the-shoulder camera).
 

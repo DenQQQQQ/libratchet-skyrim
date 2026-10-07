@@ -671,10 +671,17 @@ fn wall_jumps() -> Vec<Act> {
     let z = Vec2::Y;
     let mut acts = vec![
         Act::ClearTrail,
-        Act::Teleport(shaft + Vec3::new(0.0, 0.0, -1.2)),
+        // He runs into the shaft from its open +X end, the camera behind him and off to the side.
+        // The shaft's wall-jump zone turns it to look straight along the shaft, a little down,
+        // and pulls it back.
+        Act::Teleport(shaft + Vec3::new(7.0, 0.0, -1.2)),
+        hold(0.12, -Vec2::X, false),
+        Act::Follow { yaw: std::f32::consts::FRAC_PI_2 + 0.6, pitch: 0.35, distance: 4.65 },
+        hold(0.4, Vec2::ZERO, false),
+        hold(1.15, -Vec2::X, false),
+        hold(0.6, Vec2::ZERO, false),
         hold(0.12, z, false),
-        Act::Follow { yaw: std::f32::consts::FRAC_PI_2, pitch: 0.1, distance: 9.0 },
-        hold(0.5, Vec2::ZERO, false),
+        hold(0.6, Vec2::ZERO, false),
         hold(0.1, z, false),
         hold(0.25, z, true),
         hold(0.15, z, false),

@@ -95,6 +95,12 @@ pub struct CameraRig {
     focus: Vec3,
     /// When set, the camera looks at this fixed spot instead of following (demo wide shots).
     fixed: Option<(Vec3, f32, f32, f32)>,
+    /// In a wall-jump zone: the turn toward its view (yaw and pitch speeds, until it's there or
+    /// the mouse moves), and how far its framing is blended in, with the blend's speed.
+    zone_inside: bool,
+    zone_turn: Option<(f32, f32)>,
+    zone_blend: f32,
+    zone_blend_speed: f32,
     /// Seconds of camera wobble left (Hyper-Strike landings; ours).
     pub shake: f32,
     /// 0..1: how far the camera has moved over the shoulder for aiming, and back for running.
@@ -213,6 +219,10 @@ fn main() {
         moving: 0.0,
         shakes: Vec::new(),
         close_up: false,
+        zone_inside: false,
+        zone_turn: None,
+        zone_blend: 0.0,
+        zone_blend_speed: 0.0,
     })
     .insert_resource(camera_configs)
     .insert_resource(DebugOverlay(!clean))
@@ -506,6 +516,7 @@ pub fn simulate(
         ground_distance,
         hit_ceiling: moved.hit_ceiling,
         wall: moved.wall.map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump }),
+        wall_jump_zone: level.wall_jump_zone(feet).is_some(),
     };
 
     // Jump measurements for the HUD.
@@ -616,6 +627,9 @@ fn camera_control(
     if grabbed {
         rig.yaw -= motion.delta.x * 0.003;
         rig.pitch = (rig.pitch + motion.delta.y * 0.003).clamp(-0.25, 1.35);
+        if motion.delta != Vec2::ZERO {
+            rig.zone_turn = None;
+        }
     }
     rig.distance = (rig.distance - scroll.delta.y * 0.6).clamp(2.0, 40.0);
 }
@@ -654,12 +668,14 @@ fn update_visuals(
 }
 
 /// The follow camera, placed by the game's camera contexts (`camera.rs`): around a pivot above
-/// Ratchet's feet, further back while he runs, over his right shoulder while aiming.
+/// Ratchet's feet, further back while he runs, over his right shoulder while aiming, and pulled
+/// back to look along a wall-jump zone inside one.
 #[allow(clippy::too_many_arguments)]
 fn camera_follow(
     time: Res<Time>,
     settings: Res<Settings>,
     configs: Res<camera::CameraConfigs>,
+    level: Res<Level>,
     arsenal: Option<Res<weapons::Arsenal>>,
     mut rig: ResMut<CameraRig>,
     players: Query<&Player>,
@@ -682,6 +698,28 @@ fn camera_follow(
         return;
     }
     let s = settings.scale;
+    // A wall-jump zone (the game's "WallJump" volumes): coming in, the camera turns to the
+    // zone's view, 3° down, at WallStickConfig's WallJumpCamera rates, and blends to the
+    // wall-jump framing; going out, the framing blends back and the camera stays turned.
+    // Moving the mouse ends the turn (ours: the game's rule for the stick isn't read).
+    let zone = level.wall_jump_zone(p.feet).copied();
+    if zone.is_some() != rig.zone_inside {
+        rig.zone_inside = zone.is_some();
+        rig.zone_turn = zone.map(|_| (0.0, 0.0));
+    }
+    if let (Some((mut yaw_speed, mut pitch_speed)), Some(zone)) = (rig.zone_turn, zone) {
+        let target_yaw = (-zone.look.x).atan2(-zone.look.z);
+        let (mut yaw, mut pitch) = (rig.yaw, rig.pitch);
+        let yaw_done = camera::turn_toward(&mut yaw, target_yaw, &mut yaw_speed, configs.wall_jump_turn[0], dt);
+        let pitch_done = camera::turn_toward(&mut pitch, ZONE_PITCH, &mut pitch_speed, configs.wall_jump_turn[1], dt);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+        rig.zone_turn = (!(yaw_done && pitch_done)).then_some((yaw_speed, pitch_speed));
+    }
+    let (blend, target) = if rig.zone_inside { (configs.wall_jump_in, 1.0) } else { (configs.wall_jump_out, 0.0) };
+    let mut blend_speed = rig.zone_blend_speed;
+    rig.zone_blend = blend.step(rig.zone_blend, target, &mut blend_speed, dt);
+    rig.zone_blend_speed = blend_speed;
     let k = 1.0 - (-10.0 * dt).exp();
     rig.focus = rig.focus.lerp(p.feet, k);
     // A short 20 Hz wobble, fading out (ours, for melee impacts).
@@ -700,9 +738,17 @@ fn camera_follow(
     // while he runs.
     let zoom = rig.distance / (configs.stand.level.z * s).max(0.01);
     let game_framing = if rig.close_up { 0.0 } else { ((zoom - 0.45) / 0.55).clamp(0.0, 1.0) };
-    let (stand_pivot, mut stand, stand_fov) = configs.stand.place(pitch, rig.moving * game_framing);
-    let stand_pivot = CHEST + (stand_pivot - CHEST) * game_framing;
+    let (stand_pivot, mut stand, mut stand_fov) = configs.stand.place(pitch, rig.moving * game_framing);
+    let mut stand_pivot = CHEST + (stand_pivot - CHEST) * game_framing;
     stand.z *= zoom;
+    if rig.zone_blend > 0.0 {
+        let (zone_pivot, mut framing, zone_fov) = configs.wall_jump.place(pitch, 0.0);
+        framing.z *= zoom;
+        let b = rig.zone_blend;
+        stand_pivot += (zone_pivot - stand_pivot) * b;
+        stand = stand.lerp(framing, b);
+        stand_fov += (zone_fov - stand_fov) * b;
+    }
     let (aim_pivot, aim, aim_fov) = configs.aim.place(pitch, 0.0);
     let b = rig.aim_blend;
     let pivot = (stand_pivot + (aim_pivot - stand_pivot) * b) * s;
@@ -717,6 +763,8 @@ fn camera_follow(
 
 /// Where a zoomed-in camera looks (height above his feet at Ratchet's size; ours).
 const CHEST: f32 = 0.8;
+/// A wall-jump zone's camera looks 3° down (RiftApart.exe).
+const ZONE_PITCH: f32 = 0.05236;
 
 /// Sets a perspective camera's horizontal field of view (degrees), the way the game's configs
 /// give it.

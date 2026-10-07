@@ -26,9 +26,33 @@ impl Block {
     }
 }
 
+/// A wall-jump zone, as the game's level designers place over wall-jump stretches (its
+/// "WallJump" volumes): inside, the camera turns to look along `look`, 3° down, and pulls
+/// back, and wall jumps keep their line.
+#[derive(Clone, Copy, Debug)]
+pub struct WallJumpZone {
+    pub min: Vec3,
+    pub max: Vec3,
+    /// Which way the camera looks, on the ground plane.
+    pub look: Vec3,
+}
+
+/// How far outside a zone's box still counts as in it (the game tests with a 0.5 margin; that
+/// it widens the box is our reading).
+const ZONE_MARGIN: f32 = 0.5;
+
 #[derive(Resource, Default)]
 pub struct Level {
     pub blocks: Vec<Block>,
+    pub zones: Vec<WallJumpZone>,
+}
+
+impl Level {
+    /// The wall-jump zone around `feet`, if any.
+    pub fn wall_jump_zone(&self, feet: Vec3) -> Option<&WallJumpZone> {
+        let m = Vec3::splat(ZONE_MARGIN);
+        self.zones.iter().find(|z| feet.cmpge(z.min - m).all() && feet.cmple(z.max + m).all())
+    }
 }
 
 /// Where the course pieces are, for respawn and the demo script.
@@ -119,7 +143,8 @@ pub fn spawn_level(
     }
 
     // Wall-jump shaft: two 13 m walls that take wall jumps (teal), 3.4 m apart across Z, with a
-    // ledge behind the +Z one. Beside it, an ordinary wall of the same height (grey).
+    // ledge behind the +Z one, in a wall-jump zone whose camera looks along the shaft from +X.
+    // Beside it, an ordinary wall of the same height (grey).
     let shaft = spots::WALL_SHAFT;
     const GAP: f32 = 3.4;
     for side in [-1.0, 1.0] {
@@ -128,6 +153,11 @@ pub fn spawn_level(
     }
     add(&mut commands, Block::new(Vec2::new(shaft.x, shaft.z + GAP * 0.5 + 2.8), 0.0, Vec3::new(6.0, 13.0, 4.0)), Color::srgb(0.15, 0.6, 0.65));
     add(&mut commands, Block::new(Vec2::new(shaft.x - 10.0, shaft.z), 0.0, Vec3::new(0.8, 13.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
+    level.zones.push(WallJumpZone {
+        min: Vec3::new(shaft.x - 3.0, 0.0, shaft.z - GAP * 0.5),
+        max: Vec3::new(shaft.x + 3.0, 13.0, shaft.z + GAP * 0.5),
+        look: Vec3::NEG_X,
+    });
 
     commands.insert_resource(level);
 }

@@ -42,6 +42,9 @@ pub struct Contact {
     pub hit_ceiling: bool,
     /// The wall the last move ran into, if any.
     pub wall: Option<WallContact>,
+    /// He's in one of the level's wall-jump zones (the game's "WallJump" volumes, placed over
+    /// wall-jump stretches): there a wall jump keeps its line once NoInputTime is over.
+    pub wall_jump_zone: bool,
 }
 
 /// A wall the character ran into.
@@ -55,7 +58,7 @@ pub struct WallContact {
 
 impl Default for Contact {
     fn default() -> Self {
-        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false, wall: None }
+        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false, wall: None, wall_jump_zone: false }
     }
 }
 
@@ -150,8 +153,8 @@ const WALL_PUSH: f32 = 0.5;
 /// clears it (RiftApart.exe).
 const WALL_BLOCK_REACH: f32 = 7.5;
 const WALL_BLOCK_TIME: f32 = 0.5;
-/// A wall jump's momentum weights once NoInputTime is over: fixed in the exe, not its config's
-/// 0 to 0.1 (those apply only with a flag we haven't identified).
+/// A wall jump's momentum weights once NoInputTime is over, outside the level's wall-jump
+/// zones (fixed in the exe). In a zone it takes its config's, which keep its line.
 const WALL_JUMP_MOMENTUM: (f32, f32) = (0.0, 1.4);
 
 #[derive(Clone, Debug)]
@@ -204,6 +207,8 @@ pub struct Ratchet {
     wall_block: Option<(Vec3, f32)>,
     /// Whether the game's right wall clips fit (see `wall_right`).
     wall_right: bool,
+    /// In a wall-jump zone (`Contact::wall_jump_zone`) this tick.
+    in_wall_jump_zone: bool,
     prev_melee: bool,
     /// Seconds since the last melee press nothing used yet.
     since_melee_press: f32,
@@ -270,6 +275,7 @@ impl Ratchet {
             wall_time: 0.0,
             wall_block: None,
             wall_right: false,
+            in_wall_jump_zone: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
             combo_next: 0,
@@ -374,6 +380,7 @@ impl Ratchet {
         self.aim_mode = input.aim_mode && self.aiming.is_some();
         self.stick = stick;
         self.view_right = input.view_right;
+        self.in_wall_jump_zone = contact.wall_jump_zone;
         if let Some((_, left)) = &mut self.wall_block {
             *left -= dt;
         }
@@ -1070,7 +1077,7 @@ impl Ratchet {
             self.jump_held
         } else {
             let target = base * m;
-            let keep = if self.state == MoveState::WallJump {
+            let keep = if self.state == MoveState::WallJump && !self.in_wall_jump_zone {
                 let (lo, hi) = WALL_JUMP_MOMENTUM;
                 JumpParams { momentum_weight_min: lo, momentum_weight_max: hi, ..params.clone() }.momentum_keep(self.air_time, dt)
             } else {

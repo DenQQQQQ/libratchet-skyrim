@@ -11,8 +11,9 @@ import argparse, io, json, os, struct, sys
 CONFIGS = ["hero/hero_traversal", "hero/hero_shared", "hero/hero_mover", "hero/hero_hoverboot", "hero/hero_grind",
            "hero/hero_slide", "hero/hero_portalzip", "equipment/wpn_wrench_melee", "equipment/wpn_wrench_weapon",
            "equipment/wpn_burstpistol_weapon", "equipment/wpn_protogrenade_weapon",
-           # The follow camera (normal and aiming) and the shakes the weapons ask for.
-           "camera/camera_Default_AimContext", "camera/camera_Strafe_AimContext",
+           # The follow camera (normal, aiming, and in the levels' wall-jump zones) and the shakes the
+           # weapons ask for.
+           "camera/camera_Default_AimContext", "camera/camera_Strafe_AimContext", "camera/camera_WallJump_AimContext",
            "camera/camera_CameraShake_MediumExplosion", "camerashake/camerashake_explosionmedium/camerashake_recoilsmall"]
 
 # Ratchet's wrench clips, analysed into hero_melee_clips.json (timing and root motion).

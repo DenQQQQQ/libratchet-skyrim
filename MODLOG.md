@@ -35,6 +35,60 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (small hours): wall-jump zones and their camera
+
+A second research agent looked for the game's wall-jump camera.
+
+### Read from RiftApart.exe
+- **No camera turn for ordinary wall jumps.** Only the level's "WallJump" volumes read
+  WallStickConfig's WallJumpCamera fields; designers place them over wall-jump stretches. Inside
+  one:
+  - **Framing:** the camera blends to `camera_WallJump_AimContext` (hero_shared's
+    WallJumpCameraAimContextConfig): 7.45 m back, 0.5 m up, a 75.9° field of view.
+    - It blends in with gain −0.4, damp −7.5, max 4.
+    - It blends out with gain −1.2, damp −15, max 4.
+  - **Turn:** the camera turns to the volume's fixed direction, 3° down, on a trapezoidal speed
+    profile. It speeds up at 300°/s², goes at most 300°/s, and slows at 500°/s² to stop exactly on
+    it.
+  - **Momentum:** a wall jump keeps its config's momentum weights (0–0.1), which hold its line once
+    NoInputTime is over. Outside a volume they're 0–1.4, and the game can end the jump early there
+    (a condition we haven't decoded).
+  - **Leaving:** the framing blends back out, and the camera stays turned.
+- **The side:** the stick and the jump-off both compare the wall's normal with the camera's X
+  axis.
+- **The clips:** the animset cuts to the in-air clip and to the stick clip with no blend. The
+  in-air clip ends exactly in the stick clip's first pose.
+
+### Built
+- **libratchet:** `Contact::wall_jump_zone` (C: `wall_jump_zone`). In a zone, a wall jump keeps its
+  line. 42 tests pass; a new one steers a wall jump inside a zone and outside.
+- **Sandbox:**
+  - **The zone:** the shaft is a wall-jump zone, looking along it from its +X end.
+  - **Coming in:** the camera turns to the zone's view and blends to the wall-jump framing. The
+    config extractor now pulls `camera_WallJump_AimContext` too.
+  - **Going out:** the framing blends back.
+  - **The mouse:** moving it ends the turn.
+- **Demo (`--demo-part walljump`):**
+  - He runs into the shaft from its open end, with the camera behind him and off to the side. The
+    zone swings it round to look along the shaft and pulls it back.
+  - Then the six wall jumps and the ledge, where the camera stays put, the framing blends back and
+    the pistol comes out.
+  - Then the slide and the plain wall.
+
+### Derived or assumed
+- **The blends:** we read them with the mover's turn law, whose configs share the form: each tick
+  takes 1 − e^(gain·dt) of what's left, plus part of the last step. That reading is ours.
+- **Pitch speed:** MaxSpeedPitch isn't set in the asset and its default is unknown, so it takes
+  the yaw's 300°/s.
+- **The mouse:** it ends the zone's turn. The game's rule for the stick isn't read.
+- **The margin:** the game tests the volume with a 0.5 margin. That it widens the box is our
+  reading.
+- **Which way he faces on the wall:**
+  - The exe gives the stick and the jump the same side. The clips only line up when the jump's
+    in-air clip is the next wall's, so the jump takes the next wall's.
+  - Whether the camera's X axis is its right or its left decides whether he shows the camera his
+    face or his back. We picked his face; to check in the game.
+
 ## 2026-10-07 (near midnight): wall jumps
 
 The user picked wall jumps next. The first version had several guesses; a research agent then read
@@ -71,7 +125,7 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
     JumpSpeedConfig RunSpeedMax, 6), as if the stick were pushed all the way. WallJumpSpeeds isn't
     read.
   - NoInputTime (0.7 s) holds that velocity. After it, he blends with momentum weights 0–1.4,
-    fixed in the exe (the config's 0–0.1 only apply behind a flag we haven't identified).
+    fixed in the exe; the config's 0–0.1 apply in wall-jump zones (the entry above).
 - **The side:**
   - The camera picks the left or right clips: the right ones when the wall faces against the
     camera's X axis.
@@ -103,7 +157,7 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   - Six wall jumps up the shaft onto the ledge, one press every 0.7 s, about 2 m each. He reaches
     the other wall in 0.43 s but can't take it before 0.5 s.
   - Then a stick, slide and let-go, and the plain wall.
-  - Shots `70_wall_shaft` … `74_ordinary_wall` and `73b_wall_slide`; video
+  - Shots `71_wall_stick` … `74_ordinary_wall` and `73b_wall_slide`; video
     `recordings/wall_jumps.mp4`.
 
 ### Derived or assumed
@@ -111,12 +165,11 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   yet.
 - **The camera's X axis:** we take it as its right; the clips agree (he turns toward the camera).
 - **The in-air clip's side:** the wall ahead's (taken as facing back at the one he left), since the
-  clip ends in that wall's stick pose. The exe reads that side from a camera call we haven't
-  identified.
+  clip ends in that wall's stick pose (see the wall-jump zones entry above).
 - **Turning in the air:** from along the wall round to where he's going, at our air turn rate.
 - **Air moves:** sticking gives his double jump and air dash back.
 - **Holding him on the wall:** pressing him into it at 0.5 m/s keeps it reported; that's ours.
-- **The wall-jump camera:** the game turns the camera during wall jumps; we don't yet.
+- **The wall-jump camera:** see the wall-jump zones entry above.
 
 ## 2026-10-07 (late night): Clank's size, and no leg stretch in jumps
 
