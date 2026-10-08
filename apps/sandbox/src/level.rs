@@ -274,22 +274,47 @@ fn checker_image() -> Image {
     image
 }
 
-/// A wall the character ran into: the way it faces (out of the wall, on the ground plane),
-/// whether it takes wall jumps, and whether the game's wall probe would find it (see
-/// `PROBE_SIDE`).
+/// A wall beside the character, as the game's wall probe finds one: the way it faces (out of
+/// the wall, on the ground plane), whether it takes wall jumps, and how far his feet are from
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WallHit {
     pub normal: Vec2,
     pub wall_jump: bool,
-    pub probed: bool,
+    pub distance: f32,
 }
 
-/// The game finds a wall to stick to with three rays at a time: straight at it and this far
-/// to either side (RiftApart.exe), so the wall has to reach that far past him both ways, at
-/// his middle.
-/// The game's probe reaches 0.25 m to either side at Ratchet's 0.35 m half width; it scales
-/// with him.
+/// The game finds a wall to stick to with three probes at a time: straight at it and 0.25 m to
+/// either side at Ratchet's size (RiftApart.exe), so the wall has to reach that far past him
+/// both ways, at his middle. It scales with him (0.25 m at the 0.35 m half width).
 const PROBE_SIDE_PER_HALF_WIDTH: f32 = 0.25 / 0.35;
+
+/// The nearest wall face within `reach` of his feet that the game's probe would find: one he's
+/// in front of, reaching past him to either side, at his middle height.
+pub fn wall_probe(level: &Level, feet: Vec3, half_w: f32, height: f32, reach: f32) -> Option<WallHit> {
+    let middle = feet.y + height * 0.5;
+    let probe = half_w * PROBE_SIDE_PER_HALF_WIDTH;
+    let mut best: Option<WallHit> = None;
+    for b in &level.blocks {
+        if b.min.y > middle || b.max.y < middle {
+            continue;
+        }
+        for axis in [0usize, 2] {
+            let side = 2 - axis;
+            if b.min[side] > feet[side] - probe || b.max[side] < feet[side] + probe {
+                continue;
+            }
+            for (out, distance) in [(1.0, feet[axis] - b.max[axis]), (-1.0, b.min[axis] - feet[axis])] {
+                if !(-1e-3..=reach).contains(&distance) || best.is_some_and(|w| w.distance <= distance) {
+                    continue;
+                }
+                let normal = if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) };
+                best = Some(WallHit { normal, wall_jump: b.wall_jump, distance: distance.max(0.0) });
+            }
+        }
+    }
+    best
+}
 
 /// Result of moving the character's box through the level.
 pub struct MoveResult {
@@ -297,8 +322,6 @@ pub struct MoveResult {
     pub grounded: bool,
     pub hit_ceiling: bool,
     pub hit_wall: bool,
-    /// The wall it ran into, if any (the last one, when two).
-    pub wall: Option<WallHit>,
 }
 
 /// Moves a box (feet position, half width, height) by `delta`, one axis at a time, stopping at
@@ -309,7 +332,6 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
     let mut grounded = false;
     let mut hit_ceiling = false;
     let mut hit_wall = false;
-    let mut wall = None;
 
     // Vertical.
     let target_y = p.y + delta.y;
@@ -351,12 +373,6 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
                 continue;
             }
             hit_wall = true;
-            let out = -d.signum();
-            let side = 2 - axis;
-            let middle = p.y + height * 0.5;
-            let probe = half_w * PROBE_SIDE_PER_HALF_WIDTH;
-            let probed = b.min[side] <= p[side] - probe && b.max[side] >= p[side] + probe && b.min.y <= middle && b.max.y >= middle;
-            wall = Some(WallHit { normal: if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) }, wall_jump: b.wall_jump, probed });
             next[axis] = if d > 0.0 { b.min[axis] - half_w - SKIN } else { b.max[axis] + half_w + SKIN };
         }
         p = next;
@@ -367,7 +383,7 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
         grounded = level.blocks.iter().any(|b| overlaps_xz(b, p, half_w) && (p.y - b.max.y).abs() <= 1e-3);
     }
 
-    MoveResult { feet: p, grounded, hit_ceiling, hit_wall, wall }
+    MoveResult { feet: p, grounded, hit_ceiling, hit_wall }
 }
 
 /// Sweeps a flight path (the box from `feet`, at velocity `v`, pulled down at `gravity`) for up

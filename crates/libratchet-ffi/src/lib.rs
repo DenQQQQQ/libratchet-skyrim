@@ -62,9 +62,10 @@ pub struct RatchetContact {
     /// 1 if `ground_distance` is valid.
     pub has_ground_distance: u8,
     pub ground_distance: f32,
-    /// 1 if the last move ran into a wall; its normal (out of the wall, x/z), and whether it's
-    /// a wall-jump wall (marked in the level: any number of wall jumps; plain walls take one per
-    /// jump).
+    /// 1 if there's a wall beside him: the nearest within about a metre (× scale, with
+    /// `wall_distance`), or one the last move ran into. Its normal (out of the wall, x/z), and
+    /// whether it's a wall-jump wall (marked in the level: any number of wall jumps; plain walls
+    /// take one per jump).
     pub has_wall: u8,
     pub wall_sticky: u8,
     pub wall_normal_x: f32,
@@ -75,6 +76,12 @@ pub struct RatchetContact {
     /// 1 if sweeping his flight path from here (his velocity, `gravity` from the last step
     /// down) meets a floor before a wall; only needed during wall jumps (state 11).
     pub landing_ahead: u8,
+    /// 1 if `wall_distance` is valid: how far his position is from the wall's surface along its
+    /// normal (m). Then he sticks from as far out as the game's probe reaches (0.775 m × scale)
+    /// and is held out at its standoff (0.6 m), as in the game; without it he's pressed to a
+    /// wall he touches.
+    pub has_wall_distance: u8,
+    pub wall_distance: f32,
 }
 
 pub const RATCHET_EVENT_JUMPED: u32 = 1 << 0;
@@ -260,6 +267,10 @@ pub struct RatchetStepResult {
     /// The dash's direction (x, z) in states 5 and 6 (and after them, the last one's).
     pub dash_dir_x: f32,
     pub dash_dir_z: f32,
+    /// On a swing (state 16): the game's swing-loop animation values. Lean: 0 swinging ahead, 0.5
+    /// stalled at an end, 1 swinging back; Speed: toward 1 as he passes slowly under the target.
+    pub swing_lean: f32,
+    pub swing_speed: f32,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -393,6 +404,7 @@ pub unsafe extern "C" fn ratchet_step(
         wall: (contact.has_wall != 0).then(|| WallContact {
             normal: Vec2::new(contact.wall_normal_x, contact.wall_normal_z).normalize_or_zero(),
             sticky: contact.wall_sticky != 0,
+            distance: (contact.has_wall_distance != 0).then_some(contact.wall_distance),
         }),
         wall_jump_zone: contact.wall_jump_zone != 0,
         landing_ahead: contact.landing_ahead != 0,
@@ -482,6 +494,8 @@ pub unsafe extern "C" fn ratchet_step(
         swing_axis_z: swing_axis.z,
         dash_dir_x: dash_dir.x,
         dash_dir_z: dash_dir.y,
+        swing_lean: sim.sim.swing_lean_speed().map_or(0.0, |s| s.0),
+        swing_speed: sim.sim.swing_lean_speed().map_or(0.0, |s| s.1),
     }
 }
 

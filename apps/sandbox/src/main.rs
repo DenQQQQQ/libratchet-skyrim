@@ -40,6 +40,9 @@ const SIM_HZ: f64 = 120.0;
 /// Ratchet-sized collision box (scale 1).
 const BODY_HEIGHT: f32 = 1.2;
 const BODY_HALF_WIDTH: f32 = 0.35;
+/// Walls are reported this far out (m at Ratchet's size), past the sim's reach for staying on
+/// one (0.92 m).
+const WALL_PROBE_REACH: f32 = 1.0;
 const STEP_HEIGHT: f32 = 0.35;
 /// Roughly how much bigger the Dragonborn is than Ratchet.
 const DRAGONBORN_SCALE: f32 = 1.55;
@@ -599,7 +602,10 @@ pub fn simulate(
         grounded,
         ground_distance,
         hit_ceiling: moved.hit_ceiling,
-        wall: moved.wall.filter(|w| w.probed).map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump }),
+        // The nearest wall the game's probe would find, and how far out it is: the sim sticks
+        // him from as far as the game does and holds him at its standoff.
+        wall: level::wall_probe(&level, feet, half_w, height, WALL_PROBE_REACH * s)
+            .map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump, distance: Some(w.distance) }),
         wall_jump_zone: level.wall_jump_zone(feet).is_some(),
         landing_ahead: p.sim.state() == MoveState::WallJump
             && level::landing_ahead(&level, feet, p.sim.velocity(), p.sim.gravity(), half_w, height),

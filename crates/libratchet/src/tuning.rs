@@ -215,6 +215,10 @@ pub struct WallStickParams {
     pub facing_threshold: f32,
     /// Jumping up a plain wall (a double jump off it) leaves him at least this much height.
     pub up_min_height_gain: f32,
+    /// How far out from the wall's surface he's held (m): the radius of the game's slide body,
+    /// HeroMoverConfig BodySizeSlide.BodyRadius, which the wall stick switches to
+    /// (RiftApart.exe). His wall clips put his hands and soles about this far ahead of him.
+    pub standoff: f32,
 }
 
 impl WallStickParams {
@@ -224,6 +228,7 @@ impl WallStickParams {
             slide_terminal: self.slide_terminal * s,
             min_ground_height: self.min_ground_height * s,
             up_min_height_gain: self.up_min_height_gain * s,
+            standoff: self.standoff * s,
             ..self.clone()
         }
     }
@@ -1008,6 +1013,7 @@ impl Default for Tuning {
                 min_ground_height: 1.0,
                 facing_threshold: 50.0,
                 up_min_height_gain: 0.5,
+                standoff: 0.6,
             },
             wall_jump: JumpParams {
                 height_min: 2.18,
@@ -1065,7 +1071,10 @@ impl Tuning {
             aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
             ledge_jump: jump_from(&jumps["LedgeJumpConfig"]).unwrap_or(base.ledge_jump),
             ledge_jump_speeds: speeds_from(&traversal["LedgeJumpSpeeds"], &base.ledge_jump_speeds),
-            wall_stick: wall_stick_from(&traversal["WallStickConfig"], &base.wall_stick),
+            wall_stick: WallStickParams {
+                standoff: mover_standoff(dir).unwrap_or(base.wall_stick.standoff),
+                ..wall_stick_from(&traversal["WallStickConfig"], &base.wall_stick)
+            },
             wall_jump: jump_from(&jumps["WallJumpConfig"]).unwrap_or(base.wall_jump),
             wall_jump_speeds: speeds_from(&traversal["WallJumpSpeeds"], &base.wall_jump_speeds),
             source: format!("Rift Apart configs ({})", dir.display()),
@@ -1120,7 +1129,15 @@ fn wall_stick_from(v: &Value, base: &WallStickParams) -> WallStickParams {
         min_ground_height: f(v, "WallStickMinGroundHeight").unwrap_or(base.min_ground_height),
         facing_threshold: f(v, "WallStickFacingIntoWallThreshold").unwrap_or(base.facing_threshold),
         up_min_height_gain: f(v, "WallJumpUpMinHeightGain").unwrap_or(base.up_min_height_gain),
+        standoff: base.standoff,
     }
+}
+
+/// The wall stick's standoff from hero_mover.json (the mover config, next to the others), when
+/// it's there.
+fn mover_standoff(dir: &Path) -> Option<f32> {
+    let mover = read_json(&dir.join("hero_mover.json")).ok()?;
+    f(&mover["BodySizeSlide"], "BodyRadius")
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {

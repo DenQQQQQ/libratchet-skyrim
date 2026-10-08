@@ -55,7 +55,7 @@ impl Flat {
             && (self.pos.x - x) * self.wall_facing <= 0.0
         {
             self.pos.x = x;
-            wall = Some(WallContact { normal: Vec2::new(self.wall_facing, 0.0), sticky: self.wall_sticky });
+            wall = Some(WallContact { normal: Vec2::new(self.wall_facing, 0.0), sticky: self.wall_sticky, distance: None });
         }
         self.contact = Contact {
             grounded,

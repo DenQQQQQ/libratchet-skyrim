@@ -42,7 +42,8 @@ typedef struct RatchetContact {
     uint8_t hit_ceiling;
     uint8_t has_ground_distance;
     float ground_distance; /* feet to ground, metres */
-    uint8_t has_wall;      /* the last move ran into a wall */
+    uint8_t has_wall;      /* a wall beside him: the nearest within about 1 m (x scale, with
+                              wall_distance), or one the last move ran into */
     uint8_t wall_sticky;   /* a wall-jump wall (marked in the level): any number of wall jumps;
                               plain walls take one per jump */
     float wall_normal_x;   /* out of the wall, on the ground plane */
@@ -50,6 +51,10 @@ typedef struct RatchetContact {
     uint8_t wall_jump_zone; /* inside a level's wall-jump zone: wall jumps keep their line there */
     uint8_t landing_ahead;  /* his flight path (velocity, result.gravity down) meets a floor before a
                                wall; only needed during wall jumps */
+    uint8_t has_wall_distance; /* wall_distance is valid */
+    float wall_distance;    /* his position to the wall's surface along its normal, metres: then he
+                               sticks from up to 0.775 m (x scale) out and is held 0.6 m out, as in
+                               the game; without it he's pressed to a wall he touches */
 } RatchetContact;
 
 enum {
@@ -125,6 +130,9 @@ typedef struct RatchetStepResult {
     float swing_axis_x, swing_axis_z; /* on a swing: its line, the way he came in; the game's camera
                                          turns to look along it */
     float dash_dir_x, dash_dir_z;     /* the dash's direction in states 5 and 6 (after them, the last) */
+    float swing_lean, swing_speed;    /* on a swing (16): the game's swing-loop animation values. Lean 0
+                                         swinging ahead, 0.5 stalled at an end, 1 back; Speed toward 1
+                                         as he passes slowly under the target */
 } RatchetStepResult;
 
 /* A placed ledge (the game's ledge paths): a straight stretch of edge he can hang from. */

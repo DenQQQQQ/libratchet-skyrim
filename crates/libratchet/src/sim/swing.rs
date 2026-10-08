@@ -8,13 +8,15 @@
 //!   last qualified (not once it's out of sight), but ones that qualify now always win.
 //! - **The button** must be pressed within 0.2 s and still held: holding it swings.
 //! - **The swing** runs in the upright plane along the target's own forward, the cable reeled
-//!   from where it hooked toward the target's length. The first swing in is pushed along; then
-//!   the stick pumps along the camera's axes, only with the swing. Never above level.
+//!   from how far he is toward the target's length. The first swing in is pushed along; then
+//!   the stick pumps along the camera's axes, only with the swing. Never above level. He turns
+//!   (never snaps) toward the way he moves, by the turn law the move before left.
 //! - **Letting go** (the button, or jump): the swing jump when it's a jump press, on the first
 //!   upswing, or later going up past 30° from straight down; else a fall.
 //! - **Hook targets** reel him in along the cable to their length, then drop him.
 
 use super::{Event, Input, MoveState, Ratchet, MOVE_STICK};
+use crate::tuning::GAME_FRAME;
 use crate::world::{SwingKind, SwingTarget, World};
 use glam::{Vec2, Vec3};
 
@@ -32,6 +34,9 @@ const JUMP_TURN_LIMIT: f32 = 178.2;
 /// The game adds the stick's pump as a velocity once a frame (the push / 30). (Assumption: 60
 /// frames a second.)
 const PUMP_RATE: f32 = 60.0 / 30.0;
+/// Swinging, his facing follows his motion only when that's more than this far in a game
+/// frame (m; RiftApart.exe: 0.1 m a frame, 6 m/s at 60 frames a second).
+const FACE_STEP: f32 = 0.1;
 
 /// The swing in progress.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +56,20 @@ pub(crate) struct Swing {
     pub strength: f32,
     pub push_ahead: f32,
     pub push_side: f32,
+    /// The way to the target when he hooked on (level, unit), and the way he turns to face:
+    /// that at first, then the way he moves, kept on that side.
+    pub entry: Vec2,
+    pub facing: Vec2,
+    /// The game's swing-loop animation: the quarter of the swing (0 down going ahead, 1 up
+    /// ahead, 2 down coming back, 3 up behind), whether he's past the target and moving ahead
+    /// (along `entry`), and the smoothed Lean and Speed with their rates.
+    pub quarter: u8,
+    pub past: bool,
+    pub ahead: bool,
+    pub lean: f32,
+    pub lean_rate: f32,
+    pub anim_speed: f32,
+    pub anim_speed_rate: f32,
 }
 
 /// The mover's turn law (a damped approach with a speed cap), as the game uses it for the cable
@@ -62,6 +81,87 @@ fn approach(value: f32, target: f32, rate: &mut f32, (gain, damp, max): (f32, f3
     let step = if left.abs() < 1e-5 { left } else { step.clamp(-left.abs(), left.abs()) };
     *rate = step / dt.max(1e-6);
     value + step
+}
+
+/// The game's trapezoid move (RiftApart.exe): from `value` toward `target`, speeding up at
+/// `accel` to at most `max` and braking at `decel` to get there at speed `end`, planned exactly
+/// from the rate it has each step. Returns the new value; `rate` is its new speed (signed).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn trapezoid(value: f32, target: f32, rate: &mut f32, accel: f32, decel: f32, max: f32, dt: f32, end: f32) -> f32 {
+    let mut gap = target - value;
+    let mut v0 = *rate;
+    let mut ve = end.min(max);
+    if gap.abs() < 1e-4 && v0.abs() < 1e-4 {
+        *rate = 0.0;
+        return target;
+    }
+    let sign = if gap < 0.0 { -1.0 } else { 1.0 };
+    if gap < 0.0 {
+        (gap, v0, ve) = (-gap, -v0, -ve);
+    }
+    let (mut accel, mut decel) = (accel, decel);
+    // Too close to change speed at the given rates: change it just in time.
+    let mean = ((v0 + ve) * 0.5).abs();
+    if ve < v0 && gap < (v0 - ve) / decel * mean {
+        if gap < 1e-4 || gap / mean < 1e-4 {
+            *rate = 0.0;
+            return target;
+        }
+        decel = (v0 - ve) / (gap / mean);
+    } else if ve > v0 && gap < (ve - v0) / accel * mean {
+        if gap < 1e-4 || gap / mean < 1e-4 {
+            *rate = 0.0;
+            return target;
+        }
+        accel = (ve - v0) / (gap / mean);
+    }
+    let mut t_dec = (max - ve).max(0.0) / decel;
+    let mut t_acc = (max - v0).max(0.0) / accel;
+    let d_dec = (ve + max) * 0.5 * t_dec;
+    let mut d_acc = (max + v0) * 0.5 * t_acc;
+    let (mut peak, mut t_cruise, mut d_cruise) = (max, 0.0, 0.0);
+    if gap < d_dec + d_acc {
+        // No time at the top speed: up, then down, solved for the total time.
+        let k = 1.0 / (2.0 * accel + 2.0 * decel);
+        let inv = 1.0 / (accel + decel);
+        let a = accel * decel * k;
+        let b = (v0 * decel + accel * ve) * inv;
+        let c = (2.0 * v0 * ve - v0 * v0 - ve * ve) * k - gap;
+        let (r1, r2) = if a == 0.0 {
+            if b == 0.0 { (f32::MAX, f32::MAX) } else { (-c / b, -c / b) }
+        } else {
+            let disc = b * b - 4.0 * a * c;
+            if disc < 0.0 {
+                (f32::MAX, f32::MAX)
+            } else if disc == 0.0 {
+                (-0.5 * b / a, -0.5 * b / a)
+            } else {
+                let q = if b < 0.0 { (b - disc.sqrt()) * -0.5 } else { -0.5 * b - 0.5 * disc.sqrt() };
+                (q / a, c / q)
+            }
+        };
+        let total = r1.max(r2);
+        t_acc = (total * decel + ve - v0) * inv;
+        t_dec = total - t_acc;
+        peak = t_acc * accel + v0;
+        d_acc = (accel * 0.5 * t_acc + v0) * t_acc;
+    } else {
+        d_cruise = gap - d_acc - d_dec;
+        t_cruise = d_cruise / max;
+    }
+    // Where the plan is after `dt`.
+    let (speed, moved) = if t_acc >= dt {
+        let speed = accel * dt + v0;
+        (speed, (speed + v0) * 0.5 * dt)
+    } else if t_cruise + t_acc >= dt {
+        (peak, (dt - t_acc) * peak + d_acc)
+    } else {
+        let t = (dt - t_cruise - t_acc).min(t_dec);
+        let speed = peak - t * decel;
+        (speed, (speed + peak) * 0.5 * t + d_cruise + d_acc)
+    };
+    *rate = speed * sign;
+    value + moved.min(gap) * sign
 }
 
 /// The camera's side (its right on the level) worked out from its forward, for hosts that
@@ -148,6 +248,7 @@ impl Ratchet {
         self.swing_press_age = f32::INFINITY;
         let to = target.position - position;
         let flat = Vec2::new(to.x, to.z).normalize_or_zero();
+        let entry = if flat == Vec2::ZERO { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) } else { flat };
         // The swing's line: the target's forward, pointing the way he came in.
         let mut axis = Vec3::new(target.axis.x, 0.0, target.axis.y).normalize_or_zero();
         if axis.length_squared() < 0.5 {
@@ -168,6 +269,15 @@ impl Ratchet {
             strength: (1.4 * speed).min(p.max_speed),
             push_ahead: (1.4 * speed).min(p.max_speed),
             push_side: 0.0,
+            entry,
+            facing: entry,
+            quarter: 0,
+            past: false,
+            ahead: true,
+            lean: 0.0,
+            lean_rate: 0.0,
+            anim_speed: 0.0,
+            anim_speed_rate: 0.0,
         });
         self.state = if target.kind == SwingKind::Hook { MoveState::Hook } else { MoveState::Swing };
         self.extending = false;
@@ -193,6 +303,7 @@ impl Ratchet {
         let t = sw.target.position;
         let r = position - t;
         let down_angle = (-r.normalize_or_zero().y).clamp(-1.0, 1.0).acos();
+        swing_anim(&mut sw, r, self.velocity, self.tuning.scale, dt);
         if jump_pressed || !input.swingshot {
             self.swingshot = None;
             let going_up = self.velocity.y >= 0.0;
@@ -240,9 +351,10 @@ impl Ratchet {
                 v += axis * *push * PUMP_RATE * dt;
             }
         }
-        // The cable reels toward the target's length.
+        // The cable reels toward the target's length from how far he really is (RiftApart.exe
+        // measures it each frame, so a swing that was blocked eases back out).
         let mut rate = sw.reel_rate;
-        sw.length = approach(sw.length, sw.target.length, &mut rate, p.reel, dt);
+        sw.length = approach(r.length(), sw.target.length, &mut rate, p.reel, dt);
         sw.reel_rate = rate;
         // Never above level: past `top_from`, the speed up the arc is held under a cap that
         // closes at level.
@@ -265,8 +377,15 @@ impl Ratchet {
         } else if sw.phase == 1 && v.dot(sw.axis) < 0.0 {
             sw.phase = 2;
         }
-        // He faces the way he came in, along the swing.
-        self.facing_yaw = sw.axis.x.atan2(sw.axis.z);
+        // He turns toward the way he moves, kept on the side he came in from; slower than
+        // FACE_STEP he holds it (RiftApart.exe).
+        let step = Vec2::new(next.x - position.x, next.z - position.z);
+        if step.length() > FACE_STEP * self.tuning.scale * dt / GAME_FRAME {
+            let dir = step.normalize();
+            sw.facing = if dir.dot(sw.entry) < 0.0 { -dir } else { dir };
+        }
+        let law = self.turn_law;
+        self.mover_turn(sw.facing.x.atan2(sw.facing.y), law, dt);
         self.swingshot = Some(sw);
     }
 
@@ -280,7 +399,11 @@ impl Ratchet {
         self.velocity = Vec3::ZERO;
         self.start_jump(dt, MoveState::SwingJump, position);
         self.jump_dir = dir;
-        self.facing_yaw = dir.x.atan2(dir.y);
+        // Off at its speed from the first tick (RiftApart.exe sets it as the jump starts); he
+        // turns to face it by the jump's turn law (`air_turn`).
+        let v = dir * self.swing_jump_speed;
+        self.velocity.x = v.x;
+        self.velocity.z = v.y;
         self.events.push(Event::SwingJumped);
     }
 
@@ -335,14 +458,9 @@ impl Ratchet {
             self.enter_fall();
             return;
         }
-        // Along the cable: a trapezoid toward the length, stopping on it.
-        let left = d - goal;
-        let speed = -sw.reel_rate;
-        let brake = (2.0 * p.hook_decel * left.abs()).sqrt();
-        let speed = (speed + p.hook_accel * dt).min(p.hook_max_speed).min(brake);
-        let new_d = if speed * dt >= left { goal } else { d - speed * dt };
-        sw.reel_rate = -speed;
-        if new_d <= goal {
+        // Along the cable: the game's trapezoid toward the length, stopping on it.
+        let new_d = trapezoid(d, goal, &mut sw.reel_rate, p.hook_accel, p.hook_decel, p.hook_max_speed, dt, 0.0);
+        if (new_d - goal).abs() <= 1e-4 {
             sw.phase = 1;
         }
         // Across it: drag, and the pull down across the cable.
@@ -353,8 +471,10 @@ impl Ratchet {
         side += (g - dir * g.dot(dir)) * dt;
         let next = t - dir * (new_d + p.hook_hand) + side * dt;
         self.velocity = (next - position) / dt.max(1e-6);
+        // He turns toward the target (ours: turned like the swing, not snapped).
         if Vec2::new(dir.x, dir.z).length() > 0.1 {
-            self.facing_yaw = dir.x.atan2(dir.z);
+            let law = self.turn_law;
+            self.mover_turn(dir.x.atan2(dir.z), law, dt);
         }
         self.swingshot = Some(sw);
     }
@@ -382,9 +502,50 @@ impl Ratchet {
         self.swingshot.map(|s| s.phase)
     }
 
+    /// The game's swing-loop animation values while he swings (RiftApart.exe sets them on its
+    /// Swingshot_Loop blend each frame): Lean, 0 swinging ahead, 0.5 stalled at an end, 1
+    /// swinging back; and Speed, toward 1 as he passes slowly under the target.
+    pub fn swing_lean_speed(&self) -> Option<(f32, f32)> {
+        self.swingshot.filter(|s| s.target.kind == SwingKind::Swing).map(|s| (s.lean, s.anim_speed))
+    }
+
     /// The swing's line (level, unit, pointing the way he came in), while he swings: the game
     /// turns its camera to look along it.
     pub fn swing_axis(&self) -> Option<Vec3> {
         self.swingshot.filter(|s| s.target.kind == SwingKind::Swing).map(|s| s.axis)
     }
+}
+
+/// The game's swing-loop animation values for one tick (RiftApart.exe), from his offset `r`
+/// from the target and the velocity he moved at: the quarter of the swing changes as he passes
+/// under the target or turns at an end; Lean heads for 0 (ahead) or 1 (back) while he's moving,
+/// 0.5 as he stalls; near the bottom Speed rises as he passes slowly, pulling Lean to 0.5.
+fn swing_anim(sw: &mut Swing, r: Vec3, velocity: Vec3, scale: f32, dt: f32) {
+    let entry = Vec3::new(sw.entry.x, 0.0, sw.entry.y);
+    let past = r.normalize_or_zero().dot(entry) > 0.0;
+    let ahead = velocity.dot(entry) >= 0.0;
+    if past != sw.past {
+        sw.quarter = if ahead { 1 } else { 3 };
+    } else if ahead != sw.ahead {
+        sw.quarter = if past { 2 } else { 0 };
+    }
+    (sw.past, sw.ahead) = (past, ahead);
+    let speed = Vec2::new(velocity.x, velocity.z).length() / scale;
+    let below = Vec2::new(r.x, r.z).length() / scale;
+    let slow = |under: f32| ((under - speed) / under).clamp(0.0, 1.0);
+    let mut lean = match sw.quarter {
+        1 => 0.5 * slow(11.0),
+        2 => 1.0 - 0.5 * slow(0.25),
+        3 => 1.0 - 0.5 * slow(11.0),
+        _ => 0.5 * slow(0.25),
+    };
+    let (accel, speed_goal) = if below < 2.5 {
+        let w = slow(8.0);
+        lean += (0.5 - lean) * w;
+        (1.0, w)
+    } else {
+        (20.0, 0.0)
+    };
+    sw.lean = trapezoid(sw.lean, lean, &mut sw.lean_rate, accel, 7.0, 10.0, dt, 0.0);
+    sw.anim_speed = trapezoid(sw.anim_speed, speed_goal, &mut sw.anim_speed_rate, 4.0, 10.0, 10.0, dt, 0.0);
 }

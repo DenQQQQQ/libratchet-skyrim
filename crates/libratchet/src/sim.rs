@@ -64,13 +64,18 @@ pub struct Contact {
     pub landing_ahead: bool,
 }
 
-/// A wall the character ran into.
+/// A wall beside the character: the nearest one within about a metre (× scale), or one he ran
+/// into.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WallContact {
     /// Out of the wall, on the ground plane (x, z), unit length.
     pub normal: Vec2,
     /// The wall takes wall jumps (the game marks such walls; ordinary ones don't).
     pub sticky: bool,
+    /// How far his position is from the wall's surface along `normal` (m), when the host knows.
+    /// Then he sticks from as far out as the game's wall probe reaches and is held out at its
+    /// standoff (`WallStickParams::standoff`). None: he's against it, and stays pressed to it.
+    pub distance: Option<f32>,
 }
 
 impl Default for Contact {
@@ -216,9 +221,15 @@ const DOUBLE_JUMP_LOOKBACK: (f32, f32) = (0.05, 0.15);
 const DASH_LOOKBACK: f32 = 0.1;
 /// A dash on the ground can be jumped out of from this long after it starts (RiftApart.exe).
 const DASH_JUMP_AFTER: f32 = 0.1;
-/// Stuck to a wall, he's pressed into it at this speed so the host keeps reporting the wall
-/// (ours; the wall stops him).
+/// Stuck to a wall the host only reports touching, he's pressed into it at this speed so it
+/// keeps reporting it (ours; the wall stops him).
 const WALL_PUSH: f32 = 0.5;
+/// How far out a wall can be for him to stick to it, and to stay on it (m, at Ratchet's
+/// size): the game's wall probe takes a hit within 0.95 m, and 1.1 m once he's on it
+/// (RiftApart.exe), from where its sphere starts, 0.55 m up (0.6 m on the wall). Along the
+/// level that's these (our geometry).
+const STICK_REACH: f32 = 0.775;
+const HOLD_REACH: f32 = 0.92;
 /// After a wall jump, no wall within this many metres of the jump-off point (a box around it,
 /// along the wall) can be stuck to for this long, the shaft's opposite wall included; landing
 /// clears it (RiftApart.exe).
@@ -345,6 +356,11 @@ pub struct Ratchet {
     stick: Vec2,
     view_right: Vec2,
     turn_omega: f32,
+    /// The turn law he last turned by: the Swingshot sets none of its own, so it keeps this
+    /// one (RiftApart.exe).
+    turn_law: (f32, f32, f32),
+    /// On a wall: how far out from it he is, when the host says.
+    wall_distance: Option<f32>,
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
     move_vy: Option<(f32, f32)>,
@@ -426,6 +442,8 @@ impl Ratchet {
             stick: Vec2::ZERO,
             view_right: Vec2::ZERO,
             turn_omega: 0.0,
+            turn_law: STANDING_TURN,
+            wall_distance: None,
             events: Vec::new(),
             move_vy: None,
         }
@@ -702,9 +720,14 @@ impl Ratchet {
             }
             MoveState::WallStick => {
                 self.wall_time += dt;
+                // The wall's still there within the game's re-probe reach (any distance, when
+                // the host only reports touching).
+                let reach = HOLD_REACH * self.tuning.scale;
+                let wall = contact.wall.filter(|w| w.distance.is_none_or(|d| d <= reach));
+                self.wall_distance = wall.and_then(|w| w.distance);
                 if self.jump_press_age <= WALL_JUMP_BUFFER && (self.wall_marked || self.wall_time > PLAIN_WALL_JUMP_DELAY) {
                     self.jump_off_wall(dt, position);
-                } else if (self.wall_time > dt && contact.wall.is_none())
+                } else if (self.wall_time > dt && wall.is_none())
                     || contact.ground_distance.is_some_and(|d| d < self.tuning.wall_stick.min_ground_height)
                 {
                     // Slid off the wall's edge, or down near the ground (RiftApart.exe: below
@@ -1170,7 +1193,8 @@ impl Ratchet {
     ///
     /// Not to any wall near the last jump-off for WALL_BLOCK_TIME.
     fn try_wall_stick(&mut self, contact: &Contact, position: Vec3) -> bool {
-        let Some(wall) = contact.wall.filter(|w| w.normal.length_squared() > 0.5) else {
+        let reach = STICK_REACH * self.tuning.scale;
+        let Some(wall) = contact.wall.filter(|w| w.normal.length_squared() > 0.5 && w.distance.is_none_or(|d| d <= reach)) else {
             return false;
         };
         let p = &self.tuning.wall_stick;
@@ -1208,6 +1232,7 @@ impl Ratchet {
         // The game's right clips when the wall faces against the camera's right.
         self.wall_right = wall.normal.dot(self.view_right) <= 0.0;
         self.wall_time = 0.0;
+        self.wall_distance = wall.distance;
         self.state = MoveState::WallStick;
         self.velocity = Vec3::ZERO;
         self.extending = false;
@@ -1237,11 +1262,16 @@ impl Ratchet {
     }
 
     /// Holding on for WallStickNoSlideTime, then sliding down at WallStickGravity up to
-    /// WallStickTerminalVelocity, pressed against the wall.
+    /// WallStickTerminalVelocity. Out from the wall he's held at its standoff, moved straight
+    /// there (RiftApart.exe places him at the wall point plus the standoff each frame, so the
+    /// first one snaps), or pressed against it when the host doesn't say how far it is.
     fn wall_slide(&mut self, dt: f32) {
         let p = &self.tuning.wall_stick;
         let vy = if self.wall_time < p.no_slide_time { 0.0 } else { (self.velocity.y - p.slide_gravity * dt).max(-p.slide_terminal) };
-        let push = -self.wall_normal * WALL_PUSH * self.tuning.scale;
+        let push = match self.wall_distance {
+            Some(d) => -self.wall_normal * (d - p.standoff) / dt.max(1e-6),
+            None => -self.wall_normal * WALL_PUSH * self.tuning.scale,
+        };
         self.velocity = Vec3::new(push.x, vy, push.y);
     }
 
@@ -1424,9 +1454,12 @@ impl Ratchet {
     /// In the air the jumps' own rule (`air_turn`). During the melee and the Hyper-Strike, a
     /// plain turn rate (ours).
     fn turn(&mut self, dt: f32) {
-        // On a ledge, a swing or a wall, the move sets his facing.
-        if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::Swing | MoveState::Hook) {
+        // On a ledge or a wall, the move sets his facing; on the Swingshot it turns him itself.
+        if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop) {
             self.turn_omega = 0.0;
+            return;
+        }
+        if matches!(self.state, MoveState::Swing | MoveState::Hook) {
             return;
         }
         if self.state == MoveState::WallStick {
@@ -1493,6 +1526,7 @@ impl Ratchet {
     /// exponential share of the angle left (gain) plus part of the last tick's turn (damp),
     /// capped per second (cap) and never past the target.
     fn mover_turn(&mut self, target: f32, law: (f32, f32, f32), dt: f32) {
+        self.turn_law = law;
         let mut omega = self.turn_omega;
         self.facing_yaw = turn_law(self.facing_yaw, target, &mut omega, law, dt);
         self.turn_omega = omega;
@@ -1516,7 +1550,10 @@ impl Ratchet {
         let forward = Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos());
         let push = self.stick.length().min(1.0);
         let before_input = self.air_time < params.no_input_time;
-        let dir = if before_input {
+        // The swing jump faces where it goes, which the stick turns (RiftApart.exe: its own
+        // facing target).
+        let along = self.state == MoveState::SwingJump;
+        let dir = if before_input || along {
             self.jump_dir
         } else if let Some(aim) = self.aiming {
             aim
@@ -1528,7 +1565,7 @@ impl Ratchet {
             forward
         };
         let first = self.air_time <= dt + 1e-6;
-        let target = if first || before_input || self.aiming.is_some() || dir == Vec2::ZERO {
+        let target = if first || before_input || along || self.aiming.is_some() || dir == Vec2::ZERO {
             dir
         } else {
             let r = params.momentum_keep(self.air_time, dt);
