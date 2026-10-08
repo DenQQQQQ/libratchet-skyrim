@@ -68,7 +68,7 @@ const CLIP_STATES: &[&str] = &[
     "wrench_strafe_land_idle", "wall_stick_left", "wall_stick_right", "wall_slide_left", "wall_slide_right", "wall_jump_left",
     "wall_jump_right", "ledge_grab", "ledge_from_fall", "ledge_from_fall_l180", "ledge_from_fall_r180", "ledge_idle", "ledge_up",
     "ledge_down_to", "ledge_jump", "ledge_drop", "ledge_drop_turn", "swing_pull", "swing_intro", "swing_forward_fast",
-    "swing_forward_slow", "swing_backward_fast", "swing_backward_slow", "swing_jump", "hook_reel",
+    "swing_forward_slow", "swing_idle", "swing_backward_fast", "swing_backward_slow", "swing_jump", "hook_reel",
 ];
 /// Dashes by direction relative to where he faces (clockwise from ahead), on the ground and in
 /// the air: the game's Dash and Air_Dash drivers have one clip per direction.
@@ -157,8 +157,15 @@ const THROW_LAYER: &str = "throw_additive";
 const LAYER_FADE_IN: f32 = 0.08;
 const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
-/// Swinging faster than this (m/s, at Ratchet's size) plays the fast swing clips (ours).
-const SWING_FAST: f32 = 6.0;
+/// The Swingshot's loop (the game's Swingshot_Loop): one blend of these clips by the swing's
+/// Lean (0 swinging ahead, 0.5 stalled at an end, 1 swinging back), each at its Lean, faded in
+/// and out as one move clip under the name SWING_LOOP (see `blend_swing_loop`). (Assumption:
+/// the game's blend node layout isn't decoded; its data has Lean breakpoints at 0, 0.333, 0.5,
+/// 0.666 and 1, read here as a line from swinging ahead fast through the stall to swinging back
+/// fast.)
+const SWING_LOOP: &str = "swing_loop";
+const SWING_LOOP_CLIPS: [(f32, &str); 5] =
+    [(0.0, "swing_forward_fast"), (0.333, "swing_forward_slow"), (0.5, "swing_idle"), (0.666, "swing_backward_slow"), (1.0, "swing_backward_fast")];
 /// The wall jump's in-air clip plays at this rate (see `play_clips`).
 const WALL_JUMP_CLIP_RATE: f32 = 0.25;
 const LOOPING: &[&str] = &[
@@ -167,7 +174,7 @@ const LOOPING: &[&str] = &[
     "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
     "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol", "wall_slide_left", "wall_slide_right",
-    "ledge_idle", "swing_forward_fast", "swing_forward_slow", "swing_backward_fast", "swing_backward_slow", "hook_reel",
+    "ledge_idle", SWING_LOOP, "hook_reel",
 ];
 /// Played at the rate that keeps the feet planted.
 const SPEED_MATCHED: &[&str] = &["run", "walk", "pistol_run", "land_walk", "land_run", "wrench_run", "wrench_walk", "wrench_land_walk", "wrench_land_run"];
@@ -277,6 +284,11 @@ pub struct Rig {
     /// the let-go clip after dropping off a caught ledge.
     ledge_catch: &'static str,
     ledge_drop_time: f32,
+    /// On a swing: the clip it started with (picked as he fired), and the swing loop's Lean as
+    /// the sim last gave it. The swing jump's JumpPeak event (seconds into its clip).
+    swing_entry: Option<&'static str>,
+    swing_lean: f32,
+    swing_jump_peak: Option<f32>,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -438,6 +450,9 @@ fn on_ready(
         wall_looping: false,
         ledge_catch: "ledge_from_fall",
         ledge_drop_time: 0.0,
+        swing_entry: None,
+        swing_lean: 0.0,
+        swing_jump_peak: settings.model_dir.as_ref().and_then(|d| clip_event(&d.join("ratchet.json"), "swing_jump", "JumpPeak")),
         land_timer: 0.0,
         throw_layer: None,
         throw_time: None,
@@ -495,7 +510,7 @@ fn setup_clips(
     rig: Option<ResMut<Rig>>,
     model: Option<Res<ModelGltf>>,
     gltfs: Res<Assets<Gltf>>,
-    clip_assets: Res<Assets<AnimationClip>>,
+    mut clip_assets: ResMut<Assets<AnimationClip>>,
     targets: Query<&AnimationTargetId>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
@@ -514,6 +529,13 @@ fn setup_clips(
         if let Some(clip) = gltf.named_animations.get(name) {
             clips.insert(name, graph.add_clip(clip.clone(), 1.0, base));
         }
+    }
+    // The swing loop's own node: a clip with no tracks, faded in and out by the transitions like
+    // any move clip, whose weight the loop's clips share (`blend_swing_loop`).
+    if SWING_LOOP_CLIPS.iter().any(|(_, name)| clips.contains_key(name)) {
+        let mut empty = AnimationClip::default();
+        empty.set_duration(1.0);
+        clips.insert(SWING_LOOP, graph.add_clip(clip_assets.add(empty), 1.0, base));
     }
     for (run, names) in LEAN_CLIPS {
         if let [Some(left), Some(right)] = names.map(|n| gltf.named_animations.get(n)) {
@@ -962,6 +984,14 @@ fn play_clips(
     } else if rig.current_clip == Some(wall_stick) && rig.clips.get(wall_stick).and_then(|&n| player.animation(n)).is_some_and(|a| a.is_finished()) {
         rig.wall_looping = true;
     }
+    // A swing starts with the pull in when he fires near the ground, else the intro, picked as
+    // he fires.
+    if state != MoveState::Swing {
+        rig.swing_entry = None;
+    } else if rig.swing_entry.is_none() {
+        let low = p.contact.ground_distance.is_some_and(|d| d < 0.9 * settings.scale);
+        rig.swing_entry = Some(if low { "swing_pull" } else { "swing_intro" });
+    }
     let want: &'static str = match state {
         MoveState::Ground if rig.land_timer > 0.0 && rig.strafe_landing.is_some() => rig.strafe_landing.unwrap_or("land"),
         MoveState::Ground if gun_aim && speed > 0.6 => strafe,
@@ -1003,23 +1033,11 @@ fn play_clips(
         MoveState::LedgeClimb => "ledge_jump",
         MoveState::LedgeDrop => "ledge_drop_turn",
         MoveState::LedgeJump => "double_jump",
-        // The Swingshot: pulled in (near the ground), the first swing, then the loop for the way
-        // he's swinging and how fast (the game's graph picks these; ours by his speed along his
-        // facing); the jump off; the Hookshot's reel.
-        MoveState::Swing => match p.sim.swing_phase() {
-            Some(0) if p.contact.ground_distance.is_some_and(|d| d < 0.9 * settings.scale) => "swing_pull",
-            Some(0) => "swing_intro",
-            _ => {
-                let yaw = p.sim.facing_yaw();
-                let ahead = Vec2::new(v.x, v.z).dot(Vec2::new(yaw.sin(), yaw.cos()));
-                match (ahead >= 0.0, Vec2::new(v.x, v.z).length() > SWING_FAST) {
-                    (true, true) => "swing_forward_fast",
-                    (true, false) => "swing_forward_slow",
-                    (false, true) => "swing_backward_fast",
-                    (false, false) => "swing_backward_slow",
-                }
-            }
-        },
+        // The Swingshot (RiftApart.exe's animation drivers): the swing's first clip through the
+        // swing in and on past the target; from the first swing back, the loop; the jump off;
+        // the Hookshot's reel.
+        MoveState::Swing if p.sim.swing_phase().is_some_and(|phase| phase >= 2) => SWING_LOOP,
+        MoveState::Swing => rig.swing_entry.unwrap_or("swing_intro"),
         MoveState::Hook => "hook_reel",
         MoveState::SwingJump => "swing_jump",
     };
@@ -1040,7 +1058,9 @@ fn play_clips(
         // Wrench moves, the grenade throw and strafe changes cut in quickly.
         let quick = |c: Option<&str>| c.is_some_and(|c| MELEE_CLIPS.contains(&c) || c.starts_with("smash") || c.contains("strafe"));
         let landing = |c: Option<&str>| c.is_some_and(|c| c.starts_with("land") || c.starts_with("wrench_land"));
-        let fade = if quick(Some(want)) || quick(rig.current_clip) {
+        let fade = if let Some(ms) = swing_blend_ms(rig.current_clip, want) {
+            ms
+        } else if quick(Some(want)) || quick(rig.current_clip) {
             60
         } else if landing(Some(want)) || landing(rig.current_clip) {
             90
@@ -1053,8 +1073,14 @@ fn play_clips(
         if LOOPING.contains(&want) {
             active.repeat();
         }
+        // The transitions weigh it from the next update on; until then the loop's clips take
+        // none of it.
+        if want == SWING_LOOP {
+            active.set_weight(0.0);
+        }
         rig.current_clip = Some(want);
     }
+    blend_swing_loop(&mut rig, &mut player, p.sim.swing_lean_speed().map(|(lean, _)| lean));
     // The sounds the clip calls for, as its time passes them (looping clips wrap around). A
     // clip that just started sounds what it passed already. The jump clip's landing sound plays
     // at landing instead (simulate), not at the end of the clip in the air.
@@ -1102,6 +1128,17 @@ fn play_clips(
         && let Some(active) = player.animation_mut(node)
     {
         active.set_speed(WALL_JUMP_CLIP_RATE);
+    }
+    // The swing jump's flip plays so that its JumpPeak event comes at the jump's top, where the
+    // fall takes over: 0.531 s into the clip at 0.5 s, about 1.06x. (Assumption: the game's
+    // driver times it this way; its rate wasn't read.)
+    if want == "swing_jump"
+        && let (Some(&node), Some(peak)) = (rig.clips.get(want), rig.swing_jump_peak)
+        && let Some(active) = player.animation_mut(node)
+    {
+        let jump = &p.sim.tuning().swingshot.jump;
+        let to_top = if jump.time_to_peak_is_gravity { (2.0 * jump.height_min / jump.time_to_peak.max(0.1)).sqrt() } else { jump.time_to_peak };
+        active.set_speed(peak / to_top.max(0.05));
     }
     rig.walking = if rig.walking { speed < WALK_TO_RUN } else { speed < RUN_TO_WALK };
     lean_into_turns(&mut rig, &mut player, p.sim.facing_yaw(), want, time.delta_secs());
@@ -1181,6 +1218,70 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, clip: 
                 _ => {
                     player.stop(node);
                 }
+            }
+        }
+    }
+}
+
+/// The Swingshot's blend times (ms) from one clip to the next, from the game's transition
+/// tables (RiftApart.exe): onto a swing (the pull in or the intro, from the jump or fall pose)
+/// and into the Hookshot's reel 0.25 s; the intro into the loop 0.35 s; off with a jump, a cut
+/// from the swing's first clip and 0.1 s from the loop; letting go into the fall, 0.25 s from
+/// the first clip and 0.5 s from the loop; the swing jump into the fall at its top, 0.4 s.
+fn swing_blend_ms(from: Option<&str>, to: &str) -> Option<u64> {
+    let first = from.is_some_and(|c| matches!(c, "swing_pull" | "swing_intro"));
+    let looping = from == Some(SWING_LOOP);
+    Some(match to {
+        "swing_pull" | "swing_intro" | "hook_reel" => 250,
+        SWING_LOOP => 350,
+        "swing_jump" if first => 0,
+        "swing_jump" if looping => 100,
+        "fall" if first => 250,
+        "fall" if looping => 500,
+        "fall" if from == Some("swing_jump") => 400,
+        _ => return None,
+    })
+}
+
+/// Each swing loop clip's share at this Lean (see SWING_LOOP_CLIPS): the two around it, by how
+/// close it is to each.
+fn swing_loop_weights(lean: f32) -> [f32; 5] {
+    let lean = lean.clamp(0.0, 1.0);
+    let mut weights = [0.0; 5];
+    let i = SWING_LOOP_CLIPS.windows(2).position(|w| lean <= w[1].0).unwrap_or(SWING_LOOP_CLIPS.len() - 2);
+    let (a, b) = (SWING_LOOP_CLIPS[i].0, SWING_LOOP_CLIPS[i + 1].0);
+    let t = ((lean - a) / (b - a)).clamp(0.0, 1.0);
+    weights[i] = 1.0 - t;
+    weights[i + 1] = t;
+    weights
+}
+
+/// The swing loop: while its node plays (faded in and out by the transitions like a move clip,
+/// see `setup_clips`), all its clips play under it from when it starts, never restarted, each
+/// taking its share of the node's weight by the swing's Lean; they stop with it. `lean` is the
+/// sim's while he swings; after he lets go, the loop fades out as it was. (The game also sets a
+/// Speed on the loop, rising as he passes slowly under the target. It isn't used: the sim already
+/// pulls Lean toward the stall by as much, and what else the game's graph does with it isn't
+/// decoded.)
+fn blend_swing_loop(rig: &mut Rig, player: &mut AnimationPlayer, lean: Option<f32>) {
+    let Some(&carrier) = rig.clips.get(SWING_LOOP) else { return };
+    if let Some(lean) = lean {
+        rig.swing_lean = lean;
+    }
+    let weight = player.animation(carrier).map(|a| a.weight());
+    for ((_, name), share) in SWING_LOOP_CLIPS.into_iter().zip(swing_loop_weights(rig.swing_lean)) {
+        let Some(&node) = rig.clips.get(name) else { continue };
+        match weight {
+            Some(weight) => {
+                if player.animation(node).is_none() {
+                    player.start(node).repeat();
+                }
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(share * weight);
+                }
+            }
+            None => {
+                player.stop(node);
             }
         }
     }
@@ -1412,5 +1513,35 @@ fn animate(
     for (i, s) in ["tail_1", "tail_2", "tail_3", "tail_4", "tail_5", "tail_6"].into_iter().enumerate() {
         let f = 1.0 + i as f32 * 0.3;
         set(s, y(pose.tail_sway * 0.25 * f) * x(pose.tail_lift * 0.15));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_swing_loop_blends_the_two_clips_around_its_lean() {
+        // On a breakpoint, only that clip; between two, both by how close.
+        for (i, (lean, _)) in SWING_LOOP_CLIPS.into_iter().enumerate() {
+            let w = swing_loop_weights(lean);
+            assert!((w[i] - 1.0).abs() < 1e-5 && (w.iter().sum::<f32>() - 1.0).abs() < 1e-5, "at {lean}: {w:?}");
+        }
+        let w = swing_loop_weights(0.25);
+        assert!((w[0] - 0.25).abs() < 1e-2 && (w[1] - 0.75).abs() < 1e-2 && w[2..].iter().all(|w| *w == 0.0), "{w:?}");
+        // Out of range, the ends.
+        assert_eq!(swing_loop_weights(-1.0)[0], 1.0);
+        assert_eq!(swing_loop_weights(2.0)[4], 1.0);
+    }
+
+    #[test]
+    fn the_swing_jump_cuts_from_the_intro_and_blends_from_the_loop() {
+        assert_eq!(swing_blend_ms(Some("swing_intro"), "swing_jump"), Some(0));
+        assert_eq!(swing_blend_ms(Some(SWING_LOOP), "swing_jump"), Some(100));
+        assert_eq!(swing_blend_ms(Some("swing_intro"), SWING_LOOP), Some(350));
+        assert_eq!(swing_blend_ms(Some("swing_jump"), "fall"), Some(400));
+        assert_eq!(swing_blend_ms(Some("jump"), "swing_intro"), Some(250));
+        // Other moves keep their own.
+        assert_eq!(swing_blend_ms(Some("run"), "fall"), None);
     }
 }

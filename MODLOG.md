@@ -35,6 +35,62 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (evening): the Swingshot's look: the shot, the clips' blends, the camera
+
+The user found the Swingshot "a bit janky, too rough". The game hooks on at once like ours;
+the rest of its smoothness is in the visuals. Sandbox only (the sim is unchanged).
+
+### Read from RiftApart.exe (research agent)
+- **The shot:** hooking on fires a shot from the hand locator (igLoc_swingshot) toward the
+  target's attach point at 80 m/s plus the target's own motion; the cable runs from the hand to
+  it and stays pinned there. Let go (any way), it flies back to the hand at 80 m/s before the
+  cable is hidden. Firing again during that finishes it at once. The swing never waits for it.
+- **The clips (animation drivers and transition tables):**
+  - onto a swing: Swingshot_Pull near the ground, else SwingShotIntro, each blended in over
+    0.25 s; the intro plays on past the target;
+  - the loop (Swingshot_Loop) starts on the first swing back, blended in over 0.35 s. It's one
+    blend node driven by two values the swing sets each frame, Lean and Speed (the sim's
+    `swing_lean_speed`); its data has Lean breakpoints 0, 0.333, 0.5, 0.666, 1;
+  - off: loop to swing jump 0.1 s, intro/pull to swing jump a cut, loop to fall 0.5 s,
+    intro/pull to fall 0.25 s, swing jump to fall 0.4 s; the Hookshot's reel 0.25 s in.
+
+### Built
+- **The cable** (`swingshot.rs`): the shot flies out and back at 80 m/s (scaled with him). The
+  sandbox counts shots (`Player::shots`) so one fired while the last is still coming back starts
+  at his hand.
+- **The clips** (`ratchet_model.rs`):
+  - the swing's first clip is picked as he fires (pull below 0.9 m, else the intro) and plays
+    until the first swing back;
+  - the loop is a clip with no tracks (`swing_loop`) that the transitions fade like any move
+    clip; the five loop clips (forward fast/slow, `swing_idle`, backward slow/fast) play under it
+    from when it starts, never restarted, each taking a share of its weight by Lean;
+  - the blend times above; the swing jump's clip plays at its JumpPeak (0.531 s) over the jump's
+    time to its top (0.5 s), about 1.06x;
+  - `SWING_FAST` (ours) is gone.
+- **The camera** (`main.rs`): the swing's tracking gains slide in and out over 0.35 s instead of
+  switching with the state.
+- **Demo:** the swingshot part ends with him held on the first target for 4.5 s, filmed from
+  the side (shot `95_swing_loop`).
+
+### Measured (swingshot demo, largest change in the follow focus's speed in one frame)
+- Before: 4.9 m/s hooking on from the jump, 8.8 m/s from a swing jump, 18.2-19.3 m/s at every
+  swing jump.
+- After: 1.2-1.5 m/s hooking on, 0.65-1.0 m/s at the swing jumps.
+- Still there: swinging back toward the camera past the focus, the swing's back gain (80/s
+  against 4/s forward) catches him up in two frames, about 3.5 m/s a frame; a swing jump while
+  swinging back about 4 m/s. That's the swing's tracking itself, with the configs' damps unread.
+- Clip switches per swing: before, 3-4 hard switches (intro, then forward/backward x fast/slow
+  by speed, each restarting its clip); now the intro, and the loop once from the first swing
+  back. The cut from the intro into the swing jump turns his right upper arm about 130° in one
+  frame (the game's table says cut; worth a look in the game).
+
+### Derived or assumed
+- **The loop's layout:** a line over Lean from forward fast (0) through forward slow, idle (0.5)
+  and backward slow to backward fast (1). Speed isn't used: the sim already pulls Lean toward
+  0.5 by as much as he passes slowly.
+- **The swing jump's clip rate** (its JumpPeak at the jump's top).
+- **The tracking blend** (0.35 s, linear) and the follow camera's 10/s are ours.
+
 ## 2026-10-08 (afternoon): captioned demo videos, and a turns demo
 
 Videos to watch away from the desk: the parts today's fixes changed, with a line of text

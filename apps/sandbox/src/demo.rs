@@ -781,7 +781,8 @@ fn ledges() -> Vec<Act> {
 }
 
 /// The Swingshot: off a platform onto three targets in a row, letting go near the top of each
-/// swing, onto a landing platform; then the Hookshot up onto a block.
+/// swing, onto a landing platform; then the Hookshot up onto a block; then swinging on the first
+/// target for a while.
 fn swingshot() -> Vec<Act> {
     let s = spots::SWINGS;
     let z = Vec2::Y;
@@ -838,7 +839,27 @@ fn swingshot() -> Vec<Act> {
             acts.extend([Act::Shot("94_hookshot_top"), hold(0.5, Vec2::ZERO, false)]);
         }
     }
-    acts.push(Act::Caption(""));
+    // Then on the first target for a while, from the side: the intro through the first swing,
+    // then the loop's clips blending as he swings back and forth; off with a jump on the second
+    // swing ahead, and the cable flies back.
+    acts.extend([
+        Act::ClearTrail,
+        Act::Teleport(s + Vec3::new(0.0, 2.0, -3.5)),
+        hold(0.12, z, false),
+        Act::Follow { yaw: std::f32::consts::PI, pitch: 0.0, distance: 4.65 },
+        Act::Caption("Held on one target: the intro, then the loop as he swings back and forth"),
+        // Closer, and from a little below him so the target stays in the picture.
+        Act::Film { yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.15, distance: 10.0 },
+        hold(0.6, Vec2::ZERO, false),
+        hold(0.45, z, false),
+        hold(0.15, z, true),
+        swinging(2.4, Vec2::ZERO),
+        Act::Shot("95_swing_loop"),
+        swinging(2.1, Vec2::ZERO),
+        hold(0.05, z, true),
+        hold(1.5, Vec2::ZERO, false),
+        Act::Caption(""),
+    ]);
     acts
 }
 

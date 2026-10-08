@@ -74,9 +74,11 @@ pub struct Player {
     contact: Contact,
     stats: JumpStats,
     /// Counts what the frame's systems would miss as events (the sim keeps a tick's events
-    /// only until the next tick, and a frame can run several): ledge let-gos, respawns.
+    /// only until the next tick, and a frame can run several): ledge let-gos, respawns, and
+    /// Swingshot shots (each hooking on fires one).
     drops: u32,
     respawns: u32,
+    shots: u32,
 }
 
 impl Player {
@@ -128,11 +130,12 @@ pub struct CameraRig {
     zone_turn: Option<(f32, f32)>,
     zone_blend: f32,
     zone_blend_speed: f32,
-    /// On the Swingshot: the turn to look along the swing, and how far its framing is blended
-    /// in, with the blend's speed.
+    /// On the Swingshot: the turn to look along the swing, how far its framing is blended in,
+    /// with the blend's speed, and how far its tracking is.
     swing_turn: Option<SwingTurn>,
     swing_blend: f32,
     swing_blend_speed: f32,
+    swing_track: f32,
     /// The player's respawn count this has seen: a respawn moves the camera with him.
     respawns_seen: u32,
     /// Seconds of camera wobble left (Hyper-Strike landings; ours).
@@ -291,6 +294,7 @@ fn main() {
         swing_turn: None,
         swing_blend: 0.0,
         swing_blend_speed: 0.0,
+        swing_track: 0.0,
         respawns_seen: 0,
     })
     .insert_resource(camera_configs)
@@ -380,6 +384,7 @@ fn setup(
                 stats: JumpStats::default(),
                 drops: 0,
                 respawns: 0,
+                shots: 0,
             },
             Transform::from_translation(spots::SPAWN),
             Visibility::default(),
@@ -544,6 +549,7 @@ pub fn simulate(
     let v = p.sim.step_in(dt, &input, &contact, before, &level::LevelWorld(&level));
     let drops = p.sim.events().iter().filter(|e| matches!(e, MoveEvent::LedgeDropped)).count() as u32;
     p.drops += drops;
+    p.shots += p.sim.events().iter().filter(|e| matches!(e, MoveEvent::SwingAttached { .. })).count() as u32;
     // The game's sounds for what the moves do (the animation clips sound the rest: steps,
     // jumps, swings, efforts). The heli-pack unfolds, spins while gliding, and folds away.
     for e in p.sim.events() {
@@ -870,19 +876,20 @@ fn camera_follow(
     rig.swing_blend = blend.step(rig.swing_blend, target, &mut blend_speed, dt);
     rig.swing_blend_speed = blend_speed;
     // Keeping up with him: on a swing, the swing's own tracking (slow to follow him up and down
-    // and away from the camera, quick toward it and sideways); otherwise ours.
-    if p.sim.state() == MoveState::Swing {
-        let t = configs.swing_tracking;
-        let gap = feet - rig.focus;
-        let ahead = Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos());
-        let side = Vec3::new(ahead.z, 0.0, -ahead.x);
-        let rate = |gain: f32| 1.0 - (gain * dt).exp();
-        let along = gap.dot(ahead);
-        rig.focus += ahead * along * rate(if along > 0.0 { t.forward } else { t.back }) + side * gap.dot(side) * rate(t.left) + Vec3::Y * gap.y * rate(t.up);
-    } else {
-        let k = 1.0 - (-10.0 * dt).exp();
-        rig.focus = rig.focus.lerp(feet, k);
-    }
+    // and away from the camera, quick toward it and sideways); otherwise ours, as fast every way.
+    // Hooking on and letting go, the gains slide from one to the other over SWING_TRACK_BLEND
+    // (ours): switched at once, the focus's speed jumped by up to 18 m/s in a frame.
+    let step = dt / SWING_TRACK_BLEND;
+    rig.swing_track = (rig.swing_track + if p.sim.state() == MoveState::Swing { step } else { -step }).clamp(0.0, 1.0);
+    let (t, w) = (configs.swing_tracking, rig.swing_track);
+    let gain = |swing: f32| FOLLOW_GAIN + (swing - FOLLOW_GAIN) * w;
+    let gap = feet - rig.focus;
+    let ahead = Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos());
+    let side = Vec3::new(ahead.z, 0.0, -ahead.x);
+    let rate = |gain: f32| 1.0 - (gain * dt).exp();
+    let along = gap.dot(ahead);
+    let (forward, sideways, up) = (gain(if along > 0.0 { t.forward } else { t.back }), gain(t.left), gain(t.up));
+    rig.focus += ahead * along * rate(forward) + side * gap.dot(side) * rate(sideways) + Vec3::Y * gap.y * rate(up);
     // A short 20 Hz wobble, fading out (ours, for melee impacts).
     rig.shake = (rig.shake - dt).max(0.0);
     let wobble = (time.elapsed_secs() * 20.0 * std::f32::consts::TAU).sin() * (rig.shake / 0.25).min(1.0);
@@ -947,6 +954,11 @@ const ZONE_PITCH: f32 = 0.05236;
 /// back up at this rate (degrees/s³) (RiftApart.exe).
 const SWING_TURN_WAIT: f32 = 0.5;
 const SWING_TURN_RAMP: f32 = 150.0;
+/// Off the Swingshot, the follow camera closes the gap to him at this rate every way (per
+/// second, as an exponent; ours). The swing's tracking slides in and out over SWING_TRACK_BLEND
+/// seconds (ours).
+const FOLLOW_GAIN: f32 = -10.0;
+const SWING_TRACK_BLEND: f32 = 0.35;
 
 /// Sets a perspective camera's horizontal field of view (degrees), the way the game's configs
 /// give it.

@@ -1,10 +1,14 @@
 //! The Swingshot in the sandbox: the level's targets as orbs (the one he'd fire at lights up)
-//! and the cable from his swingshot hand while he swings or reels.
+//! and the cable from his swingshot hand, out to the shot and back.
 
 use crate::level::Level;
-use crate::Player;
+use crate::{Player, Settings};
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
+
+/// How fast the shot flies out to the target and back to his hand (m/s at Ratchet's size;
+/// RiftApart.exe).
+const SHOT_SPEED: f32 = 80.0;
 
 /// A target's orb, at the target.
 #[derive(Component)]
@@ -12,6 +16,22 @@ struct Orb(Vec3);
 
 #[derive(Component)]
 struct Cable;
+
+/// The shot at the cable's end (RiftApart.exe): hooking on fires it from his hand toward the
+/// target's attach point at SHOT_SPEED, plus the target's own motion; there it stays while he's
+/// on. Let go (however he lets go), it flies back to his hand at the same speed, and the cable is
+/// put away once it's there. Firing again while it's on its way back finishes that at once: the
+/// new shot leaves from his hand. The swing itself never waits for it.
+#[derive(Resource, Default)]
+struct Shot {
+    /// Where the shot is, while the cable is out.
+    head: Option<Vec3>,
+    /// The target it's out to, as of the last frame (none on its way back).
+    target: Option<Vec3>,
+    /// The player's shot and respawn counts this has seen.
+    shots_seen: u32,
+    respawns_seen: u32,
+}
 
 #[derive(Resource)]
 struct Looks {
@@ -26,6 +46,7 @@ struct Hand(Option<Entity>);
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Hand>()
+        .init_resource::<Shot>()
         .add_systems(Startup, setup.after(crate::level::spawn_level))
         .add_systems(Update, (find_hand, light_orbs))
         // After this frame's transforms, so the cable leaves his hand where it is now, not where
@@ -69,26 +90,49 @@ fn light_orbs(players: Query<&Player>, level: Res<Level>, looks: Res<Looks>, mut
     }
 }
 
-/// The cable, from his hand to the target, while he's on one.
+/// The cable, from his hand to the shot (see `Shot`).
 fn draw_cable(
+    time: Res<Time>,
+    settings: Res<Settings>,
     players: Query<&Player>,
     hand: Res<Hand>,
+    mut shot: ResMut<Shot>,
     globals: Query<&GlobalTransform, Without<Cable>>,
     mut cable: Query<(&mut Transform, &mut GlobalTransform, &mut Visibility), With<Cable>>,
 ) {
     let (Ok(p), Ok((mut tf, mut global, mut vis))) = (players.single(), cable.single_mut()) else { return };
-    let Some((target, _)) = p.sim.swinging_on() else {
+    let from = hand.0.and_then(|h| globals.get(h).ok()).map_or(p.feet + Vec3::Y, |g| g.translation());
+    if p.respawns != shot.respawns_seen {
+        shot.respawns_seen = p.respawns;
+        shot.head = None;
+    }
+    if p.shots != shot.shots_seen {
+        shot.shots_seen = p.shots;
+        shot.head = Some(from);
+        shot.target = None;
+    }
+    let step = SHOT_SPEED * settings.scale * time.delta_secs();
+    let on = p.sim.swinging_on().map(|(t, _)| t);
+    shot.head = match (shot.head, on) {
+        // Out to the target (it moves with it), or there.
+        (Some(head), Some(target)) => Some((head + shot.target.map_or(Vec3::ZERO, |was| target - was)).move_towards(target, step)),
+        // Back to his hand.
+        (Some(head), None) => Some(head.move_towards(from, step)).filter(|h| h.distance(from) > 1e-3),
+        (None, _) => None,
+    };
+    shot.target = on;
+    let Some(head) = shot.head else {
         vis.set_if_neq(Visibility::Hidden);
         return;
     };
-    let from = hand.0.and_then(|h| globals.get(h).ok()).map_or(p.feet + Vec3::Y, |g| g.translation());
-    let along = target - from;
+    let along = head - from;
     let length = along.length();
     if length < 1e-3 {
+        vis.set_if_neq(Visibility::Hidden);
         return;
     }
     *tf = Transform {
-        translation: (from + target) * 0.5,
+        translation: (from + head) * 0.5,
         rotation: Quat::from_rotation_arc(Vec3::Y, along / length),
         scale: Vec3::new(1.0, length, 1.0),
     };
