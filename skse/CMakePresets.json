@@ -1,0 +1,25 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release (Ninja, MSVC, vcpkg)",
+      "description": "Run from a VS x64 developer environment (build.ps1 sets one up).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceParentDir}/target/skse/cmake",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "cl",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+        "VCPKG_INSTALLED_DIR": "${sourceParentDir}/target/skse/vcpkg_installed"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    }
+  ]
+}

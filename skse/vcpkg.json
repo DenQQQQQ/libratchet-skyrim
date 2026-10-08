@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "ratchet-movement",
+  "version-semver": "0.1.0",
+  "description": "SKSE plugin: Rift Apart movement (libratchet) in Skyrim SE.",
+  "builtin-baseline": "89be95ecb9aa93d776da29101c5ee967c60ab484",
+  "dependencies": [
+    "directxtk",
+    "rapidcsv",
+    "spdlog"
+  ]
+}
