@@ -202,6 +202,10 @@ const TURN_SNAP: f32 = 0.005;
 /// A jump coming down after its NoFallTime only becomes a fall more than this far above the
 /// ground (RiftApart.exe).
 const NO_FALL_GROUND: f32 = 0.5;
+/// A mid-air jump takes a press up to min(t − 0.05, 0.15) s old, t seconds into the jump; on the
+/// ground a dash press counts for 0.1 s (RiftApart.exe).
+const DOUBLE_JUMP_LOOKBACK: (f32, f32) = (0.05, 0.15);
+const DASH_LOOKBACK: f32 = 0.1;
 /// A dash on the ground can be jumped out of from this long after it starts (RiftApart.exe).
 const DASH_JUMP_AFTER: f32 = 0.1;
 /// Stuck to a wall, he's pressed into it at this speed so the host keeps reporting the wall
@@ -279,6 +283,8 @@ pub struct Ratchet {
     wall_sticks: u32,
     wall_up_ok: bool,
     jump_press_age: f32,
+    /// Seconds since the dash button was pressed (infinite once a dash takes it).
+    dash_press_age: f32,
     /// The crouch button: when it was last pressed (unused), and whether it was down.
     crouch_press_age: f32,
     prev_crouch: bool,
@@ -375,6 +381,7 @@ impl Ratchet {
             wall_sticks: 0,
             wall_up_ok: false,
             jump_press_age: f32::INFINITY,
+            dash_press_age: f32::INFINITY,
             crouch_press_age: f32::INFINITY,
             prev_crouch: false,
             hold: None,
@@ -506,6 +513,7 @@ impl Ratchet {
         self.swing_press_age = if swing_pressed { 0.0 } else { self.swing_press_age + dt };
         let dash_pressed = input.dash && !self.prev_dash;
         self.prev_dash = input.dash;
+        self.dash_press_age = if dash_pressed { 0.0 } else { self.dash_press_age + dt };
         let melee_pressed = input.melee && !self.prev_melee;
         self.prev_melee = input.melee;
         self.since_melee_press = if melee_pressed { 0.0 } else { self.since_melee_press + dt };
@@ -583,7 +591,7 @@ impl Ratchet {
                     self.start_jump(dt, MoveState::Jump, position);
                 } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
                     self.swing(dt, false, stick, position);
-                } else if dash_pressed {
+                } else if self.dash_press_age <= DASH_LOOKBACK {
                     self.start_dash(MoveState::Dash, stick);
                     self.ground_dash(dt);
                 } else {
@@ -636,7 +644,7 @@ impl Ratchet {
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 // Ledges come first (RiftApart.exe), on the way down.
                 if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
-                } else if pressed && self.can_midair_jump(&params, position, contact) {
+                } else if self.can_midair_jump(&params, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
@@ -671,7 +679,7 @@ impl Ratchet {
                 self.air_steer(dt, stick);
                 self.fall_under(dt, &params);
                 if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
-                } else if pressed && self.can_midair_jump(&params, position, contact) {
+                } else if self.can_midair_jump(&params, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
@@ -995,6 +1003,7 @@ impl Ratchet {
     }
 
     fn start_dash(&mut self, kind: MoveState, stick: Vec2) {
+        self.dash_press_age = f32::INFINITY;
         // Dash where the stick points, or straight ahead without input (RiftApart.exe: below
         // the moving threshold; ahead is the aim while strafing).
         let ahead = self.aiming.unwrap_or(Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()));
@@ -1099,16 +1108,15 @@ impl Ratchet {
         self.move_vy = Some((self.velocity.y, (before + self.velocity.y) * 0.5));
     }
 
-    fn can_midair_jump(&self, params: &JumpParams, position: Vec3, contact: &Contact) -> bool {
-        if self.midair_jumps >= self.tuning.max_midair_jumps || self.air_time < params.double_jump_time_start {
+    /// A mid-air jump (RiftApart.exe): one left, past DoubleJumpTimeStart into this jump, at
+    /// least DoubleJumpHeightMin above the ground, and a press no older than
+    /// min(t − 0.05, 0.15) s, so a second tap just before the start time still counts.
+    fn can_midair_jump(&self, params: &JumpParams, contact: &Contact) -> bool {
+        if self.midair_jumps >= self.tuning.max_midair_jumps || self.air_time <= params.double_jump_time_start {
             return false;
         }
-        let height = match self.state {
-            MoveState::Fall => contact.ground_distance.unwrap_or(f32::MAX),
-            _ => position.y - self.jump_origin_y,
-        };
-        // On the way down the height check no longer matters; it only stops instant double taps.
-        height >= params.double_jump_height_min || self.velocity.y <= 0.0
+        let lookback = (self.air_time - DOUBLE_JUMP_LOOKBACK.0).min(DOUBLE_JUMP_LOOKBACK.1);
+        self.jump_press_age <= lookback && contact.ground_distance.is_none_or(|d| d.abs() >= params.double_jump_height_min)
     }
 
     fn can_glide(&self, held: bool, params: &JumpParams, contact: &Contact) -> bool {

@@ -1232,3 +1232,57 @@ fn the_jump_momentum_blend_does_not_depend_on_the_tick_rate() {
         }
     }
 }
+
+#[test]
+fn a_second_tap_just_before_the_double_jump_is_allowed_still_counts() {
+    // The game takes a press up to min(t - 0.05, 0.15) s old: a tap at 0.07 s double-jumps once
+    // DoubleJumpTimeStart (0.1 s) passes; one at 0.03 s is too early to count.
+    let t = Tuning::default();
+    for (tap, counts) in [(0.07, true), (0.03, false)] {
+        let mut h = Flat::new(t.clone());
+        h.tick(true, Vec2::ZERO);
+        let start = h.time - DT;
+        while h.time - start < tap {
+            h.tick(false, Vec2::ZERO);
+        }
+        h.tick(true, Vec2::ZERO);
+        while h.time - start < 0.3 {
+            h.tick(false, Vec2::ZERO);
+        }
+        let doubled = h.events.iter().any(|(_, e)| *e == Event::DoubleJumped);
+        assert_eq!(doubled, counts, "tap at {tap} s");
+    }
+}
+
+#[test]
+fn no_double_jump_just_above_the_ground() {
+    // Falling off a 20 cm step: under the fall's DoubleJumpHeightMin (0.25 m) above the ground.
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.pos.y = 0.2;
+    h.contact = Contact { grounded: false, ground_distance: Some(0.2), ..Contact::default() };
+    for _ in 0..((t.fall.double_jump_time_start / DT) as usize + 2) {
+        h.tick(false, Vec2::ZERO);
+        h.pos.y = 0.2;
+        h.contact.ground_distance = Some(0.2);
+        h.contact.grounded = false;
+    }
+    h.tick(true, Vec2::ZERO);
+    assert!(!h.events.iter().any(|(_, e)| *e == Event::DoubleJumped), "double-jumped 0.2 m above the floor");
+}
+
+#[test]
+fn a_dash_pressed_just_before_landing_dashes_on_landing() {
+    // The air dash used up, a dash press in the air does nothing there; the ground takes a press
+    // up to 0.1 s old (the game's Idle and Run), so it dashes on landing.
+    let mut h = Flat::new(Tuning::default());
+    h.tick(true, Vec2::ZERO);
+    h.tick_with(Input { dash: true, move_dir: Vec2::new(0.0, 1.0), ..Default::default() });
+    assert_eq!(h.r.state(), MoveState::AirDash);
+    while !matches!(h.r.state(), MoveState::Ground | MoveState::Dash) && h.time < 3.0 {
+        // Press again just before touching down.
+        let dash = h.pos.y < 0.15 && h.r.velocity().y < 0.0 && h.r.state() == MoveState::Fall;
+        h.tick_with(Input { dash, ..Default::default() });
+    }
+    assert!(h.events.iter().any(|(_, e)| *e == Event::Dashed), "no dash on landing (now {:?})", h.r.state());
+}

@@ -129,6 +129,18 @@ fixing.
 - **Checked:** the C++ smoke test builds and passes with the new header. The fuzz test's world
   now includes those host mistakes.
 
+### Fixed: the double jump's and the dash's presses (RiftApart.exe)
+- **The double jump** now follows the game's check:
+  - past DoubleJumpTimeStart into the jump;
+  - at least DoubleJumpHeightMin above the **ground**, on the way down too;
+  - with a press up to min(t − 0.05, 0.15) s old.
+  We measured the height from the take-off point, skipped it coming down (so the fall's
+  0.25 m never applied), and took only a press on that very tick. So a second tap 0.07 s into
+  a jump never double-jumped; now it does once 0.1 s pass, as in the game.
+- **On the ground a dash press counts for 0.1 s** (the game's Idle and Run look back that far).
+  A press just before landing, with the air dash used up, now dashes on landing. In the air,
+  the press still has to come on the tick (the air states' lookback wasn't read).
+
 ### Tests
 - **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
   out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.
@@ -142,6 +154,10 @@ fixing.
   - fast falls at 30 Hz;
   - the pick without the camera's right.
   - The ledge tests also note that their start counts as walking off an edge.
+- **Three for the presses:**
+  - a second tap just before the double jump is allowed, and one too early;
+  - no double jump just above the ground;
+  - a dash pressed just before landing.
 
 ## 2026-10-08 (afternoon): a tick that takes no time; a fuzz test
 
