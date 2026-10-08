@@ -181,7 +181,12 @@ fn play(seed: u64, ticks: usize) {
         }
         if rng.chance(0.02) {
             let normal = if rng.chance(0.2) { Vec2::ZERO } else { rng.dir2() };
-            contact.wall = Some(WallContact { normal, sticky: rng.chance(0.5), distance: rng.chance(0.5).then(|| rng.range(-0.5, 1.5)) });
+            let distance = match rng.range(0.0, 1.0) {
+                x if x < 0.4 => None,
+                x if x < 0.9 => Some(rng.range(-0.5, 1.5)),
+                _ => Some([f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -1e6][rng.range(0.0, 3.99) as usize]),
+            };
+            contact.wall = Some(WallContact { normal, sticky: rng.chance(0.5), distance });
         }
         if rng.chance(0.02) {
             contact.ground_distance = rng.chance(0.5).then(|| rng.range(-1.0, 20.0));

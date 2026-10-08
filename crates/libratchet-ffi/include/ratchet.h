@@ -43,7 +43,8 @@ typedef struct RatchetContact {
     uint8_t has_ground_distance;
     float ground_distance; /* feet to ground, metres */
     uint8_t has_wall;      /* a wall beside him: the nearest within about 1 m (x scale, with
-                              wall_distance), or one the last move ran into */
+                              wall_distance), or one the last move ran into; on a wall (state 10),
+                              that one (facing result.wall_normal) when it's in reach */
     uint8_t wall_sticky;   /* a wall-jump wall (marked in the level): any number of wall jumps;
                               plain walls take one per jump */
     float wall_normal_x;   /* out of the wall, on the ground plane */
@@ -112,6 +113,7 @@ typedef struct RatchetStepResult {
     float facing_yaw;        /* radians, atan2(x, z) */
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
+    float wall_normal_x, wall_normal_z; /* on a wall or in a wall jump (10, 11): the wall's normal */
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
     float gravity;           /* how fast he's pulled down now, m/s^2, e.g. for RatchetContact.landing_ahead */
     uint8_t ledge_caught;    /* with RATCHET_EVENT_LEDGE_GRABBED: 1 caught on the way down, 0 placed */

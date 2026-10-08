@@ -10,7 +10,8 @@
 //! - **The swing** runs in the upright plane along the target's own forward, the cable reeled
 //!   from how far he is toward the target's length. The first swing in is pushed along; then
 //!   the stick pumps along the camera's axes, only with the swing. Never above level. He turns
-//!   (never snaps) toward the way he moves, by the turn law the move before left.
+//!   (never snaps) toward the way he moves, by the turn law the move before left; after a slow
+//!   hop with the stick let go that law is nil, so he keeps his facing (as the game's code reads).
 //! - **Letting go** (the button, or jump): the swing jump when it's a jump press, on the first
 //!   upswing, or later going up past 30° from straight down; else a fall.
 //! - **Hook targets** reel him in along the cable to their length, then drop him.
@@ -77,7 +78,8 @@ pub(crate) struct Swing {
 fn approach(value: f32, target: f32, rate: &mut f32, (gain, damp, max): (f32, f32, f32), dt: f32) -> f32 {
     let left = target - value;
     let carry = 0.5 * dt * *rate * (2.0 - (damp * dt / 30.0).exp());
-    let step = (carry + (1.0 - (gain * dt).exp()) * left).clamp(-max * dt, max * dt);
+    let max = if max > 0.0 { max * dt } else { f32::INFINITY };
+    let step = (carry + (1.0 - (gain * dt).exp()) * left).clamp(-max, max);
     let step = if left.abs() < 1e-5 { left } else { step.clamp(-left.abs(), left.abs()) };
     *rate = step / dt.max(1e-6);
     value + step
@@ -158,7 +160,7 @@ pub(crate) fn trapezoid(value: f32, target: f32, rate: &mut f32, accel: f32, dec
     } else {
         let t = (dt - t_cruise - t_acc).min(t_dec);
         let speed = peak - t * decel;
-        (speed, (speed + peak) * 0.5 * t + d_cruise + d_acc)
+        (speed, (speed + peak) * 0.5 * t + (d_cruise + d_acc))
     };
     *rate = speed * sign;
     value + moved.min(gap) * sign
@@ -458,11 +460,20 @@ impl Ratchet {
             self.enter_fall();
             return;
         }
-        // Along the cable: the game's trapezoid toward the length, stopping on it.
-        let new_d = trapezoid(d, goal, &mut sw.reel_rate, p.hook_accel, p.hook_decel, p.hook_max_speed, dt, 0.0);
-        if (new_d - goal).abs() <= 1e-4 {
+        // Along the cable: the game's trapezoid toward the length, stopping on it. Already within
+        // it (fired from close by, the reel would push him out, into the floor), he's there (ours:
+        // what ends that in the game isn't read).
+        let new_d = if d <= goal + 1e-4 {
+            sw.reel_rate = 0.0;
             sw.phase = 1;
-        }
+            d
+        } else {
+            let new_d = trapezoid(d, goal, &mut sw.reel_rate, p.hook_accel, p.hook_decel, p.hook_max_speed, dt, 0.0);
+            if (new_d - goal).abs() <= 1e-4 {
+                sw.phase = 1;
+            }
+            new_d
+        };
         // Across it: drag, and the pull down across the cable.
         let mut side = self.velocity - dir * self.velocity.dot(dir);
         let drag = (p.hook_drag * side.length_squared() * dt).min(side.length());
@@ -471,7 +482,7 @@ impl Ratchet {
         side += (g - dir * g.dot(dir)) * dt;
         let next = t - dir * (new_d + p.hook_hand) + side * dt;
         self.velocity = (next - position) / dt.max(1e-6);
-        // He turns toward the target (ours: turned like the swing, not snapped).
+        // He turns toward the target by the law the move before left (ours: like the swing).
         if Vec2::new(dir.x, dir.z).length() > 0.1 {
             let law = self.turn_law;
             self.mover_turn(dir.x.atan2(dir.z), law, dt);

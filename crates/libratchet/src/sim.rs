@@ -75,7 +75,16 @@ pub struct WallContact {
     /// How far his position is from the wall's surface along `normal` (m), when the host knows.
     /// Then he sticks from as far out as the game's wall probe reaches and is held out at its
     /// standoff (`WallStickParams::standoff`). None: he's against it, and stays pressed to it.
+    /// While he's on a wall, report that one (facing `Ratchet::wall_normal`) when it's in reach:
+    /// another wall only keeps him on.
     pub distance: Option<f32>,
+}
+
+impl WallContact {
+    /// The distance, if it's a usable one (finite; inside the wall counts as touching it).
+    fn gap(&self) -> Option<f32> {
+        self.distance.filter(|d| d.is_finite()).map(|d| d.max(0.0))
+    }
 }
 
 impl Default for Contact {
@@ -202,6 +211,9 @@ const MOVE_STICK: f32 = 0.07;
 /// (running or strafing, 1500°/s) and standing (aiming or firing, 2500°/s).
 const MOVING_TURN: (f32, f32, f32) = (-4.0, -25.0, 26.18);
 const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
+/// Standing idle: the law the game's Idle sets as it starts, 720°/s (RiftApart.exe). Nothing
+/// turns him then, but a Swingshot fired standing keeps it.
+const IDLE_TURN: (f32, f32, f32) = (-8.0, -30.0, 12.566);
 /// In the air: the mover turn's gain, damp and cap (rad/s), before the stick scales them
 /// (RiftApart.exe).
 const AIR_TURN: (f32, f32, f32) = (-13.0, -10.0, 26.18);
@@ -364,6 +376,8 @@ pub struct Ratchet {
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
     move_vy: Option<(f32, f32)>,
+    /// Horizontal move for this tick that isn't his speed (placing him on a wall).
+    move_xz: Option<Vec2>,
 }
 
 impl Ratchet {
@@ -442,10 +456,11 @@ impl Ratchet {
             stick: Vec2::ZERO,
             view_right: Vec2::ZERO,
             turn_omega: 0.0,
-            turn_law: STANDING_TURN,
+            turn_law: IDLE_TURN,
             wall_distance: None,
             events: Vec::new(),
             move_vy: None,
+            move_xz: None,
         }
     }
 
@@ -671,7 +686,7 @@ impl Ratchet {
                 }
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 // Ledges come first (RiftApart.exe), on the way down.
-                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position, dt) {
                 } else if self.can_midair_jump(&params, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -706,7 +721,7 @@ impl Ratchet {
                 self.air_time += dt;
                 self.air_steer(dt, stick);
                 self.fall_under(dt, &params);
-                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position, dt) {
                 } else if self.can_midair_jump(&params, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -723,8 +738,11 @@ impl Ratchet {
                 // The wall's still there within the game's re-probe reach (any distance, when
                 // the host only reports touching).
                 let reach = HOLD_REACH * self.tuning.scale;
-                let wall = contact.wall.filter(|w| w.distance.is_none_or(|d| d <= reach));
-                self.wall_distance = wall.and_then(|w| w.distance);
+                let wall = contact.wall.filter(|w| w.gap().is_none_or(|d| d <= reach));
+                // Only the wall he's on places him; another in reach (in a corner) just keeps
+                // him on, where he is (ours: the game turns to it, which we don't follow).
+                let standoff = self.tuning.wall_stick.standoff;
+                self.wall_distance = wall.and_then(|w| if w.normal.dot(self.wall_normal) > 0.9 { w.gap() } else { w.gap().map(|_| standoff) });
                 if self.jump_press_age <= WALL_JUMP_BUFFER && (self.wall_marked || self.wall_time > PLAIN_WALL_JUMP_DELAY) {
                     self.jump_off_wall(dt, position);
                 } else if (self.wall_time > dt && wall.is_none())
@@ -744,7 +762,7 @@ impl Ratchet {
                 let accel = self.tuning.glide_accel;
                 self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, accel);
                 self.integrate_vertical(dt, params.gravity(), self.glide_terminal);
-                if self.try_grab_ledge(world, position, contact.ground_distance, dt) || self.try_wall_stick(contact, position) {
+                if self.try_grab_ledge(world, position, contact.ground_distance, dt) || self.try_wall_stick(contact, position, dt) {
                     self.events.push(Event::GlideEnded);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.events.push(Event::GlideEnded);
@@ -777,7 +795,8 @@ impl Ratchet {
             Some((after, average)) if after == self.velocity.y => average,
             _ => self.velocity.y,
         };
-        Vec3::new(self.velocity.x, vy, self.velocity.z)
+        let flat = self.move_xz.take().unwrap_or(Vec2::new(self.velocity.x, self.velocity.z));
+        Vec3::new(flat.x, vy, flat.y)
     }
 
     /// Starts combo swing `index`, aimed where the stick points (straight ahead without input).
@@ -1192,9 +1211,9 @@ impl Ratchet {
     ///   of straight into it, and only if he hasn't stuck to a wall yet this air time.
     ///
     /// Not to any wall near the last jump-off for WALL_BLOCK_TIME.
-    fn try_wall_stick(&mut self, contact: &Contact, position: Vec3) -> bool {
+    fn try_wall_stick(&mut self, contact: &Contact, position: Vec3, dt: f32) -> bool {
         let reach = STICK_REACH * self.tuning.scale;
-        let Some(wall) = contact.wall.filter(|w| w.normal.length_squared() > 0.5 && w.distance.is_none_or(|d| d <= reach)) else {
+        let Some(wall) = contact.wall.filter(|w| w.normal.length_squared() > 0.5 && w.gap().is_none_or(|d| d <= reach)) else {
             return false;
         };
         let p = &self.tuning.wall_stick;
@@ -1232,9 +1251,13 @@ impl Ratchet {
         // The game's right clips when the wall faces against the camera's right.
         self.wall_right = wall.normal.dot(self.view_right) <= 0.0;
         self.wall_time = 0.0;
-        self.wall_distance = wall.distance;
+        self.wall_distance = wall.gap();
         self.state = MoveState::WallStick;
         self.velocity = Vec3::ZERO;
+        // Straight to the standoff as he sticks (RiftApart.exe: its Enter places him there).
+        if let Some(d) = self.wall_distance {
+            self.move_xz = Some(-wall.normal * (d - self.tuning.wall_stick.standoff) / dt.max(1e-6));
+        }
         self.extending = false;
         self.events.push(Event::WallStuck);
         true
@@ -1262,17 +1285,23 @@ impl Ratchet {
     }
 
     /// Holding on for WallStickNoSlideTime, then sliding down at WallStickGravity up to
-    /// WallStickTerminalVelocity. Out from the wall he's held at its standoff, moved straight
-    /// there (RiftApart.exe places him at the wall point plus the standoff each frame, so the
-    /// first one snaps), or pressed against it when the host doesn't say how far it is.
+    /// WallStickTerminalVelocity. Out from the wall he's held at its standoff: placed there as he
+    /// stuck, then eased toward it by (1 − e^(−dt)) of the gap a tick, as the game eases its wall
+    /// point toward each new probe hit (RiftApart.exe), as this tick's move rather than his
+    /// speed. Or pressed against the wall, when the host doesn't say how far it is.
     fn wall_slide(&mut self, dt: f32) {
         let p = &self.tuning.wall_stick;
         let vy = if self.wall_time < p.no_slide_time { 0.0 } else { (self.velocity.y - p.slide_gravity * dt).max(-p.slide_terminal) };
-        let push = match self.wall_distance {
-            Some(d) => -self.wall_normal * (d - p.standoff) / dt.max(1e-6),
-            None => -self.wall_normal * WALL_PUSH * self.tuning.scale,
-        };
-        self.velocity = Vec3::new(push.x, vy, push.y);
+        match self.wall_distance {
+            Some(d) => {
+                self.velocity = Vec3::new(0.0, vy, 0.0);
+                self.move_xz = Some(-self.wall_normal * (d - p.standoff) * (1.0 - (-dt).exp()) / dt.max(1e-6));
+            }
+            None => {
+                let push = -self.wall_normal * WALL_PUSH * self.tuning.scale;
+                self.velocity = Vec3::new(push.x, vy, push.y);
+            }
+        }
     }
 
     /// The jump off a wall: the WallJumpConfig jump, straight away from the wall at the
@@ -1508,6 +1537,9 @@ impl Ratchet {
             None if self.state == MoveState::Ground && moving => self.stick.x.atan2(self.stick.y),
             None if flat.length() >= 0.3 * self.tuning.scale => flat.x.atan2(flat.y),
             None => {
+                if self.state == MoveState::Ground {
+                    self.turn_law = IDLE_TURN;
+                }
                 self.turn_omega = 0.0;
                 return;
             }
@@ -1593,8 +1625,8 @@ impl Ratchet {
 
 /// One tick of the game's mover turn from the yaw `current` toward `target` (RiftApart.exe): an
 /// exponential share of the angle left (gain) plus part of the last tick's turn (damp,
-/// carried in `omega`), capped per second (cap) and never past the target; within 0.005 rad
-/// it snaps on.
+/// carried in `omega`), capped per second (cap; none at 0 or below) and never past the target;
+/// within 0.005 rad it snaps on.
 fn turn_law(current: f32, target: f32, omega: &mut f32, (gain, damp, cap): (f32, f32, f32), dt: f32) -> f32 {
     let diff = wrap_angle(target - current);
     if diff.abs() <= TURN_SNAP {
@@ -1604,7 +1636,8 @@ fn turn_law(current: f32, target: f32, omega: &mut f32, (gain, damp, cap): (f32,
     // Only the upper end is clamped (as in the game), so a turn of exactly 180° has a side.
     let err = diff.min(0.99 * std::f32::consts::PI);
     let carry = 0.5 * dt * *omega * (2.0 - (damp * dt / 30.0).exp());
-    let step = (carry + (1.0 - (gain * dt).exp()) * err).clamp(-cap * dt, cap * dt).clamp(-err.abs(), err.abs());
+    let max = if cap > 0.0 { cap * dt } else { f32::INFINITY };
+    let step = (carry + (1.0 - (gain * dt).exp()) * err).clamp(-max, max).clamp(-err.abs(), err.abs());
     *omega = step / dt;
     wrap_angle(current + step)
 }

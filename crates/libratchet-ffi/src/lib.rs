@@ -63,9 +63,10 @@ pub struct RatchetContact {
     pub has_ground_distance: u8,
     pub ground_distance: f32,
     /// 1 if there's a wall beside him: the nearest within about a metre (× scale, with
-    /// `wall_distance`), or one the last move ran into. Its normal (out of the wall, x/z), and
-    /// whether it's a wall-jump wall (marked in the level: any number of wall jumps; plain walls
-    /// take one per jump).
+    /// `wall_distance`), or one the last move ran into; while he's on a wall (state 10), that one
+    /// (facing the result's `wall_normal`) when it's in reach. Its normal (out of the wall, x/z),
+    /// and whether it's a wall-jump wall (marked in the level: any number of wall jumps; plain
+    /// walls take one per jump).
     pub has_wall: u8,
     pub wall_sticky: u8,
     pub wall_normal_x: f32,
@@ -237,6 +238,9 @@ pub struct RatchetStepResult {
     pub landed_fall_speed: f32,
     /// Combo swing (0 = first) in progress, or of this tick's swing/hit event.
     pub melee_swing: u32,
+    /// On a wall or in a wall jump (states 10, 11): the wall's normal (x, z).
+    pub wall_normal_x: f32,
+    pub wall_normal_z: f32,
     /// On a wall or in a wall jump: 1 if the game's right wall clips fit, 0 for the left.
     pub wall_right: u8,
     /// How fast he's pulled down right now (m/s²), e.g. for `RatchetContact::landing_ahead`.
@@ -472,6 +476,8 @@ pub unsafe extern "C" fn ratchet_step(
         facing_yaw: sim.sim.facing_yaw(),
         landed_fall_speed,
         melee_swing,
+        wall_normal_x: sim.sim.wall_normal().x,
+        wall_normal_z: sim.sim.wall_normal().y,
         wall_right: sim.sim.wall_right() as u8,
         gravity: sim.sim.gravity(),
         ledge_caught,

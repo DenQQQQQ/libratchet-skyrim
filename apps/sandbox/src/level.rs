@@ -290,8 +290,10 @@ pub struct WallHit {
 const PROBE_SIDE_PER_HALF_WIDTH: f32 = 0.25 / 0.35;
 
 /// The nearest wall face within `reach` of his feet that the game's probe would find: one he's
-/// in front of, reaching past him to either side, at his middle height.
-pub fn wall_probe(level: &Level, feet: Vec3, half_w: f32, height: f32, reach: f32) -> Option<WallHit> {
+/// in front of, reaching past him to either side, at his middle height. A face along `prefer`
+/// (the wall he's on) wins over nearer ones.
+pub fn wall_probe(level: &Level, feet: Vec3, half_w: f32, height: f32, reach: f32, prefer: Option<Vec2>) -> Option<WallHit> {
+    let rank = |w: &WallHit| (!prefer.is_some_and(|n| w.normal.dot(n) > 0.9), w.distance);
     let middle = feet.y + height * 0.5;
     let probe = half_w * PROBE_SIDE_PER_HALF_WIDTH;
     let mut best: Option<WallHit> = None;
@@ -305,11 +307,14 @@ pub fn wall_probe(level: &Level, feet: Vec3, half_w: f32, height: f32, reach: f3
                 continue;
             }
             for (out, distance) in [(1.0, feet[axis] - b.max[axis]), (-1.0, b.min[axis] - feet[axis])] {
-                if !(-1e-3..=reach).contains(&distance) || best.is_some_and(|w| w.distance <= distance) {
+                if !(-1e-3..=reach).contains(&distance) {
                     continue;
                 }
                 let normal = if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) };
-                best = Some(WallHit { normal, wall_jump: b.wall_jump, distance: distance.max(0.0) });
+                let hit = WallHit { normal, wall_jump: b.wall_jump, distance: distance.max(0.0) };
+                if best.is_none_or(|w| rank(&hit) < rank(&w)) {
+                    best = Some(hit);
+                }
             }
         }
     }

@@ -911,6 +911,38 @@ fn a_measured_wall_beyond_the_probes_reach_isnt_stuck_to() {
     }
 }
 
+/// On a measured wall: sticking places him at the standoff as this tick's move, not as his
+/// speed; in a corner the other wall's distance doesn't move him along this one; and a bump in
+/// the wall is eased into, as the game eases its wall point (1 − e^(−dt) a tick).
+#[test]
+fn on_a_measured_wall_only_that_wall_places_him() {
+    let t = Tuning::default();
+    let mut r = Ratchet::new(t.clone());
+    let pos = Vec3::new(0.0, 3.0, 0.0);
+    let wall_a = |d: f32| WallContact { normal: Vec2::new(-1.0, 0.0), sticky: true, distance: Some(d) };
+    let air = |wall| Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: Some(wall), wall_jump_zone: false, landing_ahead: false };
+    let mut v = Vec3::ZERO;
+    for _ in 0..5 {
+        v = r.step(DT, &Input::default(), &air(wall_a(0.7)), pos);
+        if r.state() == MoveState::WallStick {
+            break;
+        }
+    }
+    assert_eq!(r.state(), MoveState::WallStick);
+    assert!(close(v.x, (0.7 - t.wall_stick.standoff) / DT, 1e-2), "stuck with a move of {:.2} m/s", v.x);
+    assert!(r.velocity().x.abs() < 1e-6 && r.velocity().z.abs() < 1e-6, "the placement became speed: {:?}", r.velocity());
+    // A nearer wall across this one (a corner): he stays on, where he is.
+    let wall_b = WallContact { normal: Vec2::new(0.0, 1.0), sticky: false, distance: Some(0.5) };
+    for _ in 0..10 {
+        let v = r.step(DT, &Input::default(), &air(wall_b), pos);
+        assert_eq!(r.state(), MoveState::WallStick);
+        assert!(v.x.abs() < 1e-4 && v.z.abs() < 1e-4, "moved {v:?}");
+    }
+    // His own wall 0.15 m further out (a bump): eased toward it, not snapped.
+    let v = r.step(DT, &Input::default(), &air(wall_a(t.wall_stick.standoff + 0.15)), pos);
+    assert!(close(v.x, 0.15 * (1.0 - (-DT).exp()) / DT, 1e-4), "moved {:.4} m/s", v.x);
+}
+
 #[test]
 fn the_opposite_wall_takes_him_only_after_the_jump_offs_block() {
     let t = Tuning::default();
@@ -1393,10 +1425,16 @@ fn in_the_air_he_turns_by_the_games_rule() {
     assert!(single > 1.2, "a single jump turned {single:.2} rad in 0.1 s");
     assert!(double < single * 0.8, "a double jump turned {double:.2} rad, a single {single:.2}");
     assert!(light < single && light > 0.2, "a light push turned {light:.2} rad, a full one {single:.2}");
-    // Let go of the stick while slow, he keeps facing where he was.
+    // Let go of the stick while slow, the turn under way coasts out (the law's strength is nil,
+    // and nil means no cap, so the last tick's turn halves away) and he keeps facing there.
     let mut h = Flat::new(Tuning::default());
     h.tick(true, Vec2::new(1.0, 0.0));
+    let first = h.r.facing_yaw();
+    for _ in 0..10 {
+        h.tick(false, Vec2::ZERO);
+    }
     let yaw = h.r.facing_yaw();
+    assert!(yaw - first <= first + 1e-3, "coasted {:.3} rad on a {first:.3} rad tick", yaw - first);
     for _ in 0..30 {
         h.tick(false, Vec2::ZERO);
     }

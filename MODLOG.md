@@ -74,6 +74,31 @@ the smoothness is in his turn, the shot flying out and the clips' blends. We sna
   ahead and back, the trapezoid (arrives at rest, never past, symmetric), a measured wall's
   reach and standoff.
 
+### Review fixes (an adversarial review of the sim side, each finding re-checked)
+- **The Hookshot from close by** never ended: with the target nearer than its length plus the
+  hand (2.75 m), the game's reel plans outward, into the floor, and its arrival test never
+  passes. Already within the length now counts as there (ours: what ends it in the game isn't
+  read).
+- **Standing still, his turn law is the game's Idle one** (−8, −30, 720°/s, set as Idle starts),
+  so a Swingshot fired standing turns him even after a hop with the stick let go.
+- **A turn law with no strength** (a slow hop with the stick let go) has no cap in the game's
+  law, not a cap of 0: a turn under way coasts out, halving each frame.
+- **After such a hop, the swing doesn't turn him at all** (the law it keeps is nil), and a
+  jump off with the stick let go goes the way he faces. That's what the game's code reads; it
+  hasn't been seen in the game. Tested so it stays put.
+- **The wall:**
+  - Placing him at the standoff is this tick's move, no longer his speed, so it doesn't carry
+    into a Swingshot or the fall off the wall.
+  - He's placed as he sticks (the game's Enter), so a jump straight away leaves from 0.6 m.
+  - Then the gap is eased by (1 − e^(−dt)) a tick, as the game eases its wall point toward
+    each new probe hit, instead of re-snapped: bumps in a wall don't pop him.
+  - In a corner, another wall's distance no longer pushes him along the one he's on; it only
+    keeps him on. Hosts report the wall he's on while he's on it (the C API's result now has
+    `wall_normal_x/z`); the sandbox probe prefers that face.
+  - Distances that aren't finite count as unknown, and negative ones as touching.
+- The trapezoid sums its last step in the binary's order (it was 1 ulp off in 79 of 300,000
+  random cases; otherwise bit-exact).
+
 ### Read from RiftApart.exe: the visuals
 - **The shot:** hooking on fires a shot from the hand locator (igLoc_swingshot) toward the
   target's attach point at 80 m/s plus the target's own motion; the cable runs from the hand to

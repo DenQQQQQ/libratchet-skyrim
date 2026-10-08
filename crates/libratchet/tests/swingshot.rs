@@ -162,6 +162,50 @@ fn hooking_on_turns_him_instead_of_snapping() {
     assert!(wrap(last - start).abs() > 30f32.to_radians(), "turned only {:.1}°", wrap(last - start).to_degrees());
 }
 
+/// A target off to his side, its line along +X, in a camera looking that way.
+fn side_swing() -> Swinger {
+    let top = Vec3::new(5.0, 6.0, 1.0);
+    let mut s = Swinger::new(vec![SwingTarget { axis: Vec2::new(1.0, 0.0), ..target(top, SwingKind::Swing, 5.0) }]);
+    s.view = Vec3::new(1.0, 0.3, 0.3).normalize();
+    s
+}
+
+/// After a hop in place with the stick let go, the jump's turn law is nil, and the swing keeps
+/// it: he keeps his facing all through the swing (RiftApart.exe, as its code reads; worth a
+/// look in the game).
+#[test]
+fn a_swing_after_a_hop_with_the_stick_let_go_keeps_his_facing() {
+    let mut s = side_swing();
+    s.tick(false, true, Vec2::ZERO);
+    for _ in 0..20 {
+        s.tick(false, false, Vec2::ZERO);
+    }
+    let start = s.r.facing_yaw();
+    for _ in 0..240 {
+        s.tick(true, false, Vec2::ZERO);
+    }
+    assert_eq!(s.r.state(), MoveState::Swing);
+    assert!(wrap(s.r.facing_yaw() - start).abs() < 1e-3, "turned {:.1}°", wrap(s.r.facing_yaw() - start).to_degrees());
+}
+
+/// Standing still after that hop, he takes the game's Idle turn law, so a swing fired standing
+/// turns him to the way he swings.
+#[test]
+fn a_swing_fired_standing_turns_him_whatever_came_before() {
+    let mut s = side_swing();
+    s.tick(false, true, Vec2::ZERO);
+    for _ in 0..240 {
+        s.tick(false, false, Vec2::ZERO);
+    }
+    assert_eq!(s.r.state(), MoveState::Ground);
+    let start = s.r.facing_yaw();
+    for _ in 0..240 {
+        s.tick(true, false, Vec2::ZERO);
+    }
+    assert_eq!(s.r.state(), MoveState::Swing);
+    assert!(wrap(s.r.facing_yaw() - start).abs() > 45f32.to_radians(), "turned only {:.1}°", wrap(s.r.facing_yaw() - start).to_degrees());
+}
+
 /// The game's swing-loop animation values: Lean heads for 0 swinging ahead and 1 swinging back,
 /// and both values stay between 0 and 1.
 #[test]
@@ -273,6 +317,21 @@ fn the_hookshot_reels_him_in_then_drops_him() {
     assert!((s.pos.distance(hook) - reach).abs() < 0.15, "dropped {:.2} m from it", s.pos.distance(hook));
     // Top speed on the way: about the Hookshot's.
     assert!(s.time - start < 1.5);
+}
+
+/// Fired from the ground at a Hookshot target closer than its length (plus the hand), he's
+/// already there: it ends at once instead of reeling him out into the floor.
+#[test]
+fn the_hookshot_from_close_by_ends_at_once() {
+    let hook = Vec3::new(0.0, 2.5, 1.0);
+    let mut s = Swinger::new(vec![target(hook, SwingKind::Hook, 0.0)]);
+    s.tick(false, false, Vec2::ZERO);
+    assert_eq!(s.r.swing_target(), Some(hook), "the target wasn't picked");
+    for _ in 0..24 {
+        s.tick(true, false, Vec2::ZERO);
+    }
+    assert!(s.saw(|e| *e == Event::HookArrived), "never arrived");
+    assert_ne!(s.r.state(), MoveState::Hook);
 }
 
 #[test]

@@ -608,9 +608,9 @@ pub fn simulate(
         grounded,
         ground_distance,
         hit_ceiling: moved.hit_ceiling,
-        // The nearest wall the game's probe would find, and how far out it is: the sim sticks
-        // him from as far as the game does and holds him at its standoff.
-        wall: level::wall_probe(&level, feet, half_w, height, WALL_PROBE_REACH * s)
+        // The nearest wall the game's probe would find (on a wall, that one), and how far out it
+        // is: the sim sticks him from as far as the game does and holds him at its standoff.
+        wall: level::wall_probe(&level, feet, half_w, height, WALL_PROBE_REACH * s, (p.sim.state() == MoveState::WallStick).then(|| p.sim.wall_normal()))
             .map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump, distance: Some(w.distance) }),
         wall_jump_zone: level.wall_jump_zone(feet).is_some(),
         landing_ahead: p.sim.state() == MoveState::WallJump
