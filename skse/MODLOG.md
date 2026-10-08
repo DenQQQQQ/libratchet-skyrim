@@ -446,3 +446,20 @@ The owner asked for Clank on his back.
   and in the glide the top rotor on its stem with the green bulb and both arm rotors.
 - The glide test now also has to bring the heli-pack out, with a screenshot once it's all the way
   out. **18/18 pass.**
+
+## 2026-10-09: the first wall test
+
+- Walls were wired to the sim on 10-08 but never seen working: the test spot in Whiterun has no
+  tall wall in reach. The test now places one: a flat Dragonsreach wall piece
+  (`WRIntCastleWallDoubleHighExStr01Quad`, 14.6 m by 7.3 m) across his way, its face 2 m ahead
+  (`TESDataHandler::CreateReferenceAtLocation`, removed again after the case).
+- The case: a full jump at it with the stick forward. Once he sticks the stick is let go, and
+  0.3 s later the jump is pressed again. It passes if he stuck, jumped off, and landed at least a
+  metre further out than where he stuck.
+- In game: **he stuck 0.59 m out from the face, 1.24 m up, jumped off, and landed 4.62 m out**,
+  0.96 s after the takeoff. Screenshots show him on the wall facing it (Clank toward the camera),
+  then flying back off it. **19/19 pass.**
+- Ledges have no test yet. Rift Apart catches a lip only with at least 3 m of drop below it
+  (`GroundClearance.MinHeight`, 0.5 m under the lip) and no more than 3.5 m above where he last
+  stood (`RecoveryMaxHeightAboveLastGround`). On flat ground both hold only for a lip exactly
+  3.5 m up, so a ledge test needs a drop in front of the wall, not a wall on flat ground.

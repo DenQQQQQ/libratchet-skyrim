@@ -38,6 +38,11 @@ namespace AutoTest
 			bool        awake = false;     // the target's AI on: being hit has to put it in combat
 			RE::FormID  target = 0x00023A90;  // the target's base (EncCow)
 			bool        crime = false;     // the hit has to cost him a bounty in Whiterun (an assault)
+			// A wall across his way, its face this far ahead (metres; 0: none). He has to stick to
+			// it and, wallJumpAfter seconds on it with the stick let go, jump off it on a new press
+			// and land away from it.
+			float       wallAt = 0.0f;
+			float       wallJumpAfter = 0.3f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -57,6 +62,8 @@ namespace AutoTest
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
+			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
+			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.0f },
 			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
 			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 1.5f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
@@ -126,6 +133,13 @@ namespace AutoTest
 			float           targetHealth = 0.0f;  // as the fight began
 			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
 			bool            heliSeen = false;     // Clank's heli-pack came out during this case
+			// The wall case's wall, and what he did on it.
+			RE::ObjectRefHandle         wall;
+			bool                        wallPlaced = false;
+			float                       onWall = -1.0f;    // seconds on it so far (< 0: not stuck yet)
+			float                       wallPress = 0.0f;  // seconds the jump off it has been held
+			std::optional<RE::NiPoint3> stuckAt;
+			bool                        wallJumped = false;
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -320,6 +334,16 @@ namespace AutoTest
 			s.dashPressed = false;
 			s.targetPlaced = false;
 			s.heliSeen = false;
+			if (const auto wall = s.wall.get()) {
+				wall->Disable();
+				wall->SetDelete(true);
+			}
+			s.wall = {};
+			s.wallPlaced = false;
+			s.onWall = -1.0f;
+			s.wallPress = 0.0f;
+			s.stuckAt.reset();
+			s.wallJumped = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -364,6 +388,60 @@ namespace AutoTest
 			auto* av = target->AsActorValueOwner();
 			av->SetBaseActorValue(RE::ActorValue::kHealth, 1000.0f);
 			av->RestoreActorValue(RE::ActorValue::kHealth, 10000.0f);
+		}
+
+		// The wall case's wall: a flat Dragonsreach wall piece (WRIntCastleWallDoubleHighExStr01Quad,
+		// 14.6 m wide and 7.3 m tall, its slab 100 units off its origin by its bounds), across his
+		// way with its face a_metres ahead, sunk half a metre into the ground.
+		void PlaceWall(float a_metres)
+		{
+			constexpr RE::FormID kWallBase = 0x000D6BB6;
+			constexpr float      kSlabOffset = 100.0f;  // game units
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(kWallBase);
+			auto* handler = RE::TESDataHandler::GetSingleton();
+			if (!player || !s.startPos || !base || !handler) {
+				SKSE::log::info("autotest: couldn't place the wall");
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 at = *s.startPos + ahead * (a_metres * Units() - kSlabOffset) - RE::NiPoint3{ 0.0f, 0.0f, 0.5f * Units() };
+			s.wall = handler->CreateReferenceAtLocation(base, at, RE::NiPoint3{ 0.0f, 0.0f, s.startHeading }, player->GetParentCell(),
+				player->GetWorldspace(), nullptr, nullptr, {}, false, false);
+			SKSE::log::info("autotest: a wall {:.1f} m ahead{}", a_metres, s.wall ? "" : ": couldn't place it");
+		}
+
+		// The wall case: he stuck to the wall, jumped off it, and landed at least a metre further
+		// out from it than where he stuck.
+		void JudgeWall(const Case& a_case, const Jump& a_jump)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player || !s.startPos) {
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 face = *s.startPos + ahead * (a_case.wallAt * Units());
+			const auto out = [&](const RE::NiPoint3& a_p) { return (face - a_p).Dot(ahead) / Units(); };  // metres out from its face
+			const float landed = out(player->GetPosition());
+			std::string bad;
+			if (!s.stuckAt) {
+				bad += " no-stick";
+			}
+			if (!s.wallJumped) {
+				bad += " no-wall-jump";
+			}
+			if (s.stuckAt && landed < out(*s.stuckAt) + 1.0f) {
+				bad += " not-away";
+			}
+			if (bad.empty()) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			SKSE::log::info("autotest: {} {}: {}, {}, landed {:.2f} m out from the wall ({:+.2f} m) after {:.3f} s in the air{}",
+				bad.empty() ? "PASS" : "FAIL", a_case.name,
+				s.stuckAt ? std::format("stuck {:.2f} m out, {:.2f} m up", out(*s.stuckAt), (s.stuckAt->z - s.startPos->z) / Units()) : "never stuck",
+				s.wallJumped ? "jumped off" : "never jumped off", landed, a_jump.landDz, a_jump.airTime, bad.empty() ? "" : " - off:" + bad);
 		}
 
 		std::uint32_t WhiterunBounty()
@@ -604,7 +682,7 @@ namespace AutoTest
 		RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
 	}
 
-	Buttons Press(float a_dt, bool a_grounded, bool a_busy)
+	Buttons Press(float a_dt, bool a_grounded, bool a_busy, std::uint32_t a_state)
 	{
 		if (!s.active || s.done) {
 			return {};
@@ -666,6 +744,10 @@ namespace AutoTest
 				s.targetPlaced = true;
 				PlaceTarget(c.targetAt, c.target);
 			}
+			if (c.wallAt > 0.0f && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
+				s.wallPlaced = true;
+				PlaceWall(c.wallAt);
+			}
 			if (s.settle < kSettle) {
 				return {};
 			}
@@ -710,12 +792,13 @@ namespace AutoTest
 					Combat::SetTestAim(target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() });
 				}
 			}
-			SKSE::log::info("autotest: {} ({}{}{}{}{})", c.name,
+			SKSE::log::info("autotest: {} ({}{}{}{}{}{})", c.name,
 				c.hold >= 0.0f ? std::format("jump held {:.2f} s", c.hold) : "no jump",
 				c.again > 0.0f ? std::format(", again at {:.2f} s for {:.2f} s", c.again, c.againHold) : "",
 				c.dashAt >= 0.0f ? std::format(", dash at {:.2f} s", c.dashAt) : "",
 				c.airStick ? ", the stick forward" : "",
-				c.duration > 0.0f ? std::format(", a fight against a target {:.1f} m ahead", c.targetAt) : "");
+				c.duration > 0.0f ? std::format(", a fight against a target {:.1f} m ahead", c.targetAt) : "",
+				c.wallAt > 0.0f ? std::format(", a wall {:.1f} m ahead, jumped off {:.2f} s after he sticks", c.wallAt, c.wallJumpAfter) : "");
 		}
 
 		s.elapsed += a_dt;
@@ -752,6 +835,25 @@ namespace AutoTest
 		if (c.dashAt >= 0.0f && t >= c.dashAt && !s.dashPressed) {
 			s.dashPressed = true;
 			b.dash = true;
+		}
+		// The wall: once he's on it the stick is let go, and wallJumpAfter seconds on, the jump is
+		// pressed again (held 0.15 s).
+		if (c.wallAt > 0.0f) {
+			if (a_state == RATCHET_STATE_WALL_STICK) {
+				if (s.onWall < 0.0f) {
+					s.onWall = 0.0f;
+					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						s.stuckAt = player->GetPosition();
+					}
+					Input::SetTestStick(std::nullopt);
+				}
+				s.onWall += a_dt;
+			}
+			s.wallJumped = s.wallJumped || a_state == RATCHET_STATE_WALL_JUMP;
+			if (s.onWall >= c.wallJumpAfter && s.wallPress < 0.15f) {
+				s.wallPress += a_dt;
+				b.jump = true;
+			}
 		}
 		if (b.jump || b.dash) {
 			return b;
@@ -801,6 +903,10 @@ namespace AutoTest
 		if (kCases[s.index].duration > 0.0f) {
 			// A fight's jump (the Hyper-Strike): the fight's verdict covers it.
 			SKSE::log::info("autotest: {}: landed after {:.3f} s, {:.2f} m across", kCases[s.index].name, a_jump.airTime, a_jump.distance);
+			return;
+		}
+		if (kCases[s.index].wallAt > 0.0f) {
+			JudgeWall(kCases[s.index], a_jump);
 			return;
 		}
 		if (!a_jump.replayed) {

@@ -20,13 +20,13 @@ namespace AutoTest
 	void Install();
 
 	// Each frame the jump code runs: the buttons the test holds now. a_busy: the sim is moving
-	// him (a flight or a dash).
+	// him (a flight or a dash); a_state: the sim's state after its last step (RATCHET_STATE_*).
 	struct Buttons
 	{
 		bool jump = false;
 		bool dash = false;
 	};
-	Buttons Press(float a_dt, bool a_grounded, bool a_busy);
+	Buttons Press(float a_dt, bool a_grounded, bool a_busy, std::uint32_t a_state);
 
 	struct Jump
 	{

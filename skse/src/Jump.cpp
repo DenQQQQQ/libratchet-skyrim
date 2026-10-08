@@ -467,7 +467,7 @@ namespace Jump
 			// state, and then the ground right under his feet is what holds him up.
 			const bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach);
 			// The buttons as they are: the sim makes the jump, double jump, glide and dashes of them.
-			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours);
+			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours, g.last.state);
 			RatchetInput in{};
 			in.jump = test.jump || Input::JumpHeld() ? 1 : 0;
 			in.dash = test.dash || Input::DashHeld() ? 1 : 0;
