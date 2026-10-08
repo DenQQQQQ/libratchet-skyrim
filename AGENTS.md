@@ -43,6 +43,9 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
   - A mesh entity spawned `Visibility::Hidden` and shown later didn't draw its rebuilt mesh.
     Keep dynamic meshes visible and collapse them instead (the swing streak).
   - With HDR, the clear colour goes through the tonemapper too.
+  - A model's scene can be spawned a second time just after it loads (its asset reports a
+    change), with new entities. Set up animation graphs per player entity, not once (see
+    `clank.rs`'s `on_ready`), and look up locators again when new ones appear.
 
 ## Workflow
 - Run `cargo test -p libratchet` after any sim change. The tests check the sim against the
