@@ -14,7 +14,7 @@ const TICK: f32 = 1.0 / 120.0;
 #[derive(Clone)]
 enum Act {
     /// Hold this input for `secs`. Direction is world-space (x, z).
-    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool, crouch: bool },
+    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool, crouch: bool, swing: bool },
     /// Throw the wrench (straight ahead).
     Throw,
     /// Pick a weapon.
@@ -30,6 +30,9 @@ enum Act {
     CloseUp(bool),
     /// Watch from a fixed camera from here on, without stopping.
     Watch { focus: Vec3, yaw: f32, pitch: f32, distance: f32 },
+    /// Film him from these angles from here on, while the follow camera he sees and aims by
+    /// keeps going behind it (back with `Follow`).
+    Film { yaw: f32, pitch: f32, distance: f32 },
     /// Guns aim at this point instead of where the camera looks.
     AimAt(Option<Vec3>),
     /// Stand still, look at a fixed spot for `secs` and take a screenshot.
@@ -68,6 +71,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("strafejump") => [vec![hold(1.5, Vec2::ZERO, false)], strafe_jumps()].concat(),
         Some("walljump") => [vec![hold(1.5, Vec2::ZERO, false)], wall_jumps()].concat(),
         Some("ledges") => [vec![hold(1.5, Vec2::ZERO, false)], ledges()].concat(),
+        Some("swingshot") => [vec![hold(1.5, Vec2::ZERO, false)], swingshot()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -81,16 +85,16 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
 }
 
 fn hold(secs: f32, dir: Vec2, jump: bool) -> Act {
-    Act::Hold { secs, dir, jump, dash: false, melee: false, crouch: false }
+    Act::Hold { secs, dir, jump, dash: false, melee: false, crouch: false, swing: false }
 }
 
 fn dash(dir: Vec2) -> Act {
-    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true, melee: false, crouch: false }
+    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true, melee: false, crouch: false, swing: false }
 }
 
 /// A melee press (a swing on the ground, a Hyper-Strike in the air).
 fn swing() -> Act {
-    Act::Hold { secs: 2.0 * TICK, dir: Vec2::ZERO, jump: false, dash: false, melee: true, crouch: false }
+    Act::Hold { secs: 2.0 * TICK, dir: Vec2::ZERO, jump: false, dash: false, melee: true, crouch: false, swing: false }
 }
 
 /// The OmniWrench in the arena: the 3-hit combo into the first dummies, a Hyper-Strike into the
@@ -724,8 +728,70 @@ fn ledges() -> Vec<Act> {
     ]
 }
 
+/// The Swingshot: off a platform onto three targets in a row, letting go near the top of each
+/// swing, onto a landing platform; then the Hookshot up onto a block.
+fn swingshot() -> Vec<Act> {
+    let s = spots::SWINGS;
+    let z = Vec2::Y;
+    let mut acts = vec![];
+    // Twice: through his camera (the game's swing camera turns it along each swing), then filmed
+    // from the side while that camera, which he picks targets by, keeps going behind him.
+    for pass in 0..2 {
+        acts.extend([
+            Act::ClearTrail,
+            Act::Teleport(s + Vec3::new(0.0, 2.0, -3.5)),
+            hold(0.12, z, false),
+            // Looking along the course, level, as a player would to find the first target.
+            Act::Follow { yaw: std::f32::consts::PI, pitch: 0.0, distance: 4.65 },
+        ]);
+        if pass == 1 {
+            acts.push(Act::Film { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.12, distance: 13.0 });
+        }
+        acts.extend([
+            hold(0.6, Vec2::ZERO, false),
+            // Run off the platform, jump, and fire at the first target on the way up.
+            hold(0.45, z, false),
+            hold(0.15, z, true),
+        ]);
+        for (i, swing) in SWING_HOLDS.into_iter().enumerate() {
+            acts.push(swinging(swing, Vec2::ZERO));
+            if pass == 0 && i == 0 {
+                acts.push(Act::Shot("90_swing"));
+            }
+            // Off with a jump, then straight at the next target.
+            acts.extend([hold(0.05, z, true), hold(0.12, z, false)]);
+            if pass == 0 && i == 0 {
+                acts.push(Act::Shot("91_swing_jump"));
+            }
+        }
+        // Down onto the landing platform.
+        acts.extend([hold(0.9, z, false), hold(0.5, Vec2::ZERO, false)]);
+        if pass == 0 {
+            // A shot takes the frame the next acts run in: hold still for it.
+            acts.extend([Act::Shot("92_swing_landed"), hold(0.1, Vec2::ZERO, false)]);
+        }
+        // The Hookshot up onto the block.
+        acts.push(swinging(1.2, Vec2::ZERO));
+        if pass == 0 {
+            acts.push(Act::Shot("93_hookshot"));
+        }
+        acts.push(hold(1.0, Vec2::ZERO, false));
+        if pass == 0 {
+            acts.extend([Act::Shot("94_hookshot_top"), hold(0.5, Vec2::ZERO, false)]);
+        }
+    }
+    acts
+}
+
+/// How long the swingshot demo holds on to each target before jumping off.
+const SWING_HOLDS: [f32; 3] = [0.85, 0.85, 0.85];
+
+fn swinging(secs: f32, dir: Vec2) -> Act {
+    Act::Hold { secs, dir, jump: false, dash: false, melee: false, crouch: false, swing: true }
+}
+
 fn crouch(secs: f32) -> Act {
-    Act::Hold { secs, dir: Vec2::ZERO, jump: false, dash: false, melee: false, crouch: true }
+    Act::Hold { secs, dir: Vec2::ZERO, jump: false, dash: false, melee: false, crouch: true, swing: false }
 }
 
 fn wall_jumps() -> Vec<Act> {
@@ -982,7 +1048,12 @@ fn run_script(
                 rig.pitch = pitch;
                 rig.distance = distance;
                 rig.fixed = None;
+                rig.film = None;
                 rig.focus = p.feet;
+            }
+            Act::Film { yaw, pitch, distance } => {
+                rig.film = Some((yaw, pitch, distance));
+                rig.film_focus = p.feet;
             }
             Act::Throw => throw.0 = true,
             Act::Slot(slot) => {
@@ -994,8 +1065,8 @@ fn run_script(
             Act::AimAt(at) => gun.target = at,
             Act::CloseUp(on) => rig.close_up = on,
             Act::Watch { focus, yaw, pitch, distance } => rig.fixed = Some((focus, yaw, pitch, distance)),
-            Act::Hold { secs, dir, jump, dash, melee, crouch } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, crouch, ..Default::default() });
+            Act::Hold { secs, dir, jump, dash, melee, crouch, swing } => {
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, crouch, swingshot: swing, ..Default::default() });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

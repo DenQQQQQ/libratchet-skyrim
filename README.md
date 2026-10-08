@@ -95,6 +95,7 @@ cargo run -p sandbox
 | Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide. On a wall (jump, fall or glide into it, at least 1 m up), press to jump off it; left alone he slides down and lets go. The teal wall-jump walls take him any number of times; plain walls only once per jump and only facing them, and pushing into one jumps up it with the double jump |
 | Shift | Dash (on the ground or once in the air) |
 | C | Let go of a ledge (the game's crouch / ledge drop button) |
+| E | Swingshot: press with a target in view (its orb turns orange) and hold to swing on it; the camera turns along the swing. Space jumps off (letting go does too on the way up). Green orbs are Hookshot targets: holding E reels him in |
 | 1 / 2 | Burst Pistol / Shatterbomb (not while the wrench is thrown). The wrench isn't one to pick: as in the game, melee swings it whatever gun is out |
 | Left mouse | Fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
 | Right mouse | Aim (aim mode: strafe at the game's aim pace, camera over the shoulder; jumps flip sideways and backward). Melee while aiming throws the wrench, as in the game ("Hold Aim and Melee to Throw Wrench"), also in the air. Firing without aiming strafes too, at run speed, while the gun fires |
@@ -109,19 +110,20 @@ cargo run -p sandbox
 | Backspace | Respawn |
 
 The trail is coloured by move: orange = ground, yellow = jump, magenta = double jump,
-red = fall, cyan = glide, purple = dash, green = air dash. White crosses mark each jump's peak. The HUD shows the last jump's
+red = fall, cyan = glide, purple = dash, green = air dash, blue = Swingshot. White crosses mark each jump's peak. The HUD shows the last jump's
 peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump|walljump|ledges`
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump|walljump|ledges|swingshot`
 to play one section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the
 walk; face: his face through a jump; carry: the weapon in hand, the whole wrench after the
 combo, the Shatterbomb's glove, dashing while aiming; dashjump: jumps out of a dash beside a
 running jump; throwswitch: switching weapons around a wrench throw; strafejump: the strafe-jump
 flips and a long glide; walljump: up the wall-jump shaft onto its ledge, a slide down a wall, and the plain walls beside it;
 ledges: falling short of a platform and catching its lip, then climbing up; the placed yellow ledges on
-a wall: grabbing one, going up to the next, jumping up over it, and letting go).
+a wall: grabbing one, going up to the next, jumping up over it, and letting go; swingshot: across
+the swing targets, then the Hookshot up onto a block, through his camera and again from the side).
 
 ## Tests
 

@@ -548,6 +548,17 @@ PRESETS = {
             "ledge_drop": "ledge_drop_to_fall_hero_ratchet",
             "ledge_drop_turn": "ledge_drop_to_fall_turn_hero_ratchet",
             "ledge_down_to": "ledge_droptoledge_hero_ratchet",
+            # The Swingshot (Swingshot_Pull, SwingShotIntro, Swingshot_Loop, Swingshot_Jump) and
+            # the Hookshot's reel (Hookshot_Loop).
+            "swing_pull": "swingshot_pull_hero_ratchet",
+            "swing_intro": "swingshot_swing_fullbody_hero_ratchet",
+            "swing_forward_fast": "swingshot_swing_forward_fast_hero_ratchet",
+            "swing_forward_slow": "swingshot_swing_forward_slow_hero_ratchet",
+            "swing_backward_fast": "swingshot_swing_backward_fast_hero_ratchet",
+            "swing_backward_slow": "swingshot_swing_backward_slow_hero_ratchet",
+            "swing_idle": "swingshot_idle_hero_ratchet",
+            "swing_jump": "swingshot_post_flip_hero_ratchet",
+            "hook_reel": "slingshot_pull_fast_hero_ratchet",
             # The glove's hand pose (the GloveAdditive driver), layered while the glove is on.
             "glove_hand": "weapon_glove_hand_partial",
             # Drawing a weapon (the Weapon_Draw driver, additive): the whole-body draw standing,

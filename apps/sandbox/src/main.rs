@@ -20,6 +20,7 @@ mod level;
 mod ratchet_model;
 mod vfx;
 mod sound;
+mod swingshot;
 mod weapons;
 mod wrench;
 
@@ -95,12 +96,22 @@ pub struct CameraRig {
     focus: Vec3,
     /// When set, the camera looks at this fixed spot instead of following (demo wide shots).
     fixed: Option<(Vec3, f32, f32, f32)>,
+    /// When set, the camera is drawn from these angles around him (yaw, pitch, distance) while
+    /// the follow camera, which he sees and aims by, keeps going behind it (demo side shots);
+    /// it looks at its own, smoothed spot.
+    film: Option<(f32, f32, f32)>,
+    film_focus: Vec3,
     /// In a wall-jump zone: the turn toward its view (yaw and pitch speeds, until it's there or
     /// the mouse moves), and how far its framing is blended in, with the blend's speed.
     zone_inside: bool,
     zone_turn: Option<(f32, f32)>,
     zone_blend: f32,
     zone_blend_speed: f32,
+    /// On the Swingshot: the turn to look along the swing, and how far its framing is blended
+    /// in, with the blend's speed.
+    swing_turn: Option<SwingTurn>,
+    swing_blend: f32,
+    swing_blend_speed: f32,
     /// Seconds of camera wobble left (Hyper-Strike landings; ours).
     pub shake: f32,
     /// 0..1: how far the camera has moved over the shoulder for aiming, and back for running.
@@ -112,7 +123,23 @@ pub struct CameraRig {
     close_up: bool,
 }
 
+/// The swing camera's turn: yaw and pitch speeds, how long since the mouse last moved, and the
+/// turn's acceleration, which builds back up after the mouse stops.
+#[derive(Clone, Copy, Debug)]
+struct SwingTurn {
+    yaw_speed: f32,
+    pitch_speed: f32,
+    idle: f32,
+    accel: f32,
+}
+
 impl CameraRig {
+    /// Where the camera looks.
+    pub fn forward(&self) -> Vec3 {
+        let (yaw, pitch) = self.fixed.map_or((self.yaw, self.pitch), |(_, yaw, pitch, _)| (yaw, pitch));
+        -Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos())
+    }
+
     /// The camera's right on the ground plane (x, z).
     pub fn right(&self) -> Vec2 {
         let yaw = self.fixed.map_or(self.yaw, |(_, yaw, _, _)| yaw);
@@ -201,7 +228,7 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin, sound::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin, sound::plugin, swingshot::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     // The sky: with HDR the clear colour goes through the tonemapper too, so this is the colour
     // that comes out as sRGB (0.55, 0.7, 0.9) after it.
@@ -214,6 +241,8 @@ fn main() {
         distance: camera_configs.stand.level.z * scale,
         focus: spots::SPAWN,
         fixed: None,
+        film: None,
+        film_focus: spots::SPAWN,
         shake: 0.0,
         aim_blend: 0.0,
         moving: 0.0,
@@ -223,6 +252,9 @@ fn main() {
         zone_turn: None,
         zone_blend: 0.0,
         zone_blend_speed: 0.0,
+        swing_turn: None,
+        swing_blend: 0.0,
+        swing_blend_speed: 0.0,
     })
     .insert_resource(camera_configs)
     .insert_resource(DebugOverlay(!clean))
@@ -411,9 +443,11 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
         move_dir: dir * if walk { 0.45 } else { 1.0 },
         jump: keys.pressed(KeyCode::Space),
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        // Melee is F, as in the game; crouch (letting go of a ledge) is C.
+        // Melee is F, as in the game; crouch (letting go of a ledge) is C; the Swingshot is E
+        // (held).
         melee: keys.pressed(KeyCode::KeyF),
         crouch: keys.pressed(KeyCode::KeyC),
+        swingshot: keys.pressed(KeyCode::KeyE),
         ..Default::default()
     }
 }
@@ -438,6 +472,7 @@ pub fn simulate(
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
     let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, rig.yaw));
     input.view_right = rig.right();
+    input.view_forward = rig.forward();
     // Aiming, or firing a gun (and just after the newest shot): face where the camera looks and
     // strafe, as in the game. While aiming, melee throws the wrench instead of swinging
     // (wrench.rs).
@@ -632,6 +667,10 @@ fn camera_control(
         rig.pitch = (rig.pitch + motion.delta.y * 0.003).clamp(-0.25, 1.35);
         if motion.delta != Vec2::ZERO {
             rig.zone_turn = None;
+            // The swing's turn stops, as for the game's right stick, and waits.
+            if let Some(turn) = rig.swing_turn.as_mut() {
+                *turn = SwingTurn { yaw_speed: 0.0, pitch_speed: 0.0, idle: 0.0, accel: 0.0 };
+            }
         }
     }
     rig.distance = (rig.distance - scroll.delta.y * 0.6).clamp(2.0, 40.0);
@@ -652,6 +691,8 @@ fn state_color(state: MoveState) -> Color {
         MoveState::WallJump => Color::srgb(0.6, 1.0, 0.85),
         MoveState::LedgeHang | MoveState::LedgeDrop => Color::srgb(0.95, 0.8, 0.2),
         MoveState::LedgeClimb | MoveState::LedgeJump => Color::srgb(1.0, 0.95, 0.6),
+        MoveState::Swing | MoveState::Hook => Color::srgb(0.3, 0.6, 1.0),
+        MoveState::SwingJump => Color::srgb(0.6, 0.8, 1.0),
     }
 }
 
@@ -673,8 +714,8 @@ fn update_visuals(
 }
 
 /// The follow camera, placed by the game's camera contexts (`camera.rs`): around a pivot above
-/// Ratchet's feet, further back while he runs, over his right shoulder while aiming, and pulled
-/// back to look along a wall-jump zone inside one.
+/// Ratchet's feet, further back while he runs, over his right shoulder while aiming, pulled
+/// back to look along a wall-jump zone inside one, and turned along the swing on the Swingshot.
 #[allow(clippy::too_many_arguments)]
 fn camera_follow(
     time: Res<Time>,
@@ -725,8 +766,47 @@ fn camera_follow(
     let mut blend_speed = rig.zone_blend_speed;
     rig.zone_blend = blend.step(rig.zone_blend, target, &mut blend_speed, dt);
     rig.zone_blend_speed = blend_speed;
-    let k = 1.0 - (-10.0 * dt).exp();
-    rig.focus = rig.focus.lerp(p.feet, k);
+    // The Swingshot (RiftApart.exe): while he swings, the camera turns to look along the swing,
+    // 10.5° down, by the follow camera's turn. The mouse stops the turn; it starts again 0.5 s
+    // after the mouse stops, its acceleration building back up. Off the swing the camera stays
+    // where it was turned. The swing's framing blends in while he swings or jumps off a swing,
+    // and back out after.
+    match p.sim.swing_axis() {
+        Some(axis) => {
+            let (accel, decel, yaw_max, pitch_max) = configs.swing_turn;
+            let mut turn = rig.swing_turn.unwrap_or(SwingTurn { yaw_speed: 0.0, pitch_speed: 0.0, idle: SWING_TURN_WAIT, accel });
+            turn.idle += dt;
+            if turn.idle >= SWING_TURN_WAIT {
+                turn.accel = (turn.accel + SWING_TURN_RAMP.to_radians() * dt).min(accel);
+                let (mut yaw, mut pitch) = (rig.yaw, rig.pitch);
+                camera::turn_toward(&mut yaw, (-axis.x).atan2(-axis.z), &mut turn.yaw_speed, (turn.accel, decel, yaw_max), dt);
+                camera::turn_toward(&mut pitch, configs.swing_pitch, &mut turn.pitch_speed, (turn.accel, decel, pitch_max), dt);
+                rig.yaw = yaw;
+                rig.pitch = pitch;
+            }
+            rig.swing_turn = Some(turn);
+        }
+        None => rig.swing_turn = None,
+    }
+    let on_swing = matches!(p.sim.state(), MoveState::Swing | MoveState::SwingJump);
+    let (blend, target) = if on_swing { (configs.swing_in, 1.0) } else { (configs.swing_out, 0.0) };
+    let mut blend_speed = rig.swing_blend_speed;
+    rig.swing_blend = blend.step(rig.swing_blend, target, &mut blend_speed, dt);
+    rig.swing_blend_speed = blend_speed;
+    // Keeping up with him: on a swing, the swing's own tracking (slow to follow him up and down
+    // and away from the camera, quick toward it and sideways); otherwise ours.
+    if p.sim.state() == MoveState::Swing {
+        let t = configs.swing_tracking;
+        let gap = p.feet - rig.focus;
+        let ahead = Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos());
+        let side = Vec3::new(ahead.z, 0.0, -ahead.x);
+        let rate = |gain: f32| 1.0 - (gain * dt).exp();
+        let along = gap.dot(ahead);
+        rig.focus += ahead * along * rate(if along > 0.0 { t.forward } else { t.back }) + side * gap.dot(side) * rate(t.left) + Vec3::Y * gap.y * rate(t.up);
+    } else {
+        let k = 1.0 - (-10.0 * dt).exp();
+        rig.focus = rig.focus.lerp(p.feet, k);
+    }
     // A short 20 Hz wobble, fading out (ours, for melee impacts).
     rig.shake = (rig.shake - dt).max(0.0);
     let wobble = (time.elapsed_secs() * 20.0 * std::f32::consts::TAU).sin() * (rig.shake / 0.25).min(1.0);
@@ -754,12 +834,29 @@ fn camera_follow(
         stand = stand.lerp(framing, b);
         stand_fov += (zone_fov - stand_fov) * b;
     }
+    if rig.swing_blend > 0.0 {
+        let (swing_pivot, mut framing, swing_fov) = configs.swing.place(pitch, 0.0);
+        framing.z *= zoom;
+        let b = rig.swing_blend;
+        stand_pivot += (swing_pivot - stand_pivot) * b;
+        stand = stand.lerp(framing, b);
+        stand_fov += (swing_fov - stand_fov) * b;
+    }
     let (aim_pivot, aim, aim_fov) = configs.aim.place(pitch, 0.0);
     let b = rig.aim_blend;
     let pivot = (stand_pivot + (aim_pivot - stand_pivot) * b) * s;
     let offset = stand.lerp(aim, b) * s;
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
     let focus = rig.focus + Vec3::Y * (pivot + offset.y) + right * offset.x;
+    // Demo side shots: drawn from their own angles around him, the follow camera behind them.
+    if let Some((yaw, pitch, distance)) = rig.film {
+        rig.film_focus = rig.film_focus.lerp(p.feet, 1.0 - (-4.0 * dt).exp());
+        let at = rig.film_focus + Vec3::Y * CHEST * s;
+        let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
+        *cam = Transform::from_translation(at + back * distance * s).looking_at(at, Vec3::Y);
+        set_fov(&mut projection, configs.stand.fov);
+        return;
+    }
     let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
     *cam = Transform::from_translation(focus + back * offset.z).looking_at(focus, Vec3::Y);
     cam.rotation *= shake;
@@ -770,6 +867,10 @@ fn camera_follow(
 const CHEST: f32 = 0.8;
 /// A wall-jump zone's camera looks 3° down (RiftApart.exe).
 const ZONE_PITCH: f32 = 0.05236;
+/// The swing camera's turn waits this long after the mouse stops, then its acceleration builds
+/// back up at this rate (degrees/s³) (RiftApart.exe).
+const SWING_TURN_WAIT: f32 = 0.5;
+const SWING_TURN_RAMP: f32 = 150.0;
 
 /// Sets a perspective camera's horizontal field of view (degrees), the way the game's configs
 /// give it.

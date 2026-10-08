@@ -30,6 +30,10 @@ typedef struct RatchetInput {
     float view_right_x, view_right_z; /* the camera's right on the ground plane (zero without one):
                                          wall jumps take their side from it */
     uint8_t crouch;       /* crouch (the ledge drop button) held */
+    uint8_t swingshot;    /* the Swingshot button held: pressed with a target in view, he swings on it
+                             (or the Hookshot reels him in) while it's held */
+    float view_forward_x, view_forward_y, view_forward_z; /* where the camera looks (unit; zero without
+                                                             one): Swingshot targets are picked in its view */
 } RatchetInput;
 
 typedef struct RatchetContact {
@@ -63,6 +67,9 @@ enum {
     RATCHET_STATE_LEDGE_CLIMB = 13, /* climbing up a caught ledge */
     RATCHET_STATE_LEDGE_DROP = 14,  /* letting go of a placed ledge with a turn */
     RATCHET_STATE_LEDGE_JUMP = 15,  /* the jump up over a placed ledge */
+    RATCHET_STATE_SWING = 16,       /* swinging on a Swingshot target */
+    RATCHET_STATE_HOOKSHOT = 17,    /* reeled in to a Hookshot target */
+    RATCHET_STATE_SWING_JUMP = 18,  /* the jump off a swing */
 };
 
 enum {
@@ -85,6 +92,10 @@ enum {
     RATCHET_EVENT_LEDGE_DROPPED = 1u << 16,
     RATCHET_EVENT_LEDGE_TRANSFERRED = 1u << 17, /* moving to another placed ledge */
     RATCHET_EVENT_LEDGE_JUMPED = 1u << 18,
+    RATCHET_EVENT_SWING_ATTACHED = 1u << 19, /* fired the Swingshot (result.swing_hook: at a Hookshot target) */
+    RATCHET_EVENT_SWING_RELEASED = 1u << 20, /* let go of the swing or the hook */
+    RATCHET_EVENT_SWING_JUMPED = 1u << 21,
+    RATCHET_EVENT_HOOK_ARRIVED = 1u << 22,   /* reeled all the way in */
 };
 
 typedef struct RatchetStepResult {
@@ -97,6 +108,10 @@ typedef struct RatchetStepResult {
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
     float gravity;           /* his current jump's pull down, m/s^2, for RatchetContact.landing_ahead */
     uint8_t ledge_caught;    /* with RATCHET_EVENT_LEDGE_GRABBED: 1 caught on the way down, 0 placed */
+    uint8_t swing_hook;      /* with RATCHET_EVENT_SWING_ATTACHED: 1 if it was a Hookshot target */
+    uint8_t has_swing_target; /* swing_target is set: the target he'd fire at now, or the one he's on
+                                 (states 16 and 17), for a reticle and the cable */
+    RatchetVec3 swing_target;
 } RatchetStepResult;
 
 /* A placed ledge (the game's ledge paths): a straight stretch of edge he can hang from. */
@@ -107,13 +122,25 @@ typedef struct RatchetLedge {
     uint8_t grab, jump, drop, transfer; /* what it allows (0/1) */
 } RatchetLedge;
 
-/* The host's level, as the sim asks about it. Either callback may be null. */
+/* A Swingshot target. */
+typedef struct RatchetSwingTarget {
+    RatchetVec3 position;
+    uint8_t kind;             /* 0 he swings on it, 1 the Hookshot reels him in to it */
+    float axis_x, axis_z;     /* its own forward on the ground plane: he swings in the upright plane along it */
+    float length;             /* the cable's length on it (a Hookshot target at <= 0 takes the game's) */
+    float min_range, max_range; /* its own range limits; <= 0 for none */
+    uint32_t id;
+} RatchetSwingTarget;
+
+/* The host's level, as the sim asks about it. Any callback may be null. */
 typedef struct RatchetWorld {
     void *user;
     /* Write up to max placed ledges near center (within radius) to out; return how many. */
     uint32_t (*ledges)(void *user, RatchetVec3 center, float radius, RatchetLedge *out, uint32_t max);
     /* The first surface the ray from..to hits: return 1 and fill point and normal, or 0. */
     uint8_t (*raycast)(void *user, RatchetVec3 from, RatchetVec3 to, RatchetVec3 *point, RatchetVec3 *normal);
+    /* Write up to max Swingshot targets near center (within radius) to out; return how many. */
+    uint32_t (*swing_targets)(void *user, RatchetVec3 center, float radius, RatchetSwingTarget *out, uint32_t max);
 } RatchetWorld;
 
 typedef struct RatchetSwingInfo {
@@ -137,7 +164,7 @@ void ratchet_set_scale(RatchetSim *sim, float scale);
 
 RatchetStepResult ratchet_step(RatchetSim *sim, float dt, RatchetInput input, RatchetContact contact, RatchetVec3 feet);
 void ratchet_set_velocity(RatchetSim *sim, RatchetVec3 velocity);
-/* Ledges need the host's level; the callbacks must stay valid while the sim steps. */
+/* Ledges and the Swingshot need the host's level; the callbacks must stay valid while the sim steps. */
 void ratchet_set_world(RatchetSim *sim, RatchetWorld world);
 void ratchet_reset(RatchetSim *sim);
 

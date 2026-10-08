@@ -11,6 +11,7 @@ use crate::world::{NoWorld, World};
 use glam::{Vec2, Vec3};
 
 mod ledge;
+mod swing;
 pub use ledge::LedgeMove;
 
 /// What the player is asking for this tick.
@@ -33,6 +34,11 @@ pub struct Input {
     pub aim_mode: bool,
     /// Crouch (the game's ledge drop button) is down: lets go of a ledge.
     pub crouch: bool,
+    /// The Swingshot button is down: holding it swings on a target in view.
+    pub swingshot: bool,
+    /// Where the camera looks (unit, or zero without a camera): Swingshot targets are picked
+    /// in its view, and a swing pumps along it.
+    pub view_forward: Vec3,
     /// The camera's right on the ground plane (x, z), or zero without a camera: the game picks a
     /// wall jump's side by it (its clips, and which way he turns off the wall).
     pub view_right: Vec2,
@@ -99,6 +105,12 @@ pub enum MoveState {
     LedgeDrop,
     /// The jump up over a placed ledge's lip.
     LedgeJump,
+    /// Swinging on a Swingshot target.
+    Swing,
+    /// Reeled in to a Hookshot target.
+    Hook,
+    /// The jump off a swing.
+    SwingJump,
 }
 
 impl MoveState {
@@ -120,6 +132,9 @@ impl MoveState {
             MoveState::LedgeClimb => "ledge climb",
             MoveState::LedgeDrop => "ledge drop",
             MoveState::LedgeJump => "ledge jump",
+            MoveState::Swing => "swing",
+            MoveState::Hook => "hookshot",
+            MoveState::SwingJump => "swing jump",
         }
     }
 }
@@ -156,6 +171,14 @@ pub enum Event {
     LedgeTransferred,
     /// Jumped up over a placed ledge.
     LedgeJumped,
+    /// Fired the Swingshot at a target (`hook`: a Hookshot one).
+    SwingAttached { hook: bool },
+    /// Let go of the swing or the hook.
+    SwingReleased,
+    /// Jumped off the swing.
+    SwingJumped,
+    /// Reeled all the way in to a Hookshot target.
+    HookArrived,
 }
 
 /// Small downward speed on the ground so the host's collision keeps reporting contact.
@@ -266,6 +289,16 @@ pub struct Ratchet {
     left_ledge: Option<u32>,
     walk_off_time: f32,
     last_ground_y: f32,
+    /// The Swingshot: the swing in progress; the targets seen lately (with how long since each
+    /// last qualified) and the one it would fire at; the button's press; and the swing jump's
+    /// speed and turn.
+    swingshot: Option<swing::Swing>,
+    swing_seen: Vec<(crate::world::SwingTarget, f32)>,
+    swing_pick: Option<crate::world::SwingTarget>,
+    swing_press_age: f32,
+    prev_swingshot: bool,
+    swing_jump_speed: f32,
+    swing_jump_turn: f32,
     /// In a wall-jump zone (`Contact::wall_jump_zone`) this tick.
     in_wall_jump_zone: bool,
     prev_melee: bool,
@@ -347,6 +380,13 @@ impl Ratchet {
             left_ledge: None,
             walk_off_time: 0.0,
             last_ground_y: 0.0,
+            swingshot: None,
+            swing_seen: Vec::new(),
+            swing_pick: None,
+            swing_press_age: f32::INFINITY,
+            prev_swingshot: false,
+            swing_jump_speed: 0.0,
+            swing_jump_turn: 0.0,
             in_wall_jump_zone: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
@@ -452,6 +492,9 @@ impl Ratchet {
         self.prev_crouch = input.crouch;
         self.crouch_press_age = if crouch_pressed { 0.0 } else { self.crouch_press_age + dt };
         self.walk_off_time = (self.walk_off_time - dt).max(0.0);
+        let swing_pressed = input.swingshot && !self.prev_swingshot;
+        self.prev_swingshot = input.swingshot;
+        self.swing_press_age = if swing_pressed { 0.0 } else { self.swing_press_age + dt };
         let dash_pressed = input.dash && !self.prev_dash;
         self.prev_dash = input.dash;
         let melee_pressed = input.melee && !self.prev_melee;
@@ -480,7 +523,10 @@ impl Ratchet {
                 self.enter_fall();
                 self.events.push(Event::LeftGround);
             }
-        } else if contact.grounded && self.velocity.y <= 0.0 && !matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop) {
+        } else if contact.grounded
+            && self.velocity.y <= 0.0
+            && !matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::Swing | MoveState::Hook)
+        {
             if self.state == MoveState::Smash {
                 self.smash_land();
             } else {
@@ -490,6 +536,29 @@ impl Ratchet {
         if contact.hit_ceiling && self.velocity.y > 0.0 {
             self.velocity.y = 0.0;
             self.extending = false;
+        }
+
+        // The Swingshot: the target in view (the game looks all the time), and firing at it from
+        // the ground, the air or a wall.
+        self.pick_swing_target(world, input, position, dt);
+        let free = matches!(
+            self.state,
+            MoveState::Ground
+                | MoveState::Jump
+                | MoveState::DoubleJump
+                | MoveState::Fall
+                | MoveState::Glide
+                | MoveState::AirDash
+                | MoveState::WallStick
+                | MoveState::WallJump
+                | MoveState::LedgeJump
+                | MoveState::SwingJump
+        );
+        if free && self.state == MoveState::Glide && input.swingshot && self.swing_press_age <= 0.2 && self.swing_pick.is_some() {
+            self.events.push(Event::GlideEnded);
+        }
+        if free {
+            self.try_swingshot(input, position);
         }
 
         match self.state {
@@ -543,11 +612,15 @@ impl Ratchet {
                     self.air_dash(dt);
                 }
             }
-            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump | MoveState::LedgeJump => {
+            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump | MoveState::LedgeJump | MoveState::SwingJump => {
                 let params = self.params(self.state).clone();
                 self.air_time += dt;
                 self.extend_jump(input.jump, &params, position);
-                self.jump_air(dt, stick, &params);
+                if self.state == MoveState::SwingJump {
+                    self.swing_jump_air(dt, stick);
+                } else {
+                    self.jump_air(dt, stick, &params);
+                }
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 // Ledges come first (RiftApart.exe), on the way down.
                 if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance)) || self.try_wall_stick(contact, position) {
@@ -564,6 +637,10 @@ impl Ratchet {
                 // Outside a wall-jump zone, a wall jump coming down toward a floor rather than a
                 // wall becomes a fall he can steer (RiftApart.exe).
                 if self.state == MoveState::WallJump && self.velocity.y < 0.0 && !contact.wall_jump_zone && contact.landing_ahead {
+                    self.enter_fall();
+                }
+                // The swing jump hands over to a fall at its top (RiftApart.exe).
+                if self.state == MoveState::SwingJump && self.velocity.y < 0.0 {
                     self.enter_fall();
                 }
             }
@@ -626,6 +703,8 @@ impl Ratchet {
                 self.ledge_hang(dt, jump_age, crouch_age, stick, world, position, contact.grounded);
             }
             MoveState::LedgeClimb => self.ledge_climb(dt, position, contact.grounded),
+            MoveState::Swing => self.swing_tick(dt, input, pressed, position),
+            MoveState::Hook => self.hook_tick(dt, input, position),
             MoveState::LedgeDrop => self.ledge_drop(dt, position, contact.grounded),
         }
 
@@ -805,6 +884,7 @@ impl Ratchet {
             MoveState::Glide => &self.tuning.glide,
             MoveState::WallJump => &self.tuning.wall_jump,
             MoveState::LedgeJump => &self.tuning.ledge_jump,
+            MoveState::SwingJump => &self.tuning.swingshot.jump,
             _ if self.jump_aimed => &self.tuning.aim_single_jump,
             _ => &self.tuning.single_jump,
         }
@@ -1185,6 +1265,7 @@ impl Ratchet {
         self.walk_off_time = 0.0;
         self.hold = None;
         self.ledge_move = None;
+        self.swingshot = None;
     }
 
     fn air_steer(&mut self, dt: f32, stick: Vec2) {
@@ -1277,7 +1358,7 @@ impl Ratchet {
         // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
         // started, else where the dash goes (RiftApart.exe).
         // On a wall he faces it.
-        if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop) {
+        if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::Swing | MoveState::Hook) {
             self.turn_omega = 0.0;
             return;
         }

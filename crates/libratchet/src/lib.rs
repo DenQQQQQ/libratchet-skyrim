@@ -12,8 +12,8 @@ mod wrench;
 pub use glam;
 pub use sim::{Contact, Event, Input, LedgeMove, MoveState, Ratchet, WallContact};
 pub use tuning::{
-    DashParams, JumpParams, LedgeParams, LedgeWindow, MeleeParams, RecoveryParams, RootPath, SpeedParams, SwingParams, ThrowParams, Tuning,
-    WallStickParams,
+    DashParams, JumpParams, LedgeParams, LedgeWindow, MeleeParams, RecoveryParams, RootPath, SpeedParams, SwingParams, SwingshotParams, ThrowParams,
+    Tuning, WallStickParams,
 };
-pub use world::{Ledge, LedgeFlags, NoWorld, RayHit, World};
+pub use world::{Ledge, LedgeFlags, NoWorld, RayHit, SwingKind, SwingTarget, World};
 pub use wrench::{ThrowStatus, WrenchThrow};

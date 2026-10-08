@@ -215,6 +215,171 @@ impl WallStickParams {
     }
 }
 
+/// The Swingshot: picking a target, swinging on it, the jump off it, and the Hookshot's reel
+/// (the game's SwingshotConfig, SwingshotJumpConfig and HookshotConfig, and the swing's own
+/// numbers from RiftApart.exe).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwingshotParams {
+    /// Targets: at most this far away (unless a target says otherwise), within these full angles
+    /// of the camera's forward (degrees), at most this far below him, and still taken this long
+    /// after they stop qualifying.
+    pub max_range: f32,
+    pub horiz_fov: f32,
+    pub vert_fov: f32,
+    pub max_below: f32,
+    pub grace: f32,
+    /// The frustum's near plane (MinRange's only use) and far plane (60 m, the larger of the
+    /// editor's range limits), which also scales the score's distance term.
+    pub near: f32,
+    pub far: f32,
+    /// Swinging: downward pull (m/s²), the top speed in the swing's plane, and how fast drift out
+    /// of the plane dies away (per second, as an exponent).
+    pub gravity: f32,
+    pub max_speed: f32,
+    pub plane_pull: f32,
+    /// The first swing in: this much push along the swing (m/s²) while below the target, until
+    /// he goes this fast along it.
+    pub entry_push: f32,
+    pub entry_speed: f32,
+    /// Pumping with the stick, while below the target: the push it settles to (a velocity
+    /// added per 1/30 s), how fast it settles (per second, as an exponent), how fast the push
+    /// follows the stick, and the stick's dead zones ahead and sideways.
+    pub pump: f32,
+    pub pump_settle: f32,
+    pub pump_follow: f32,
+    pub pump_deadzone: (f32, f32),
+    /// The cable reels from where it hooked toward the target's length by the mover's turn law
+    /// (gain, damp, top speed).
+    pub reel: (f32, f32, f32),
+    /// Never above level: past `top_from` degrees from hanging straight down, the speed up the
+    /// arc is held under sqrt(`top_gain` · L · (90° − angle)), eased in at `top_ease` m/s² until
+    /// `top_hard` degrees.
+    pub top_from: f32,
+    pub top_hard: f32,
+    pub top_gain: f32,
+    pub top_ease: f32,
+    /// Letting go after the first swing only jumps when he's going up this far (degrees) from
+    /// hanging straight down.
+    pub release_angle: f32,
+    /// The jump off a swing: its config, its slowest speed ahead, and how it turns to the stick
+    /// (the mover's turn law: gain, damp, top speed in degrees a second).
+    pub jump: JumpParams,
+    pub jump_min_speed: f32,
+    pub jump_turn: (f32, f32, f32),
+    /// The Hookshot: reeled to this far from the target (unless the target says), speeding up
+    /// and slowing down at these rates (m/s²) up to the top speed, the hand this far ahead of
+    /// him on the cable, drag on sideways speed, and the pull down across the cable.
+    pub hook_length: f32,
+    pub hook_accel: f32,
+    pub hook_decel: f32,
+    pub hook_max_speed: f32,
+    pub hook_hand: f32,
+    pub hook_drag: f32,
+    pub hook_gravity: f32,
+}
+
+impl SwingshotParams {
+    fn scaled(&self, s: f32) -> SwingshotParams {
+        SwingshotParams {
+            max_range: self.max_range * s,
+            max_below: self.max_below * s,
+            near: self.near * s,
+            far: self.far * s,
+            gravity: self.gravity * s,
+            max_speed: self.max_speed * s,
+            entry_push: self.entry_push * s,
+            entry_speed: self.entry_speed * s,
+            pump: self.pump * s,
+            reel: (self.reel.0, self.reel.1, self.reel.2 * s),
+            top_gain: self.top_gain * s,
+            top_ease: self.top_ease * s,
+            jump: self.jump.scaled(s),
+            jump_min_speed: self.jump_min_speed * s,
+            hook_length: self.hook_length * s,
+            hook_accel: self.hook_accel * s,
+            hook_decel: self.hook_decel * s,
+            hook_max_speed: self.hook_max_speed * s,
+            hook_hand: self.hook_hand * s,
+            hook_drag: self.hook_drag / s,
+            hook_gravity: self.hook_gravity * s,
+            ..self.clone()
+        }
+    }
+}
+
+impl Default for SwingshotParams {
+    /// The game's config values and the swing's numbers read in RiftApart.exe. The swing has no
+    /// gravity of its own: the game's mover adds it each frame after the swing zeroes the fall
+    /// speed, about 30 m/s² plus half the mover's gravity at 60 fps; with the fall's 25 that's
+    /// 42.5. (Assumption: the mover's real value wasn't found.)
+    fn default() -> Self {
+        SwingshotParams {
+            max_range: 17.0,
+            horiz_fov: 100.0,
+            vert_fov: 95.0,
+            max_below: 10.0,
+            grace: 0.5,
+            near: 0.2,
+            far: 60.0,
+            gravity: 42.5,
+            max_speed: 24.0,
+            plane_pull: 3.0,
+            entry_push: 50.0,
+            entry_speed: 30.0,
+            pump: 25.0,
+            pump_settle: 1.75,
+            pump_follow: 30.0,
+            pump_deadzone: (0.25, 0.55),
+            reel: (-3.0, -5.0, 20.0),
+            top_from: 40.0,
+            top_hard: 65.0,
+            top_gain: 15.0,
+            top_ease: 75.0,
+            release_angle: 30.0,
+            jump: JumpParams {
+                height_min: 2.0,
+                height_max: 2.0,
+                time_to_peak: 0.5,
+                button_max_hold: 0.2,
+                terminal_velocity: 50.0,
+                no_glide_time: 0.3,
+                double_jump_time_start: 0.1,
+                momentum_weight_max: 1.4,
+                ..JumpParams::FALLBACK
+            },
+            jump_min_speed: 6.0,
+            jump_turn: (-15.0, -8.0, 90.0),
+            hook_length: 1.5,
+            hook_accel: 40.0,
+            hook_decel: 40.0,
+            hook_max_speed: 20.0,
+            hook_hand: 1.25,
+            hook_drag: 0.25,
+            hook_gravity: 10.0,
+        }
+    }
+}
+
+/// SwingshotConfig, SwingshotJumpConfig and HookshotConfig from hero_traversal.
+fn swingshot_from(traversal: &Value, base: &SwingshotParams) -> SwingshotParams {
+    let c = &traversal["SwingshotConfig"];
+    let h = &traversal["HookshotConfig"];
+    SwingshotParams {
+        max_range: f(c, "MaxRange").unwrap_or(base.max_range),
+        horiz_fov: f(c, "HorizFOV").unwrap_or(base.horiz_fov),
+        vert_fov: f(c, "VertFOV").unwrap_or(base.vert_fov),
+        max_below: f(c, "MaxDistBelow").unwrap_or(base.max_below),
+        grace: f(c, "GracePeriod").unwrap_or(base.grace),
+        near: f(c, "MinRange").unwrap_or(base.near),
+        jump: jump_from(&traversal["JumpConfigs"]["SwingshotJumpConfig"]).unwrap_or_else(|_| base.jump.clone()),
+        hook_length: f(h, "IdealCableLength").unwrap_or(base.hook_length),
+        hook_accel: f(h, "Accel").unwrap_or(base.hook_accel),
+        hook_decel: f(h, "Decel").or(f(h, "Accel")).unwrap_or(base.hook_decel),
+        hook_max_speed: f(h, "MaxSpeed").unwrap_or(base.hook_max_speed),
+        ..base.clone()
+    }
+}
+
 /// A move the game drives by its clip's root motion: where his root goes over the clip (x his
 /// left, y up, z ahead, from where it starts), sampled at `rate` keys a second.
 #[derive(Clone, Debug, PartialEq)]
@@ -693,6 +858,8 @@ pub struct Tuning {
     pub melee: MeleeParams,
     /// Ledges: hanging, grabbing, and the moves off them.
     pub ledge: LedgeParams,
+    /// The Swingshot and the Hookshot.
+    pub swingshot: SwingshotParams,
     /// Aim mode: strafing speeds (forward run/walk, and backing up) and the lower,
     /// fixed-height jumps. Strafing while firing from the hip keeps the normal speeds.
     pub aim_speeds: SpeedParams,
@@ -770,6 +937,7 @@ impl Default for Tuning {
             air_dash: DashParams { distance: 6.5, max_speed: 12.0, accel: 0.0, decel: 0.0 },
             melee: MeleeParams::default(),
             ledge: LedgeParams::default(),
+            swingshot: SwingshotParams::default(),
             aim_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.5, run_min: 4.0, run_max: 5.0, walk_run_threshold: 0.6 },
             aim_back_speed: 4.0,
             aim_single_jump: JumpParams {
@@ -863,6 +1031,7 @@ impl Tuning {
             air_dash: dash_from(&traversal["AirDashConfig"], &base.air_dash),
             melee: melee_from(dir, &traversal, &shared, &base.melee),
             ledge: ledge_from(dir, &traversal, &base.ledge),
+            swingshot: swingshot_from(&traversal, &base.swingshot),
             // The game's motion config reads only StandardSpeeds (and MagBootSpeeds); the other
             // speed blocks in hero_shared, StandAimSpeedConfig among them, are never read
             // (RiftApart.exe). Aim mode takes its AimSpeedConfig (our reading of the name).
@@ -899,6 +1068,7 @@ impl Tuning {
             air_dash: self.air_dash.scaled(s),
             melee: self.melee.scaled(s),
             ledge: self.ledge.scaled(s),
+            swingshot: self.swingshot.scaled(s),
             aim_speeds: self.aim_speeds.scaled(s),
             aim_back_speed: self.aim_back_speed * s,
             aim_single_jump: self.aim_single_jump.scaled(s),

@@ -6,6 +6,8 @@
 //!   default context, the strafe one (aiming a gun), and the wall-jump one (in the levels'
 //!   wall-jump zones), with how that blends in and out.
 //! - hero_traversal's WallStickConfig: how fast a wall-jump zone turns the camera.
+//! - The Swingshot's aim context and follow config: its framing, the pitch the camera looks
+//!   along a swing at, and how it keeps up with him there.
 //! - `CameraShakingConfig`: three sine curves per axis, held for a duration and then faded out.
 //!   The weapons name theirs (the Burst Pistol's recoil, the Shatterbomb's explosion).
 //!
@@ -156,6 +158,25 @@ impl Blend {
     }
 }
 
+/// The blend the game uses when a context doesn't set its own (RiftApart.exe).
+pub const DEFAULT_BLEND: Blend = Blend { gain: -0.4, damp: -10.0, max_speed: 1.8 };
+
+/// The follow camera looks this much further down than the direction it's asked to look along
+/// (degrees, RiftApart.exe).
+const FOLLOW_PITCH: f32 = 3.0;
+
+/// How a follow camera keeps up with him (FollowCameraUserConfig's TargetTrackingData): per axis
+/// of the camera, how fast it closes the gap, read as exponential rates per second (negative).
+/// Forward is him moving away from the camera, back toward it. The configs' damps aren't used
+/// (ours).
+#[derive(Clone, Copy, Debug)]
+pub struct Tracking {
+    pub up: f32,
+    pub forward: f32,
+    pub back: f32,
+    pub left: f32,
+}
+
 /// A turn toward a fixed angle (radians) with a trapezoidal speed profile: speeding up at
 /// `accel`, at most `max_speed`, and slowing at `decel` to stop exactly on it, as the game's
 /// camera turns do. `speed` (signed, rad/s) carries over; returns true once it's there.
@@ -192,6 +213,16 @@ pub struct CameraConfigs {
     pub wall_jump_out: Blend,
     /// The zone's turn: accel, decel and max speed in rad/s² and rad/s, for yaw and for pitch.
     pub wall_jump_turn: [(f32, f32, f32); 2],
+    /// On the Swingshot: its framing (while he swings and jumps off), blending in and out. While
+    /// he swings, the camera turns to look along the swing, `swing_pitch` down (radians), by the
+    /// follow camera's turn (accel, decel, max yaw speed, max pitch speed; rad/s², rad/s), and
+    /// keeps up with him by the swing's tracking.
+    pub swing: CameraContext,
+    pub swing_in: Blend,
+    pub swing_out: Blend,
+    pub swing_pitch: f32,
+    pub swing_turn: (f32, f32, f32, f32),
+    pub swing_tracking: Tracking,
     /// Where they came from, for the log.
     pub source: &'static str,
 }
@@ -233,6 +264,21 @@ impl CameraConfigs {
                 (300f32.to_radians(), 500f32.to_radians(), 300f32.to_radians()),
                 (300f32.to_radians(), 500f32.to_radians(), 57f32.to_radians()),
             ],
+            // The swing camera's are the game's own (its configs and RiftApart.exe).
+            swing: CameraContext {
+                pivot: 2.25,
+                level: Vec3::new(0.0, 0.0, 5.0),
+                down: Vec3::new(0.0, 0.65, 5.0),
+                up: Vec3::new(0.0, 0.45, 2.8),
+                traversal: None,
+                fov: 60.0,
+                traversal_fov: 60.0,
+            },
+            swing_in: Blend { gain: -0.3, damp: -150.0, max_speed: 1.0 },
+            swing_out: DEFAULT_BLEND,
+            swing_pitch: (FOLLOW_PITCH + 7.5).to_radians(),
+            swing_turn: (90f32.to_radians(), 50f32.to_radians(), 230f32.to_radians(), 57f32.to_radians()),
+            swing_tracking: Tracking { up: -1.65, forward: -4.0, back: -80.0, left: -50.0 },
             source: "generic",
         }
     }
@@ -270,6 +316,33 @@ impl CameraConfigs {
                 [(accel, decel, deg("WallJumpCameraMaxSpeedYaw", yaw)), (accel, decel, deg("WallJumpCameraMaxSpeedPitch", pitch))]
             })
             .unwrap_or(generic.wall_jump_turn);
+        // The Swingshot's framing, and its follow config: the swing tilts its look down by the
+        // config's default pitch, and the config says how the camera keeps up with him.
+        let (swing, swing_in, swing_out) = match read("camera_Swingshot_AimContext") {
+            Some(v) => (
+                CameraContext::from_json(&v, &generic.swing),
+                Blend::from_json(&v["BlendIn"], generic.swing_in),
+                Blend::from_json(&v["BlendOut"], generic.swing_out),
+            ),
+            None => (generic.swing.clone(), generic.swing_in, generic.swing_out),
+        };
+        let follow = std::fs::read_to_string(dir.join("camera_Swingshot_Follow.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter(|v| v["_type"] == "FollowCameraUserConfig");
+        let (swing_pitch, swing_tracking) = follow.map_or((generic.swing_pitch, generic.swing_tracking), |v| {
+            let (t, g) = (&v["TargetTrackingData"], generic.swing_tracking);
+            let gain = |key: &str, base: f32| num(&t[key]).unwrap_or(base);
+            (
+                num(&v["VelocityFollowData"]["DefaultPitch"]).map_or(generic.swing_pitch, |p| (FOLLOW_PITCH + p).to_radians()),
+                Tracking {
+                    up: gain("TrackUpGain", g.up),
+                    forward: gain("TrackForwardGain", g.forward),
+                    back: gain("TrackBackGain", g.back),
+                    left: gain("TrackLeftGain", g.left),
+                },
+            )
+        });
         CameraConfigs {
             stand,
             aim: CameraContext::from_json(&aim, &generic.aim),
@@ -277,6 +350,12 @@ impl CameraConfigs {
             wall_jump_in,
             wall_jump_out,
             wall_jump_turn,
+            swing,
+            swing_in,
+            swing_out,
+            swing_pitch,
+            swing_turn: generic.swing_turn,
+            swing_tracking,
             source: "Rift Apart camera configs",
         }
     }

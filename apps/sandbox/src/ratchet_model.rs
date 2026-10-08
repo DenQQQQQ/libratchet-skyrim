@@ -67,7 +67,8 @@ const CLIP_STATES: &[&str] = &[
     "strafe_land_idle", "wrench_strafe_land_n", "wrench_strafe_land_e", "wrench_strafe_land_s", "wrench_strafe_land_w",
     "wrench_strafe_land_idle", "wall_stick_left", "wall_stick_right", "wall_slide_left", "wall_slide_right", "wall_jump_left",
     "wall_jump_right", "ledge_grab", "ledge_from_fall", "ledge_from_fall_l180", "ledge_from_fall_r180", "ledge_idle", "ledge_up",
-    "ledge_down_to", "ledge_jump", "ledge_drop", "ledge_drop_turn",
+    "ledge_down_to", "ledge_jump", "ledge_drop", "ledge_drop_turn", "swing_pull", "swing_intro", "swing_forward_fast",
+    "swing_forward_slow", "swing_backward_fast", "swing_backward_slow", "swing_jump", "hook_reel",
 ];
 /// Dashes by direction relative to where he faces (clockwise from ahead), on the ground and in
 /// the air: the game's Dash and Air_Dash drivers have one clip per direction.
@@ -156,6 +157,8 @@ const THROW_LAYER: &str = "throw_additive";
 const LAYER_FADE_IN: f32 = 0.08;
 const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
+/// Swinging faster than this (m/s, at Ratchet's size) plays the fast swing clips (ours).
+const SWING_FAST: f32 = 6.0;
 /// The wall jump's in-air clip plays at this rate (see `play_clips`).
 const WALL_JUMP_CLIP_RATE: f32 = 0.25;
 const LOOPING: &[&str] = &[
@@ -164,7 +167,7 @@ const LOOPING: &[&str] = &[
     "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
     "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol", "wall_slide_left", "wall_slide_right",
-    "ledge_idle",
+    "ledge_idle", "swing_forward_fast", "swing_forward_slow", "swing_backward_fast", "swing_backward_slow", "hook_reel",
 ];
 /// Played at the rate that keeps the feet planted.
 const SPEED_MATCHED: &[&str] = &["run", "walk", "pistol_run", "land_walk", "land_run", "wrench_run", "wrench_walk", "wrench_land_walk", "wrench_land_run"];
@@ -984,6 +987,25 @@ fn play_clips(
         MoveState::LedgeClimb => "ledge_jump",
         MoveState::LedgeDrop => "ledge_drop_turn",
         MoveState::LedgeJump => "double_jump",
+        // The Swingshot: pulled in (near the ground), the first swing, then the loop for the way
+        // he's swinging and how fast (the game's graph picks these; ours by his speed along his
+        // facing); the jump off; the Hookshot's reel.
+        MoveState::Swing => match p.sim.swing_phase() {
+            Some(0) if p.contact.ground_distance.is_some_and(|d| d < 0.9 * settings.scale) => "swing_pull",
+            Some(0) => "swing_intro",
+            _ => {
+                let yaw = p.sim.facing_yaw();
+                let ahead = Vec2::new(v.x, v.z).dot(Vec2::new(yaw.sin(), yaw.cos()));
+                match (ahead >= 0.0, Vec2::new(v.x, v.z).length() > SWING_FAST) {
+                    (true, true) => "swing_forward_fast",
+                    (true, false) => "swing_forward_slow",
+                    (false, true) => "swing_backward_fast",
+                    (false, false) => "swing_backward_slow",
+                }
+            }
+        },
+        MoveState::Hook => "hook_reel",
+        MoveState::SwingJump => "swing_jump",
     };
     let want = match carried(want) {
         c if carrying && rig.clips.contains_key(c) => c,
@@ -1301,7 +1323,10 @@ fn target_pose(state: MoveState, speed: f32, vy: f32, run_max: f32, phase: f32, 
         | MoveState::LedgeHang
         | MoveState::LedgeClimb
         | MoveState::LedgeDrop
-        | MoveState::LedgeJump => Pose {
+        | MoveState::LedgeJump
+        | MoveState::Swing
+        | MoveState::Hook
+        | MoveState::SwingJump => Pose {
             hip: [-0.7, 0.8],
             knee: [0.9, 0.6],
             arm_drop: 1.1,

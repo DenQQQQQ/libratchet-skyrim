@@ -47,6 +47,8 @@ pub struct Level {
     pub zones: Vec<WallJumpZone>,
     /// Placed ledges he can grab and hang from (the game's ledge paths).
     pub ledges: Vec<libratchet::Ledge>,
+    /// Swingshot targets.
+    pub swing_targets: Vec<libratchet::SwingTarget>,
 }
 
 /// The level as the sim asks about it: its placed ledges, and rays against its blocks.
@@ -59,6 +61,10 @@ impl libratchet::World for LevelWorld<'_> {
 
     fn raycast(&self, from: Vec3, to: Vec3) -> Option<libratchet::RayHit> {
         raycast(self.0, from, to).map(|(point, normal, _)| libratchet::RayHit { point, normal })
+    }
+
+    fn swing_targets(&self, center: Vec3, radius: f32, out: &mut Vec<libratchet::SwingTarget>) {
+        out.extend(self.0.swing_targets.iter().filter(|t| t.position.distance(center) <= radius).copied());
     }
 }
 
@@ -85,6 +91,9 @@ pub mod spots {
     /// The ledge course: a gap to fall short of (the catch), and a wall with placed ledges,
     /// along +X from here.
     pub const LEDGES: Vec3 = Vec3::new(40.0, 0.0, -30.0);
+    /// The Swingshot course: platforms along +Z with swing targets between them, and a
+    /// Hookshot target up over a tall block at the end.
+    pub const SWINGS: Vec3 = Vec3::new(70.0, 0.0, 0.0);
 }
 
 const FLOOR: f32 = 300.0;
@@ -182,6 +191,15 @@ pub fn spawn_level(
     let face = l.x + 6.0;
     add(&mut commands, Block::new(Vec2::new(face + 3.0, l.z), 0.0, Vec3::new(6.0, 5.5, 4.0)), Color::srgb(0.55, 0.45, 0.4));
     add(&mut commands, Block::new(Vec2::new(face - 0.075, l.z), 2.85, Vec3::new(0.15, 0.15, 4.0)), Color::srgb(0.95, 0.8, 0.2));
+    // Swingshot course (along +Z): a 2 m platform, three targets 9 m up and 12 m apart (the
+    // game picks the farthest target in range, so only the next one may be in range when he
+    // looks for it), a 4 m landing platform, and a 6 m block with a Hookshot target 4 m over it.
+    // The reel sags him under the cable and he comes off it still swinging, so the block is low
+    // enough to clear and deep enough to land on.
+    let sw = spots::SWINGS;
+    add(&mut commands, Block::new(Vec2::new(sw.x, sw.z - 2.0), 0.0, Vec3::new(4.0, 2.0, 4.0)), Color::srgb(0.45, 0.5, 0.65));
+    add(&mut commands, Block::new(Vec2::new(sw.x, sw.z + 41.0), 0.0, Vec3::new(4.0, 4.0, 10.0)), Color::srgb(0.45, 0.5, 0.65));
+    add(&mut commands, Block::new(Vec2::new(sw.x, sw.z + 57.0), 0.0, Vec3::new(6.0, 6.0, 10.0)), Color::srgb(0.4, 0.45, 0.6));
     level.zones.push(WallJumpZone {
         min: Vec3::new(shaft.x - 3.0, 0.0, shaft.z - GAP * 0.5),
         max: Vec3::new(shaft.x + 3.0, 12.5, shaft.z + GAP * 0.5),
@@ -196,6 +214,26 @@ pub fn spawn_level(
             flags: libratchet::LedgeFlags::default(),
         });
     }
+    for (i, z) in [6.0, 18.0, 30.0].into_iter().enumerate() {
+        level.swing_targets.push(libratchet::SwingTarget {
+            position: Vec3::new(sw.x, 9.0, sw.z + z),
+            kind: libratchet::SwingKind::Swing,
+            axis: Vec2::Y,
+            length: 5.0,
+            min_range: None,
+            max_range: None,
+            id: i as u32 + 1,
+        });
+    }
+    level.swing_targets.push(libratchet::SwingTarget {
+        position: Vec3::new(sw.x, 10.0, sw.z + 55.0),
+        kind: libratchet::SwingKind::Hook,
+        axis: Vec2::Y,
+        length: -1.0,
+        min_range: None,
+        max_range: None,
+        id: 10,
+    });
     // The placed ledges, marked (no collision).
     let marker = materials.add(StandardMaterial { base_color: Color::srgb(0.95, 0.8, 0.2), emissive: LinearRgba::rgb(0.4, 0.3, 0.05), ..default() });
     for ledge in &level.ledges {
@@ -421,6 +459,7 @@ mod tests {
             ],
             zones: Vec::new(),
             ledges: Vec::new(),
+            swing_targets: Vec::new(),
         }
     }
 

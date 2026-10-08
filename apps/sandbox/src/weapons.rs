@@ -803,11 +803,19 @@ pub fn weapon_away(state: MoveState) -> bool {
     matches!(state, MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash) || holstered(state)
 }
 
-/// On a wall or a ledge, or jumping off one: the game holsters the weapon.
+/// On a wall, a ledge or the Swingshot, or jumping off one: the game holsters the weapon.
 pub fn holstered(state: MoveState) -> bool {
     matches!(
         state,
-        MoveState::WallStick | MoveState::WallJump | MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::LedgeJump
+        MoveState::WallStick
+            | MoveState::WallJump
+            | MoveState::LedgeHang
+            | MoveState::LedgeClimb
+            | MoveState::LedgeDrop
+            | MoveState::LedgeJump
+            | MoveState::Swing
+            | MoveState::Hook
+            | MoveState::SwingJump
     )
 }
 

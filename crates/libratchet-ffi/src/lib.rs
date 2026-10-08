@@ -5,7 +5,9 @@
 //! boundary (Skyrim: Z up, about 70 units per metre).
 
 use libratchet::glam::{Vec2, Vec3};
-use libratchet::{Contact, Event, Input, Ledge, LedgeFlags, MoveState, RayHit, Ratchet, ThrowStatus, Tuning, WallContact, World, WrenchThrow};
+use libratchet::{
+    Contact, Event, Input, Ledge, LedgeFlags, MoveState, RayHit, Ratchet, SwingKind, SwingTarget, ThrowStatus, Tuning, WallContact, World, WrenchThrow,
+};
 use std::ffi::{CStr, c_char, c_void};
 use std::path::Path;
 
@@ -40,6 +42,14 @@ pub struct RatchetInput {
     pub view_right_z: f32,
     /// Crouch (the ledge drop button) held (0/1).
     pub crouch: u8,
+    /// The Swingshot button held (0/1): pressed with a target in view, he swings on it (or the
+    /// Hookshot reels him in) for as long as it's held.
+    pub swingshot: u8,
+    /// Where the camera looks (unit; zero without a camera): Swingshot targets are picked in
+    /// its view, and the swing pumps along it.
+    pub view_forward_x: f32,
+    pub view_forward_y: f32,
+    pub view_forward_z: f32,
 }
 
 #[repr(C)]
@@ -87,6 +97,13 @@ pub const RATCHET_EVENT_LEDGE_CLIMBED: u32 = 1 << 15;
 pub const RATCHET_EVENT_LEDGE_DROPPED: u32 = 1 << 16;
 pub const RATCHET_EVENT_LEDGE_TRANSFERRED: u32 = 1 << 17;
 pub const RATCHET_EVENT_LEDGE_JUMPED: u32 = 1 << 18;
+/// Fired the Swingshot at a target; `swing_hook` says whether it was a Hookshot one.
+pub const RATCHET_EVENT_SWING_ATTACHED: u32 = 1 << 19;
+/// Let go of the swing or the hook.
+pub const RATCHET_EVENT_SWING_RELEASED: u32 = 1 << 20;
+pub const RATCHET_EVENT_SWING_JUMPED: u32 = 1 << 21;
+/// Reeled all the way in to a Hookshot target.
+pub const RATCHET_EVENT_HOOK_ARRIVED: u32 = 1 << 22;
 
 /// A placed ledge the host offers (see libratchet's `Ledge`).
 #[repr(C)]
@@ -106,6 +123,24 @@ pub struct RatchetLedge {
     pub transfer: u8,
 }
 
+/// A Swingshot target the host offers (see libratchet's `SwingTarget`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RatchetSwingTarget {
+    pub position: RatchetVec3,
+    /// 0 he swings on it, 1 the Hookshot reels him in to it.
+    pub kind: u8,
+    /// Its own forward on the ground plane: he swings in the upright plane along it.
+    pub axis_x: f32,
+    pub axis_z: f32,
+    /// The cable's length on it (a Hookshot target at 0 or less takes the game's).
+    pub length: f32,
+    /// Its own range limits; 0 or less for none.
+    pub min_range: f32,
+    pub max_range: f32,
+    pub id: u32,
+}
+
 /// The host's level, as the sim asks about it: callbacks with the host's own pointer.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -117,6 +152,9 @@ pub struct RatchetWorld {
     /// The first surface the ray from `from` to `to` hits: returns 1 and fills `point` and
     /// `normal`, or 0. May be null (no ledges to catch).
     pub raycast: Option<unsafe extern "C" fn(user: *mut c_void, from: RatchetVec3, to: RatchetVec3, point: *mut RatchetVec3, normal: *mut RatchetVec3) -> u8>,
+    /// Writes up to `max` Swingshot targets near `center` (within `radius`) to `out`; returns
+    /// how many. May be null (no Swingshot targets).
+    pub swing_targets: Option<unsafe extern "C" fn(user: *mut c_void, center: RatchetVec3, radius: f32, out: *mut RatchetSwingTarget, max: u32) -> u32>,
 }
 
 fn v3(v: RatchetVec3) -> Vec3 {
@@ -149,6 +187,22 @@ impl World for RatchetWorld {
         let hit = unsafe { f(self.user, rv3(from), rv3(to), &mut point, &mut normal) };
         (hit != 0).then(|| RayHit { point: v3(point), normal: v3(normal).normalize_or_zero() })
     }
+
+    fn swing_targets(&self, center: Vec3, radius: f32, out: &mut Vec<SwingTarget>) {
+        let Some(f) = self.swing_targets else { return };
+        let mut buf = [RatchetSwingTarget::default(); 32];
+        // Safety: as above.
+        let n = unsafe { f(self.user, rv3(center), radius, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        out.extend(buf[..n.min(buf.len())].iter().map(|t| SwingTarget {
+            position: v3(t.position),
+            kind: if t.kind == 1 { SwingKind::Hook } else { SwingKind::Swing },
+            axis: Vec2::new(t.axis_x, t.axis_z),
+            length: t.length,
+            min_range: (t.min_range > 0.0).then_some(t.min_range),
+            max_range: (t.max_range > 0.0).then_some(t.max_range),
+            id: t.id,
+        }));
+    }
 }
 
 #[repr(C)]
@@ -158,7 +212,7 @@ pub struct RatchetStepResult {
     pub velocity: RatchetVec3,
     /// 0 ground, 1 jump, 2 double jump, 3 fall, 4 glide, 5 dash, 6 air dash, 7 melee,
     /// 8 Hyper-Strike, 9 Hyper-Strike landing, 10 wall stick, 11 wall jump, 12 ledge hang,
-    /// 13 ledge climb, 14 ledge drop, 15 ledge jump.
+    /// 13 ledge climb, 14 ledge drop, 15 ledge jump, 16 swing, 17 Hookshot, 18 swing jump.
     pub state: u32,
     /// `RATCHET_EVENT_*` bits for this tick.
     pub events: u32,
@@ -174,6 +228,12 @@ pub struct RatchetStepResult {
     pub gravity: f32,
     /// With RATCHET_EVENT_LEDGE_GRABBED: 1 if the ledge was caught on the way down, 0 if placed.
     pub ledge_caught: u8,
+    /// With RATCHET_EVENT_SWING_ATTACHED: 1 if it was a Hookshot target.
+    pub swing_hook: u8,
+    /// 1 if `swing_target` is set: the Swingshot target he'd fire at now, or the one he's on in
+    /// states 16 and 17 (for the host's reticle and cable).
+    pub has_swing_target: u8,
+    pub swing_target: RatchetVec3,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -217,6 +277,9 @@ fn state_code(s: MoveState) -> u32 {
         MoveState::LedgeClimb => 13,
         MoveState::LedgeDrop => 14,
         MoveState::LedgeJump => 15,
+        MoveState::Swing => 16,
+        MoveState::Hook => 17,
+        MoveState::SwingJump => 18,
     }
 }
 
@@ -290,6 +353,8 @@ pub unsafe extern "C" fn ratchet_step(
         aim: (input.aiming != 0).then(|| Vec2::new(input.aim_x, input.aim_z)),
         aim_mode: input.aiming == 1,
         crouch: input.crouch != 0,
+        swingshot: input.swingshot != 0,
+        view_forward: Vec3::new(input.view_forward_x, input.view_forward_y, input.view_forward_z),
         view_right: Vec2::new(input.view_right_x, input.view_right_z),
     };
     let contact = Contact {
@@ -309,6 +374,7 @@ pub unsafe extern "C" fn ratchet_step(
         None => sim.sim.step(dt, &input, &contact, position),
     };
     let mut ledge_caught = 0;
+    let mut swing_hook = 0;
     let mut events = 0;
     let mut landed_fall_speed = 0.0;
     let mut melee_swing = sim.sim.melee_swing().unwrap_or(0) as u32;
@@ -345,8 +411,16 @@ pub unsafe extern "C" fn ratchet_step(
             Event::LedgeDropped => RATCHET_EVENT_LEDGE_DROPPED,
             Event::LedgeTransferred => RATCHET_EVENT_LEDGE_TRANSFERRED,
             Event::LedgeJumped => RATCHET_EVENT_LEDGE_JUMPED,
+            Event::SwingAttached { hook } => {
+                swing_hook = *hook as u8;
+                RATCHET_EVENT_SWING_ATTACHED
+            }
+            Event::SwingReleased => RATCHET_EVENT_SWING_RELEASED,
+            Event::SwingJumped => RATCHET_EVENT_SWING_JUMPED,
+            Event::HookArrived => RATCHET_EVENT_HOOK_ARRIVED,
         };
     }
+    let swing_target = sim.sim.swinging_on().map(|(t, _)| t).or(sim.sim.swing_target());
     RatchetStepResult {
         velocity: RatchetVec3 { x: v.x, y: v.y, z: v.z },
         state: state_code(sim.sim.state()),
@@ -357,6 +431,9 @@ pub unsafe extern "C" fn ratchet_step(
         wall_right: sim.sim.wall_right() as u8,
         gravity: sim.sim.gravity(),
         ledge_caught,
+        swing_hook,
+        has_swing_target: swing_target.is_some() as u8,
+        swing_target: rv3(swing_target.unwrap_or_default()),
     }
 }
 
@@ -465,7 +542,7 @@ pub unsafe extern "C" fn ratchet_set_velocity(sim: *mut RatchetSim, v: RatchetVe
 }
 
 /// Gives the sim the host's level to ask about ledges (placed ones, and rays to find lips to
-/// catch). Without it, there are no ledges.
+/// catch) and Swingshot targets (and rays to see them). Without it, there are neither.
 ///
 /// # Safety
 /// `sim` must be valid; the callbacks must stay valid for `world.user` while the sim steps.
@@ -591,7 +668,7 @@ mod tests {
     #[test]
     fn catches_a_ledge_through_the_c_api() {
         let sim = ratchet_new(1.0);
-        unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: Some(block_raycast) }) };
+        unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: Some(block_raycast), swing_targets: None }) };
         // Facing the block a metre out, falling from above its top.
         let mut pos = RatchetVec3 { x: 0.0, y: 5.6, z: 0.0 };
         let face = RatchetInput { move_x: 1.0, ..Default::default() };
@@ -611,6 +688,49 @@ mod tests {
         assert!(seen & RATCHET_EVENT_LEDGE_GRABBED != 0, "no grab");
         assert_eq!(state, 12);
         assert!((pos.y - (5.0 - Tuning::default().ledge.hang_down)).abs() < 0.05, "hangs at {}", pos.y);
+    }
+
+    /// One Swingshot target, 7 m up and 4 m ahead.
+    unsafe extern "C" fn one_target(_user: *mut c_void, _center: RatchetVec3, _radius: f32, out: *mut RatchetSwingTarget, max: u32) -> u32 {
+        if max == 0 {
+            return 0;
+        }
+        let position = RatchetVec3 { x: 0.0, y: 7.0, z: 4.0 };
+        unsafe { *out = RatchetSwingTarget { position, kind: 0, axis_x: 0.0, axis_z: 1.0, length: 5.0, min_range: 0.0, max_range: 0.0, id: 1 } };
+        1
+    }
+
+    #[test]
+    fn swings_through_the_c_api() {
+        let sim = ratchet_new(1.0);
+        unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: None, swing_targets: Some(one_target) }) };
+        // The camera behind him, looking ahead (+Z) and a little up.
+        let view = Vec3::new(0.0, 0.3, 1.0).normalize();
+        let mut pos = RatchetVec3::default();
+        let (mut seen, mut state, mut target) = (0, 0, None);
+        for i in 0..120 {
+            let contact = RatchetContact { grounded: (pos.y <= 0.0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
+            let input = RatchetInput {
+                swingshot: (i > 0) as u8,
+                view_forward_x: view.x,
+                view_forward_y: view.y,
+                view_forward_z: view.z,
+                view_right_x: -1.0,
+                ..Default::default()
+            };
+            let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
+            seen |= r.events;
+            state = r.state;
+            if r.has_swing_target != 0 {
+                target = Some(r.swing_target);
+            }
+            pos.y = (pos.y + r.velocity.y / 120.0).max(0.0);
+            pos.z += r.velocity.z / 120.0;
+        }
+        unsafe { ratchet_free(sim) };
+        assert!(seen & RATCHET_EVENT_SWING_ATTACHED != 0, "never fired");
+        assert_eq!(state, 16);
+        assert_eq!(target, Some(RatchetVec3 { x: 0.0, y: 7.0, z: 4.0 }));
     }
 
     #[test]

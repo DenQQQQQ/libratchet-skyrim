@@ -35,6 +35,123 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (midday): the Swingshot and the Hookshot
+
+The user was still away; the Swingshot, one of the project's goals, came after ledges. Research
+agents read the game's swing, its targeting and the Hookshot in RiftApart.exe; the configs and
+clips come from the user's install.
+
+### Read from RiftApart.exe
+- **Targets are placed in the level**, each with its own cable length, its own forward (he swings
+  along it) and optional range limits. Swing targets swing him; Hook targets reel him in.
+- **Picking a target** (the SwingshotHunter), by the camera rather than his facing:
+  - in a frustum from him (the centre of his bounding sphere), turned like the camera:
+    HorizFOV 100° × VertFOV 95° (full angles), from 0.2 m (MinRange's only use) to 60 m;
+  - at most 17 m away (MaxRange, unless the target says), at most 10 m below him, in sight;
+  - **the highest score wins:** 1.2 × (1 − cos)/2 of its angle off the camera's forward, plus
+    its distance on the level over 60 m. Both terms favour targets far off the view's centre
+    and far away. A third term, for the height difference, is divided by −10 and always comes
+    out 0;
+  - a target stays usable for 0.5 s after it last qualified (GracePeriod), but not once it's
+    out of sight, and targets that qualify now always win.
+- **Firing:** the button must have been pressed within 0.2 s and still be held, so a tap that's
+  already let go does nothing. Holding it keeps him on.
+- **The swing:**
+  - It runs in the upright plane along the target's forward, flipped to point the way he came in.
+    Drift out of the plane dies away at e^(−3t), and the speed in the plane is capped at 24 m/s.
+  - The cable reels from where it hooked toward the target's length (the mover's turn law, −3/−5,
+    at most 20 m/s), and he's held on it every frame.
+  - The first swing in pushes him along the swing at 50 m/s² while he's below the target, until
+    he goes 30 m/s along it.
+  - The stick pumps along the camera's forward and side axes (dead zones 0.25 and 0.55), only in
+    the direction he's swinging and only below the target. The push settles to 25 (from 1.4 × his
+    speed on entry, at a 1.75/s rate), follows the stick at 30/s, and is added once a frame.
+  - He never gets above level: past 40° from straight down, his speed up the arc is capped at
+    sqrt(15 · L · (90° − angle)), eased in at 75 m/s² up to 65° and clamped beyond.
+  - Phases: 0 swinging in, 1 once he's past the target, 2 from his first swing back.
+- **Letting go:** jump, or the button let go in phase 1, is the swing jump. In phase 2 letting go
+  jumps only when he's going up at least 30° from straight down; otherwise, and in phase 0, he
+  falls.
+- **The swing jump** (jump kind 0x30, SwingshotJumpConfig): 2 m up in 0.5 s (8 m/s, g 16) whatever
+  the swing did. Ahead it goes at his speed off the swing, at least 6 m/s, toward the stick (or
+  his facing), turned toward the stick at up to 90°/s (the turn law, −15/−8). At its top a
+  fall takes over.
+- **The Hookshot:** reeled along the cable (his hand 1.25 m ahead of him) to 1.5 m from the
+  target (IdealCableLength, or the target's own length), speeding up at 40 m/s² to 20 m/s and
+  slowing to stop there. Sideways speed drags off (0.25·v²) and sags at 10 m/s² across the cable.
+  Arrived, or with the button let go, he drops with the speed he has, so he comes off still
+  swinging from the sag.
+- **The swing camera:**
+  - While he swings, the camera turns to look along the swing, 10.5° down: the swing tilts its
+    look by camera_Swingshot_Follow's DefaultPitch (7.5°), and the follow camera adds its own
+    3°. A target can override the pitch.
+  - It steers there every frame and never flips on the swings back. The turn is a trapezoid:
+    90°/s² up, 50°/s² down, at most 230°/s of yaw and 57°/s of pitch.
+  - The right stick stops the turn. It starts again 0.5 s after the stick is let go, its
+    acceleration building back up at 150°/s³.
+  - The swing's aim context frames him: pivot 2.25 m up, 5 m back, a 60° field of view,
+    blended in by its own blend (−0.3, −150, max 1).
+  - Its follow config keeps up with him slowly up and down and away from the camera, quickly
+    toward it and sideways.
+  - The swing jump keeps the framing but not the turn. At its top the framing blends back out
+    (the built-in blend: −0.4, −10, max 1.8), and the camera stays where it was turned.
+- **Clips:** Swingshot_Pull near the ground, the full-body intro on the first swing in, then the
+  forward/backward loops; the jump's flip; the Hookshot's reel.
+
+### Built
+- **libratchet:**
+  - **States and events:** `Swing`, `Hook` and `SwingJump`, with events `SwingAttached { hook }`,
+    `SwingReleased`, `SwingJumped` and `HookArrived`. `Input::swingshot` is the button and
+    `Input::view_forward` the camera's look direction.
+  - **The level:** `World::swing_targets` offers the targets (none by default); `SwingTarget`
+    carries the position, kind, forward, cable length and range limits.
+  - **Tuning:** `SwingshotParams` loads SwingshotConfig, SwingshotJumpConfig and HookshotConfig;
+    the rest are the numbers read in the code.
+  - **Tests:** 57 pass. Five new ones cover:
+    - a swing: the phases, never above level, the cable at the target's length, the jump off;
+    - targets out of view, out of range or too far below;
+    - the pick going to targets off to the side and far away;
+    - the grace period, and a target out of sight dropped at once;
+    - the Hookshot.
+- **C API:** states 16–18, event bits 19–22, `swingshot` and `view_forward_*` on the input,
+  `swing_hook`, `has_swing_target` and `swing_target` on the result, and a `swing_targets`
+  callback on `RatchetWorld`. A test swings through the callbacks, and the C++ smoke test still
+  builds and passes with the new header.
+- **Sandbox:**
+  - **Keys:** E is the Swingshot (hold).
+  - **A Swingshot course:**
+    - three targets 9 m up and 12 m apart. The game picks the farthest target in range, so only
+      the next one should be in range when he looks;
+    - a 4 m landing platform;
+    - a 6 m block with a Hookshot target 4 m above it. It's low enough for the reel's sag to
+      clear and deep enough to land on.
+  - **Targets** show as orbs: the one he'd fire at turns orange, Hookshot targets are green. The
+    cable runs from his swingshot hand (the model's `igLoc_swingshot`).
+  - **The swing camera,** as above, from the extracted configs. The config extractor now also
+    writes `camera_Swingshot_AimContext.json` and `camera_Swingshot_Follow.json`.
+  - **The clips:** the pull, the intro, the forward/backward loops (fast past 6 m/s), the jump's
+    flip and the reel.
+  - **The weapons:** put away while swinging, drawn again after.
+- **Demo (`--demo-part swingshot`):** the course twice, first through his camera and then
+  filmed from the side. A new demo act draws the camera from fixed angles around him while the
+  follow camera he picks targets by keeps going. Each run goes off the platform, through three
+  swings with a jump off each, onto the landing platform, and up onto the block with the
+  Hookshot. Shots `90_swing` … `94_hookshot_top`; video `recordings/swingshot.mp4`.
+
+### Derived or assumed
+- **Gravity on the swing:** the swing code has none of its own. The game's mover adds it each
+  frame after the swing resets the fall speed, about 30 m/s² plus half the mover's gravity at
+  60 fps. With the fall's 25 that's 42.5 m/s²; the mover's real value wasn't found.
+- **The pump** is added once a frame in the game; we add it at 60 frames a second.
+- **The camera's tracking and blends:** the follow config's tracking gains are read as
+  exponential rates per axis (its damps unused), and the blends by the mover's turn law, as for
+  the wall-jump zones. How the game applies them wasn't found. The Hookshot's camera wasn't
+  read: the normal camera follows him.
+- **The frustum's apex** is 1 m above his feet (his bounding sphere wasn't read). **Line of
+  sight** is one ray from there, clear when it stops within 0.3 m of the target.
+- **Not built:** the Hurlshot (sling targets), Rift Tether targets, moving targets, the toggle
+  option (press again to let go), and the auto-pump accessibility option.
+
 ## 2026-10-08 (late morning): ledges
 
 The user was away and said to carry on; ledges were next. Two research agents read the game's

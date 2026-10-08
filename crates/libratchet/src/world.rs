@@ -55,6 +55,30 @@ impl Ledge {
     }
 }
 
+/// A Swingshot target the level offers (the game's placed swingshot targets).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SwingTarget {
+    pub position: Vec3,
+    pub kind: SwingKind,
+    /// The target's own forward on the ground plane: he swings in the upright plane along it.
+    pub axis: Vec2,
+    /// The cable's length on it (each target sets its own).
+    pub length: f32,
+    /// Its own range limits, where it has them.
+    pub min_range: Option<f32>,
+    pub max_range: Option<f32>,
+    pub id: u32,
+}
+
+/// What a Swingshot target does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwingKind {
+    /// He swings on it.
+    Swing,
+    /// It reels him in (the Hookshot).
+    Hook,
+}
+
 /// Where a ray hit the level: the point, and the surface's normal there (unit length).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
@@ -69,6 +93,8 @@ pub trait World {
     /// The first surface a ray from `from` to `to` hits, if any (rays starting inside
     /// something needn't hit it).
     fn raycast(&self, from: Vec3, to: Vec3) -> Option<RayHit>;
+    /// Adds the Swingshot targets within `radius` of `center` to `out` (none by default).
+    fn swing_targets(&self, _center: Vec3, _radius: f32, _out: &mut Vec<SwingTarget>) {}
 }
 
 /// A level with nothing to ask about.
