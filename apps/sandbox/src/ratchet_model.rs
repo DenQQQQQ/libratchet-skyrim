@@ -1073,8 +1073,8 @@ fn play_clips(
         if LOOPING.contains(&want) {
             active.repeat();
         }
-        // The transitions weigh it from the next update on; until then the loop's clips take
-        // none of it.
+        // The transitions weigh it later this frame, and its clips follow its weight a frame
+        // behind: they start from none.
         if want == SWING_LOOP {
             active.set_weight(0.0);
         }
@@ -1137,7 +1137,7 @@ fn play_clips(
         && let Some(active) = player.animation_mut(node)
     {
         let jump = &p.sim.tuning().swingshot.jump;
-        let to_top = if jump.time_to_peak_is_gravity { (2.0 * jump.height_min / jump.time_to_peak.max(0.1)).sqrt() } else { jump.time_to_peak };
+        let to_top = (2.0 * jump.height_min / jump.gravity()).sqrt();
         active.set_speed(peak / to_top.max(0.05));
     }
     rig.walking = if rig.walking { speed < WALK_TO_RUN } else { speed < RUN_TO_WALK };
@@ -1232,6 +1232,9 @@ fn swing_blend_ms(from: Option<&str>, to: &str) -> Option<u64> {
     let first = from.is_some_and(|c| matches!(c, "swing_pull" | "swing_intro"));
     let looping = from == Some(SWING_LOOP);
     Some(match to {
+        // Ours: hooking on mid-flip, the game's 0.25 s blend from the swing jump turns his body
+        // over (its poses are half a turn apart); a short one keeps that to a frame or two.
+        "swing_pull" | "swing_intro" if from == Some("swing_jump") => 100,
         "swing_pull" | "swing_intro" | "hook_reel" => 250,
         SWING_LOOP => 350,
         "swing_jump" if first => 0,

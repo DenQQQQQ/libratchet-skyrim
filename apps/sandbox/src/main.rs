@@ -131,7 +131,7 @@ pub struct CameraRig {
     zone_blend: f32,
     zone_blend_speed: f32,
     /// On the Swingshot: the turn to look along the swing, how far its framing is blended in,
-    /// with the blend's speed, and how far its tracking is.
+    /// with the blend's speed, and how far its tracking is blended in.
     swing_turn: Option<SwingTurn>,
     swing_blend: f32,
     swing_blend_speed: f32,

@@ -35,12 +35,46 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
-## 2026-10-08 (evening): the Swingshot's look: the shot, the clips' blends, the camera
+## 2026-10-08 (evening): the Swingshot's feel; walls hold him off
 
-The user found the Swingshot "a bit janky, too rough". The game hooks on at once like ours;
-the rest of its smoothness is in the visuals. Sandbox only (the sim is unchanged).
+The user found the Swingshot "a bit janky, too rough", with "a slight delay" in the game, and
+saw him slightly inside the wall on wall jumps. A research workflow read the game (each finding
+re-checked by a second agent): the game hooks on at once like ours, with no wait for the shot;
+the smoothness is in his turn, the shot flying out and the clips' blends. We snapped all three.
 
-### Read from RiftApart.exe (research agent)
+### Read from RiftApart.exe: the sim
+- **Facing on the swing:** never snapped. It turns toward the way to the target, then the way
+  he moves once that's over 0.1 m a frame (6 m/s at 60 frames a second), kept on the side he
+  came in from. The swing sets no turn law of its own, so the jump's (−13, −10, 1500°/s, by the
+  stick) carries on. The swing jump turns by the jump's law toward its own direction.
+- **The swing jump** is off at its speed (at least 6 m/s) from its first frame.
+- **The cable** reels from the distance measured each frame, not a stored length.
+- **Lean and Speed**, the loop animation's two values, set each frame: the swing's quarter
+  changes as he passes under the target (ascending) or turns at an end (descending); Lean heads
+  for 0 swinging ahead, 1 back, 0.5 as he stalls; within 2.5 m of the bottom, Speed rises as he
+  passes slowly and pulls Lean to 0.5. Both are smoothed by the game's trapezoid planner
+  (reimplemented from its behaviour), which the Hookshot's reel also uses.
+- **The wall stick** holds him at the wall point plus 0.6 m: the slide body's radius
+  (HeroMoverConfig BodySizeSlide.BodyRadius), which the stick switches to. His wall clips have
+  no root motion and put his soles 0.53 m and his hands 0.54–0.58 m ahead of him, so in the game
+  they rest just off the wall; we held him 0.35 m out, 18–23 cm inside it. The game's probe
+  (swept spheres) takes a wall within 0.95 m, and 1.1 m once he's on it: along the level about
+  0.775 m and 0.92 m. Stuck, he snaps to the 0.6 m in one frame.
+
+### Built: the sim
+- The swing and the Hookshot turn him by the law the move before left (`turn_law`); the swing
+  jump gets its speed on its first tick; the cable reels from his distance;
+  `swing_lean_speed()` (C API `swing_lean`, `swing_speed`); `trapezoid` in `swing.rs`.
+- `WallContact::distance` (C API `has_wall_distance`, `wall_distance`): with it he sticks from
+  up to 0.775 m (× scale), lets go past 0.92 m, and is held at `WallStickParams::standoff`
+  (0.6 m, from hero_mover.json). Without it, the old pressing against a touched wall.
+- The sandbox probes for the nearest wall within 1 m (`level::wall_probe`) and passes its
+  distance, instead of reporting only walls the box touches.
+- Tests: no snap at hooking on (at most 12.5° a tick), the swing jump's first tick, Lean
+  ahead and back, the trapezoid (arrives at rest, never past, symmetric), a measured wall's
+  reach and standoff.
+
+### Read from RiftApart.exe: the visuals
 - **The shot:** hooking on fires a shot from the hand locator (igLoc_swingshot) toward the
   target's attach point at 80 m/s plus the target's own motion; the cable runs from the hand to
   it and stays pinned there. Let go (any way), it flies back to the hand at 80 m/s before the
@@ -66,7 +100,9 @@ the rest of its smoothness is in the visuals. Sandbox only (the sim is unchanged
     from when it starts, never restarted, each taking a share of its weight by Lean;
   - the blend times above; the swing jump's clip plays at its JumpPeak (0.531 s) over the jump's
     time to its top (0.5 s), about 1.06x;
-  - `SWING_FAST` (ours) is gone.
+  - `SWING_FAST` (ours) is gone;
+  - from the swing jump into the swing, 0.1 s (ours): hooking on mid-flip, the game's 0.25 s
+    blend turned his whole body over in a frame or two (the poses are half a turn apart).
 - **The camera** (`main.rs`): the swing's tracking gains slide in and out over 0.35 s instead of
   switching with the state.
 - **Demo:** the swingshot part ends with him held on the first target for 4.5 s, filmed from

@@ -848,8 +848,9 @@ fn swingshot() -> Vec<Act> {
         hold(0.12, z, false),
         Act::Follow { yaw: std::f32::consts::PI, pitch: 0.0, distance: 4.65 },
         Act::Caption("Held on one target: the intro, then the loop as he swings back and forth"),
-        // Closer, and from a little below him so the target stays in the picture.
-        Act::Film { yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.15, distance: 10.0 },
+        // Filmed from the side, far enough back for the target to stay in the picture (his own
+        // camera, which picks the target, stays behind him).
+        Act::Film { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.1, distance: 13.0 },
         hold(0.6, Vec2::ZERO, false),
         hold(0.45, z, false),
         hold(0.15, z, true),
@@ -857,7 +858,7 @@ fn swingshot() -> Vec<Act> {
         Act::Shot("95_swing_loop"),
         swinging(2.1, Vec2::ZERO),
         hold(0.05, z, true),
-        hold(1.5, Vec2::ZERO, false),
+        hold(1.2, Vec2::ZERO, false),
         Act::Caption(""),
     ]);
     acts
