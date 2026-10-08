@@ -186,3 +186,47 @@ The plugin's own log, kept in `skse/` while it's built on the `skse` branch (the
 
 ### Choices
 - Presses in the air are still masked: no double jump or glide yet.
+
+## 2026-10-08: double jump and glide
+
+### What changed
+- The sim gets the jump button as it is. Until now a press only counted if it began on the
+  ground, and it was cut at the jump's top. Now the sim makes the double jump (a second press)
+  and the glide (holding on) itself.
+- **Out of Skyrim's own fall** (walking off a ledge) the sim is in its fall state already. A
+  double jump or glide there hands the flight to the sim from that frame. Such flights aren't
+  replayed (the replay would start them on the ground).
+- **Fall damage:** a double jump starts the fall height over. While gliding, the fall height
+  follows him down, so a glide lands softly however far it sank. Skyrim's damage still counts any
+  plain fall after it.
+- **Behaviour graph:** each double jump sends the takeoff event again (it restarts the clip).
+  `JumpFall` goes at each top, then alternates with `JumpFallDirectional` every 4 s: MT_JumpFall
+  plays once and lands the graph by itself at 5.2 s, and the same event twice does nothing. The
+  landing event matches the fall state (`JumpLandDirectional` after the directional one).
+- A landing and a new jump in the same step: the landing is reported first, then the new
+  takeoff. Before, the takeoff came first and would have saved the controller's zeroed gravity
+  as its own.
+
+### What the sim does at Dragonborn scale (owner's configs, flat floor, 1/100 s)
+Probed offline through `ratchet.dll` before writing the tests:
+- a 0.3 s press, then again at 0.40 s for 0.1 s: double jump at 0.42 s (2.41 m up, 13.1 m/s),
+  peak **4.340 m** at 0.72 s, landing at 1.17 s;
+- held on from 0.40 s: glide from 0.93 s (3.39 m up, falling at 8.8 m/s, which becomes its
+  sink-speed limit), landing at 1.31 s;
+- with the stick forward the glide carries him 11.9 m, too far for the room the test can count
+  on, so the glide case is standing;
+- holding the first press on (2 s) never glides: coming down, he's never 2 m above the floor
+  (the glide's minimum) after its no-glide time.
+
+### Tests: 8/8 pass in Whiterun
+- New cases: "double jump" (0.3 s, again at 0.4 s for 0.1 s) and "glide" (again at 0.4 s, held
+  to the landing). Air time is checked now too (within 0.03 s).
+
+  | case | apex, m (replay) | apex time, s (replay) | air time, s (replay) |
+  |---|---|---|---|
+  | double jump | 4.340 (4.340) | 0.726 (0.716) | 1.186 (1.176) |
+  | glide | 4.340 (4.340) | 0.726 (0.718) | 1.332 (1.323) |
+
+- The six earlier cases still pass with the button unmasked (full hold now held 0.5 s through
+  its top: 2.325 m, the same).
+- Screenshots show his double-jump clip at the second takeoff and the glide clip starting.

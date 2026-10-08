@@ -35,18 +35,19 @@ namespace Jump
 			float apexTime = 0.0f;
 			float held = 0.0f;      // how long the button was held from the takeoff
 			bool  released = false;
+			bool  fromGround = true;  // a jump from the ground (not a double jump or glide out of Skyrim's fall)
 		};
 
 		struct Host
 		{
 			RatchetSim*       sim = nullptr;
-			bool              ours = false;           // in a jump we launched: we set his vertical speed
-			bool              pressOnGround = false;  // this press began on the ground (presses in the air are masked: jump only)
-			bool              prevHeld = false;
+			bool              ours = false;           // in the sim's flight: we set his velocity
 			RatchetStepResult last{};                 // the sim's last step
 			float             lastDt = 0.0f;
 			float             lastZ = 0.0f;           // his height when the sim last stepped, game units
 			bool              falling = false;        // past the apex (JumpFall sent)
+			float             fallEventAge = 0.0f;    // since the last fall event to the behaviour graph
+			bool              fallDirectional = false;  // the last one was JumpFallDirectional
 			float             savedGravity = 1.0f;    // the controller's own gravity, set to 0 while ours
 			float             savedAcrobatics = 1.0f; // its air control, 0 while ours
 			Measure           m;
@@ -183,9 +184,31 @@ namespace Jump
 			}
 		}
 
-		void Launch(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl, const RatchetVec3& a_velocity)
+		// The behaviour graph's fall state: MT_JumpFall plays once and sends its own JumpLand at
+		// 5.23 s, which would land the Dragonborn's graph mid-air on a long glide. Sending the
+		// other fall event of the pair restarts it (the same one again does nothing).
+		void Fall(RE::PlayerCharacter* a_player)
 		{
-			const bool moving = Moving(a_ctrl);
+			g.falling = true;
+			g.fallEventAge = 0.0f;
+			g.fallDirectional = false;
+			Animate(a_player, "JumpFall");
+		}
+
+		void KeepFalling(RE::PlayerCharacter* a_player, float a_dt)
+		{
+			g.fallEventAge += a_dt;
+			if (g.falling && g.fallEventAge > 4.0f) {
+				g.fallEventAge = 0.0f;
+				g.fallDirectional = !g.fallDirectional;
+				Animate(a_player, g.fallDirectional ? "JumpFallDirectional" : "JumpFall");
+			}
+		}
+
+		// The sim's flight starts: a jump from the ground, or a double jump or glide out of a fall
+		// Skyrim started (off a ledge). a_event goes to the behaviour graph.
+		void Launch(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl, const RatchetVec3& a_velocity, bool a_fromGround, const char* a_event)
+		{
 			g.ours = true;
 			g.falling = false;
 			g.savedGravity = a_ctrl->gravity;
@@ -200,36 +223,55 @@ namespace Jump
 			SetVelocity(a_ctrl, a_velocity);
 			a_ctrl->fallStartHeight = a_player->GetPositionZ();
 			a_ctrl->fallTime = 0.0f;
-			Animate(a_player, moving ? "JumpDirectionalStart" : "JumpStandingStart");
+			if (a_event == std::string_view("JumpFall")) {
+				Fall(a_player);
+			} else {
+				Animate(a_player, a_event);
+			}
 
 			g.m = {};
+			g.m.fromGround = a_fromGround;
 			g.ticks.clear();
 			g.m.takeoff = a_player->GetPosition();
 			g.m.takeoffZ = a_player->GetPositionZ();
 			g.m.apexZ = g.m.takeoffZ;
 		}
 
+		const char* TakeoffEvent(const RE::bhkCharacterController* a_ctrl)
+		{
+			return Moving(a_ctrl) ? "JumpDirectionalStart" : "JumpStandingStart";
+		}
+
 		void Land(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl)
 		{
-			Animate(a_player, "JumpLand");
+			// The landing that goes with the fall state the graph is in.
+			Animate(a_player, g.falling && g.fallDirectional ? "JumpLandDirectional" : "JumpLand");
 			EndOurs(a_ctrl);
 		}
 
 		void ReportLanding(const RE::NiPoint3& a_land)
 		{
 			const float k = 1.0f / UnitsPerMetre();
+			const float landDz = (a_land.z - g.m.takeoffZ) * k;
+			const float dx = a_land.x - g.m.takeoff.x, dy = a_land.y - g.m.takeoff.y;
+			const float distance = std::sqrt(dx * dx + dy * dy) * k;
+			if (!g.m.fromGround) {
+				// Out of Skyrim's fall: a replay would start it on the ground, so there's none.
+				if (Settings::Get().logJumps) {
+					SKSE::log::info("jump: out of a fall, {:.2f} m across, landed {:+.3f} m after {:.3f} s", distance, landDz, g.m.time);
+				}
+				return;
+			}
 			// The sandbox's jump for exactly these frames (time steps, button, stick) on a flat floor,
 			// landing as high as he did.
-			const float landDz = (a_land.z - g.m.takeoffZ) * k;
 			const auto sandbox = Ratchet::ReplayFlat(g.ticks, g.startVelocity, landDz);
-			const float dx = a_land.x - g.m.takeoff.x, dy = a_land.y - g.m.takeoff.y;
 			const AutoTest::Jump jump{
 				.apex = (g.m.apexZ - g.m.takeoffZ) * k,
 				.apexTime = g.m.apexTime,
 				.hold = g.m.released ? g.m.held : 1.0f,
 				.landDz = landDz,
 				.airTime = g.m.time,
-				.distance = std::sqrt(dx * dx + dy * dy) * k,
+				.distance = distance,
 				.sandboxApex = sandbox.apex,
 				.sandboxApexTime = sandbox.apexTime,
 				.sandboxAirTime = sandbox.airTime,
@@ -256,22 +298,14 @@ namespace Jump
 				}
 				EndOurs(ctrl);
 				ratchet_reset(g.sim);
-				g.prevHeld = false;
 				return;
 			}
 
 			const float z = a_player->GetPositionZ();
 			const bool grounded = Grounded(ctrl);
-			const bool held = AutoTest::JumpButton(a_dt, grounded, g.ours) || Input::JumpHeld();
-			if (held && !g.prevHeld) {
-				g.pressOnGround = grounded && !g.ours;
-			}
-			g.prevHeld = held;
-
-			// Jump only: the sim sees the press that started on the ground until the jump turns
-			// down (so no double jump, and no glide from holding on).
+			// The button as it is: the sim makes the jump, the double jump and the glide of it.
 			RatchetInput in{};
-			in.jump = held && g.pressOnGround && !(g.ours && g.last.velocity.y <= 0.0f) ? 1 : 0;
+			in.jump = AutoTest::JumpButton(a_dt, grounded, g.ours) || Input::JumpHeld() ? 1 : 0;
 			// The stick, turned by the camera: Rift Apart's controls are camera-relative.
 			const View view = CameraView();
 			const RE::NiPoint2 stick = Input::MoveStick();
@@ -313,24 +347,44 @@ namespace Jump
 
 			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(a_player->GetPosition()));
 
+			// The flight ended (a new jump can start in the same step).
+			if (g.ours && (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND)) {
+				ReportLanding(a_player->GetPosition());
+				Land(a_player, ctrl);
+			}
 			if (r.events & RATCHET_EVENT_JUMPED) {
 				g.startVelocity = ControllerVelocity(ctrl);
-				Launch(a_player, ctrl, r.velocity);
+				Launch(a_player, ctrl, r.velocity, true, TakeoffEvent(ctrl));
 				AutoTest::OnTakeoff();
+			} else if (!g.ours && r.state != RATCHET_STATE_GROUND && r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED)) {
+				// Out of a fall Skyrim started (off a ledge): the sim's from here.
+				g.startVelocity = ControllerVelocity(ctrl);
+				Launch(a_player, ctrl, r.velocity, false, r.events & RATCHET_EVENT_DOUBLE_JUMPED ? TakeoffEvent(ctrl) : "JumpFall");
 			} else if (g.ours) {
-				if (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND) {
-					ReportLanding(a_player->GetPosition());
-					Land(a_player, ctrl);
-				} else {
-					// The whole velocity is the sim's in the air: up and across.
-					SetVelocity(ctrl, r.velocity);
-					TrackFallStart(a_player, ctrl);
-					if (!g.falling && r.velocity.y <= 0.0f) {
-						g.falling = true;
-						Animate(a_player, "JumpFall");
-						AutoTest::OnApex();
-					}
+				if (r.events & RATCHET_EVENT_DOUBLE_JUMPED) {
+					// The takeoff animation again, and falls count from this jump on.
+					g.falling = false;
+					Animate(a_player, TakeoffEvent(ctrl));
+					ctrl->fallStartHeight = z;
+					ctrl->fallTime = 0.0f;
+					AutoTest::OnMove("double_jump");
 				}
+				if (r.events & RATCHET_EVENT_GLIDE_STARTED) {
+					AutoTest::OnMove("glide");
+				}
+				// The whole velocity is the sim's in the air: up and across.
+				SetVelocity(ctrl, r.velocity);
+				if (r.state == RATCHET_STATE_GLIDE) {
+					// A glide comes down softly: the height it sinks doesn't count as a fall.
+					ctrl->fallStartHeight = z;
+					ctrl->fallTime = 0.0f;
+				}
+				TrackFallStart(a_player, ctrl);
+				if (!g.falling && r.velocity.y <= 0.0f) {
+					Fall(a_player);
+					AutoTest::OnMove("apex");
+				}
+				KeepFalling(a_player, a_dt);
 			}
 
 			if (g.ours) {
@@ -432,8 +486,6 @@ namespace Jump
 		}
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		EndOurs(player ? player->GetCharController() : nullptr);
-		g.prevHeld = false;
-		g.pressOnGround = false;
 		g.last = {};
 	}
 }

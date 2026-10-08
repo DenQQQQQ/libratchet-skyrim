@@ -13,13 +13,15 @@ repository is unchanged.
   `SKSE\Plugins\RatchetMovement\` and checks the C API version.
 - **Ratchet is the player:** his model, textures and move clips replace the Dragonborn in third
   person, converted from the owner's extraction (see [Ratchet's model](#ratchets-model)).
-- **The jump, with air control.** Skyrim's jump is switched off and libratchet's single jump (the
-  press and the hold) drives the player: up and down, and across with the stick (camera-relative,
-  as in Rift Apart). Double jumps, glides and dashes are masked off: a press in the air does
-  nothing. On the ground Skyrim still moves him.
-- In game the jumps match the sandbox replaying the same frames: a full hold peaks at 2.325 m at
-  Dragonborn scale (1.55) in both, shorter holds within 0.01 m, a running jump lands within
-  0.11 m (one frame) of the replay (see [MODLOG.md](MODLOG.md)).
+- **Jump, double jump and glide, with air control.** Skyrim's jump is switched off. libratchet
+  gets the jump button as it is and drives the player in the air: the jump (the press and the
+  hold), a second press for the double jump, holding on for the glide, and across with the stick
+  (camera-relative, as in Rift Apart). A double jump or a glide also works out of a fall off a
+  ledge. On the ground Skyrim still moves him. Dashes aren't in yet.
+- In game the moves match the sandbox replaying the same frames: a full hold peaks at 2.325 m at
+  Dragonborn scale (1.55) in both, shorter holds within 0.01 m, the double jump at 4.340 m in
+  both, and every landing within one frame of the replay (see [MODLOG.md](MODLOG.md)).
+- A glide comes down softly: the height it sinks doesn't count toward fall damage.
 
 ## Build
 Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, and vcpkg (`VCPKG_ROOT`, or
@@ -80,18 +82,20 @@ selected, and follows the log.
 - From the main menu the plugin loads the most recent save, then runs `coc Whiterun` (`-Start`
   for another place; `-Start "coc qasmoke"` is flat but too small for the running jump). No save
   is written, and timed autosaves are off for the run (in memory only).
-- It jumps by itself: a tap, 0.1 s, 0.15 s and a full hold, a standing jump steered forward, and
-  a running jump. Before each one he's moved back to the start, facing the heading with the most
-  room.
+- It jumps by itself: a tap, 0.1 s, 0.15 s and a full hold, a standing jump steered forward, a
+  running jump, a double jump and a glide. Before each one he's moved back to the start, facing
+  the heading with the most room.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
-  0.025 s, distance within 0.2 m, no health lost (and back on the floor within 0.05 m in qasmoke).
+  0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor
+  within 0.05 m in qasmoke).
 - Then it quits the game. The exit code is 0 when everything passed, 1 on a failure, 2 on a crash
   (it prints CrashLogger's log), 3 when there's no result, 4 when the game hung (the main thread's
   stack goes to `hang.txt` first, through cdb).
 
 The game runs in a small window in the corner behind other windows; `-Fullscreen` gives it the
-screen. Screenshots (idle, each jump's top, the end) go to `target/skse/shots/<run>/`. Other
+screen. Screenshots (idle, each jump's top, double jump and glide, the end) go to
+`target/skse/shots/<run>/`. Other
 options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his front), `-NoShots`.
 
 ## How it works
@@ -101,9 +105,14 @@ options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his fr
 - **Each frame**, before Skyrim moves the player, the sim steps with the button, the stick,
   whether Skyrim's character controller is on the ground and how far down the ground is (a ray
   from his feet). On the ground Skyrim moves him and the sim starts from his speed across the
-  ground. During the sim's jump its whole velocity goes to the controller
-  (`SetLinearVelocityImpl`), with the controller's own gravity and air control (`acrobatics`)
-  off. Skyrim does the collision. On landing, Skyrim takes over again.
+  ground. From the sim's jump (or a double jump or glide out of Skyrim's own fall) to the landing,
+  its whole velocity goes to the controller (`SetLinearVelocityImpl`), with the controller's own
+  gravity and air control (`acrobatics`) off. Skyrim does the collision. On landing, Skyrim takes
+  over again.
+- **Animations.** With `bRatchet = 1` his own clips play. Skyrim's behaviour graph (the hidden
+  Dragonborn's, or the visible one with `bRatchet = 0`) gets its jump events: a takeoff for each
+  jump and double jump, `JumpFall` at each top (alternated with `JumpFallDirectional` every 4 s,
+  since the vanilla fall lands itself at 5.2 s), and the matching landing (INI `bAnimations`).
 - **Steps aside** when the player is mounted, swimming, in furniture, ragdolled, in a kill move,
   bleeding out or dead.
 - **Units.** libratchet is Y-up metres; Skyrim is Z-up. Havok units are metres (Skyrim's Havok

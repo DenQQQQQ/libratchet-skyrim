@@ -17,7 +17,11 @@ namespace AutoTest
 			float       hold;           // seconds the button is held; 0: one frame
 			float       run = 0.0f;     // seconds of stick forward before the press (a run-up)
 			bool        airStick = false;  // the stick forward in the air too
+			float       again = 0.0f;   // seconds after the first press that it's pressed again (0: not)
+			float       againHold = 0.0f;  // and held (until the landing at most)
 		};
+		// At Dragonborn scale with the owner's configs, a press again at 0.4 s double-jumps at
+		// 0.42 s (peak 4.34 m); held on, he glides from 0.93 s (the sandbox, flat floor).
 		constexpr Case kCases[] = {
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
@@ -25,12 +29,15 @@ namespace AutoTest
 			{ "full hold", 0.5f },
 			{ "standing jump steered forward", 0.5f, 0.0f, true },
 			{ "running jump", 0.5f, 0.8f, true },
+			{ "double jump", 0.3f, 0.0f, false, 0.4f, 0.1f },
+			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
 		// Skyrim moving him (its collision, a frame of lag in reading his height).
 		constexpr float kApexTolerance = 0.03f;      // metres
 		constexpr float kApexTimeTolerance = 0.025f; // seconds
+		constexpr float kAirTimeTolerance = 0.03f;   // seconds
 		// Across the ground: a frame of his speed either way at the landing.
 		constexpr float kDistanceTolerance = 0.2f;   // metres
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
@@ -70,6 +77,7 @@ namespace AutoTest
 			float elapsed = 0.0f;
 			bool  launched = false;
 			bool  landed = false;
+			std::vector<std::string> shotsThisCase;  // moments already shot (a second apex gets "2")
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -256,6 +264,7 @@ namespace AutoTest
 			s.settle = 0.0f;
 			s.launched = false;
 			s.landed = false;
+			s.shotsThisCase.clear();
 			++s.index;
 		}
 
@@ -487,13 +496,15 @@ namespace AutoTest
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
-			SKSE::log::info("autotest: {} (the button held {:.2f} s{})", c.name, c.hold, c.airStick ? ", the stick forward" : "");
+			SKSE::log::info("autotest: {} (the button held {:.2f} s{}{})", c.name, c.hold,
+				c.again > 0.0f ? std::format(", again at {:.2f} s for {:.2f} s", c.again, c.againHold) : "",
+				c.airStick ? ", the stick forward" : "");
 		}
 
 		s.elapsed += a_dt;
-		const bool hold = s.pressed == 0.0f || s.pressed < c.hold;
+		const float t = s.pressed;  // since the first press
 		s.pressed += a_dt;
-		if (hold) {
+		if (t == 0.0f || t < c.hold) {
 			return true;
 		}
 		if (s.landed || (!s.launched && a_grounded && !a_inJump)) {
@@ -501,11 +512,15 @@ namespace AutoTest
 				Fail("didn't take off");
 			}
 			NextCase();
-		} else if (s.elapsed > 5.0f) {
+			return false;
+		}
+		if (s.elapsed > 5.0f) {
 			Fail("hasn't landed after 5 s");
 			NextCase();
+			return false;
 		}
-		return false;
+		// The second press: a double jump, and held on, a glide.
+		return c.again > 0.0f && t >= c.again && t < c.again + c.againHold;
 	}
 
 	void OnTakeoff()
@@ -515,13 +530,19 @@ namespace AutoTest
 		}
 	}
 
-	void OnApex()
+	void OnMove(std::string_view a_what)
 	{
-		if (s.active && !s.done && s.index < static_cast<int>(std::size(kCases))) {
-			std::string name = kCases[s.index].name;
-			std::ranges::replace(name, ' ', '_');
-			TestWindow::Shot(name + "_apex");
+		if (!s.active || s.done || s.index >= static_cast<int>(std::size(kCases))) {
+			return;
 		}
+		std::string what(a_what);
+		if (std::ranges::find(s.shotsThisCase, what) != s.shotsThisCase.end()) {
+			what += "2";
+		}
+		s.shotsThisCase.push_back(what);
+		std::string name = kCases[s.index].name;
+		std::ranges::replace(name, ' ', '_');
+		TestWindow::Shot(name + "_" + what);
 	}
 
 	void OnLanded(const Jump& a_jump)
@@ -538,6 +559,9 @@ namespace AutoTest
 		}
 		if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance) {
 			bad += " apex-time";
+		}
+		if (std::abs(a_jump.airTime - a_jump.sandboxAirTime) > kAirTimeTolerance) {
+			bad += " air-time";
 		}
 		if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {
 			bad += " landing-height";
