@@ -459,6 +459,10 @@ The owner asked for Clank on his back.
 - In game: **he stuck 0.59 m out from the face, 1.24 m up, jumped off, and landed 4.62 m out**,
   0.96 s after the takeoff. Screenshots show him on the wall facing it (Clank toward the camera),
   then flying back off it. **19/19 pass.**
+- The probe's rays hit what his capsule hits, other actors' bodies too. Could he stick to a big
+  creature's side? A case jumps at a bear (EncBear, AI off) 2 m ahead with the stick forward: he
+  landed on its back and never stuck. A body is round, so the probe's two side rays come back at
+  an angle and the three-ray check turns it down. **20/20 pass.**
 - Ledges have no test yet. Rift Apart catches a lip only with at least 3 m of drop below it
   (`GroundClearance.MinHeight`, 0.5 m under the lip) and no more than 3.5 m above where he last
   stood (`RecoveryMaxHeightAboveLastGround`). On flat ground both hold only for a lip exactly

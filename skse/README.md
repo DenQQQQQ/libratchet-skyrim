@@ -115,7 +115,8 @@ selected, and follows the log.
   running jump, a double jump, a glide, a ground dash and an air dash. Before each one he's moved
   back to the start, facing the heading with the most room.
 - A wall jump: a wall piece is placed across his way 2 m ahead. He has to stick to it, jump off
-  it on a new press, and land at least a metre further out than where he stuck.
+  it on a new press, and land at least a metre further out than where he stuck. Last, a jump at a
+  bear: he mustn't take its body for a wall.
 - Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
   Hyper-Strike, the pistol from the hip and aimed, and a wrench throw. Each passes if the cow lost
   at least the expected damage (× the save's difficulty multiplier) from enough hits.

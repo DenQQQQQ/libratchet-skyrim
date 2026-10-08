@@ -43,6 +43,8 @@ namespace AutoTest
 			// and land away from it.
 			float       wallAt = 0.0f;
 			float       wallJumpAfter = 0.3f;
+			// A jump at the target: he mustn't take its body for a wall.
+			bool        noWall = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -69,11 +71,13 @@ namespace AutoTest
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
-			// Last: a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
+			// Then a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
 			// owner: hits raised no hostility until a kill).
 			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },
 			// And a Whiterun guard (GuardWhiterunImperialExterior): hitting him is an assault.
 			{ .name = "hitting a guard is a crime", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 0.0f, .minHits = 1, .awake = true, .target = 0x001000EC, .crime = true },
+			// A full jump at a bear (EncBear, its AI off) 2 m ahead: a big body, but no wall.
+			{ .name = "no wall on a bear", .hold = 0.5f, .airStick = true, .targetAt = 2.0f, .target = 0x00023A8A, .noWall = true },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -140,6 +144,7 @@ namespace AutoTest
 			float                       wallPress = 0.0f;  // seconds the jump off it has been held
 			std::optional<RE::NiPoint3> stuckAt;
 			bool                        wallJumped = false;
+			bool                        stuckSeen = false;  // on a wall at all during this case
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -344,6 +349,7 @@ namespace AutoTest
 			s.wallPress = 0.0f;
 			s.stuckAt.reset();
 			s.wallJumped = false;
+			s.stuckSeen = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -805,6 +811,7 @@ namespace AutoTest
 		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
 		s.heliSeen = s.heliSeen || Clank::HeliOut();
+		s.stuckSeen = s.stuckSeen || a_state == RATCHET_STATE_WALL_STICK;
 		// Once the heli-pack is all the way out (the glide's own clip), a picture of it.
 		if (Clank::CurrentClip() == "glide" && std::ranges::find(s.shotsThisCase, "heli") == s.shotsThisCase.end()) {
 			OnMove("heli");
@@ -907,6 +914,16 @@ namespace AutoTest
 		}
 		if (kCases[s.index].wallAt > 0.0f) {
 			JudgeWall(kCases[s.index], a_jump);
+			return;
+		}
+		if (kCases[s.index].noWall) {
+			if (s.stuckSeen) {
+				++s.failed;
+			} else {
+				++s.passed;
+			}
+			SKSE::log::info("autotest: {} {}: {}, landed {:.2f} m across after {:.3f} s", s.stuckSeen ? "FAIL" : "PASS", kCases[s.index].name,
+				s.stuckSeen ? "he stuck to its body as to a wall" : "no wall stick", a_jump.distance, a_jump.airTime);
 			return;
 		}
 		if (!a_jump.replayed) {
