@@ -28,6 +28,21 @@ mods work and need checking against CommonLibSSE-NG before relying on them.
 3. **Config**: an INI next to the DLL: key bindings, scale (default 1.55, "Dragonborn-sized"),
    path to the extracted Rift Apart configs (`riftapart-configs/`), on/off toggle.
 
+## What the plugin tells the sim (added since this plan was written)
+- **Each tick**, besides the stick, buttons and ground: the camera's forward and right (wall
+  jumps take their side from it; the Swingshot picks targets in its view and pumps along it),
+  the wall the last move ran into (its normal, and whether it takes wall jumps), and during wall
+  jumps whether a floor is ahead (`landing_ahead`). Buttons now include crouch (lets go of a
+  ledge) and the Swingshot.
+- **The level, through `ratchet_set_world`:**
+  - **Rays.** Catching a ledge needs them, and they're all Skyrim can offer for ledges: it has no
+    placed ledge paths, so only lips he catches on the way down.
+  - **Placed ledges and Swingshot targets.** Skyrim has neither. Targets would have to be placed
+    by the plugin (markers, or anchor points it picks out), which is a design question for later.
+  - **Walls.** Skyrim has no marked wall-jump walls either, so every wall is a plain wall (one
+    wall jump per jump) unless the plugin marks some.
+- **Paused frames** can pass a tick of 0 s; the sim ignores it.
+
 ## Build tooling needed (not installed yet; needs the owner's OK)
 - vcpkg (git clone + bootstrap) for CommonLibSSE-NG and its dependencies.
 - CMake (installed) + Ninja (ships with VS Build Tools) + MSVC 14.44 (installed at
