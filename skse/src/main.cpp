@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 #include "Jump.h"
+#include "Model.h"
 #include "RatchetDll.h"
 #include "Settings.h"
 
@@ -53,6 +54,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 		return true;  // logged; the game runs on without us
 	}
 	AutoTest::Load(dir);
+	if (Model::Load(dir)) {
+		SKSE::log::info("ratchet model: on");
+	}
 	const auto& e = Ratchet::Expected();
 	SKSE::log::info("sandbox numbers at scale {}: tap apex {:.3f} m at {:.3f} s, full-hold apex {:.3f} m at {:.3f} s, air time {:.3f} s",
 		settings.scale, e.tapApex, e.tapTime, e.fullApex, e.fullTime, e.fullAirTime);

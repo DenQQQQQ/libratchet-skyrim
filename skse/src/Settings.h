@@ -12,6 +12,8 @@ struct Settings
 	std::string configsDir = "RatchetMovement";
 	// Skyrim's own jump animations (start, fall, land) on the sim's jumps.
 	bool animations = true;
+	// Ratchet's own model and clips instead of the Dragonborn (needs the converted files).
+	bool ratchetModel = true;
 	// One log line per jump (takeoff, apex, landing) and its expected numbers.
 	bool logJumps = true;
 	// Per-frame trace while a jump is active (big logs).

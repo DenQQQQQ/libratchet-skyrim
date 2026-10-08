@@ -61,15 +61,19 @@ if ($Install) {
     $ini = Join-Path $dest "RatchetMovement.ini"
     if (-not (Test-Path $ini)) { Copy-Item (Join-Path $stage "RatchetMovement.ini") $ini }
 
-    # The owner's extracted Rift Apart configs (game data: local only), for the same tuning as the
-    # sandbox. From this checkout, else from the main checkout when building in a worktree.
-    if (-not $ConfigsDir) {
-        $ConfigsDir = Join-Path $here "..\riftapart-configs"
-        if (-not (Test-Path $ConfigsDir)) {
+    # Game data extracted from the owner's own Rift Apart install (local only, gitignored): from
+    # this checkout, else from the main checkout when building in a worktree.
+    function Find-GameData([string]$name) {
+        $dir = Join-Path $here "..\$name"
+        if (-not (Test-Path $dir)) {
             $common = git -C $here rev-parse --path-format=absolute --git-common-dir
-            $ConfigsDir = Join-Path (Split-Path $common) "riftapart-configs"
+            $dir = Join-Path (Split-Path $common) $name
         }
+        return $dir
     }
+
+    # The configs, for the same tuning as the sandbox.
+    if (-not $ConfigsDir) { $ConfigsDir = Find-GameData "riftapart-configs" }
     if (Test-Path $ConfigsDir) {
         $cfgDest = Join-Path $dest "RatchetMovement"
         New-Item -ItemType Directory -Force $cfgDest | Out-Null
@@ -77,6 +81,34 @@ if ($Install) {
         Write-Host "Configs from $ConfigsDir"
     } else {
         Write-Warning "No riftapart-configs found: the plugin will use libratchet's built-in tuning"
+    }
+
+    # Ratchet's model, textures and clips (skse\tools\ratchet_to_skyrim.py), converted again when
+    # the extracted model or the tools are newer than the last conversion.
+    $glb = Join-Path (Find-GameData "riftapart-assets") "ratchet.glb"
+    $converted = Join-Path $here "..\target\skse\ratchet"
+    $nif = Join-Path $converted "meshes\RatchetMovement\ratchet.nif"
+    if (Test-Path $glb) {
+        $tools = Join-Path $here "tools"
+        $stale = -not (Test-Path $nif)
+        if (-not $stale) {
+            $made = (Get-Item $nif).LastWriteTime
+            $stale = (Get-Item $glb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0
+        }
+        if ($stale) {
+            Write-Host "Converting Ratchet from $glb..."
+            uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $glb --out $converted | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "converting Ratchet failed" }
+        }
+        # No stale files from an older conversion.
+        foreach ($old in "meshes\RatchetMovement", "textures\RatchetMovement") {
+            $p = Join-Path $ModDir $old
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+        }
+        Copy-Item -Recurse -Force (Join-Path $converted "*") $ModDir
+        Write-Host "Ratchet's model from $converted"
+    } else {
+        Write-Warning "No riftapart-assets\ratchet.glb: no Ratchet model (tools\extract_riftapart_ratchet.py makes it)"
     }
     Write-Host "Installed to $dest"
 }

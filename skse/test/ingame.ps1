@@ -14,6 +14,15 @@ param(
     # Console command run from the main menu, or "load" for the most recent save.
     [string]$Start = "coc qasmoke",
     [int]$TimeoutSec = 300,
+    # Seconds he stands still after the last jump before the game quits (time for screenshots).
+    [int]$HoldEnd = 0,
+    # Steps first that find what hangs the renderer (third person alone, Ratchet hidden, each of
+    # his shapes alone, a camera switch), each logged as it starts.
+    [switch]$Diagnose,
+    # Skyrim's own window (as the profile sets it, full screen) instead of a small one in the
+    # corner behind the other windows.
+    [switch]$Fullscreen,
+    [switch]$NoShots,
     [string]$Mo2 = "G:\Modding\MO2",
     [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
     [string]$Executable = "SKSE"
@@ -31,7 +40,12 @@ $sksedir = Join-Path $docs "My Games\Skyrim Special Edition\SKSE"
 $log = Join-Path $sksedir "RatchetMovement.log"
 $trigger = Join-Path $ModDir "SKSE\Plugins\RatchetMovement\autotest.ini"
 $flat = if ($Start -eq "load") { 0 } else { 1 }
-[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`n")
+# The plugin's screenshots of this run (idle, each jump's top, the end).
+$shots = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path ("target\skse\shots\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Force $shots | Out-Null
+[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`nfHoldEnd=$HoldEnd`r`nsShots=$shots`r`nbDiagnose=$([int][bool]$Diagnose)`r`nbCorner=$([int](-not $Fullscreen))`r`nbShots=$([int](-not $NoShots))`r`n")
+$TimeoutSec += $HoldEnd
+$cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
 
 $launched = Get-Date
 $result = $null
@@ -48,10 +62,28 @@ try {
     Write-Host "Skyrim is running (pid $($proc.Id))"
 
     $shown = 0
+    $stuckSince = $null
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 300
+        # Hung (its window stops answering): the main thread's stack, then stop it.
+        $proc.Refresh()
+        if (-not $proc.HasExited -and -not $proc.Responding) {
+            if (-not $stuckSince) { $stuckSince = Get-Date }
+            if (((Get-Date) - $stuckSince).TotalSeconds -gt 15) {
+                Write-Host "HANG: Skyrim stopped responding"
+                if (Test-Path $cdb) {
+                    & $cdb -pv -p $proc.Id -c "~0 k 40; q" 2>&1 | Out-File (Join-Path $shots "hang.txt")
+                    Write-Host "  main thread's stack in $(Join-Path $shots 'hang.txt')"
+                }
+                Stop-Process -Id $proc.Id -Force
+                $result = @{ passed = 0; failed = 1; hang = $true }
+                break
+            }
+        } else {
+            $stuckSince = $null
+        }
         if ((Test-Path $log) -and (Get-Item $log).LastWriteTime -gt $launched) {
-            $lines = @(Get-Content $log | Where-Object { $_ -match "autotest:|critical|\[E\]" })
+            $lines = @(Get-Content $log | Where-Object { $_ -match "autotest:|ratchet model|critical|\[E\]" })
             for (; $shown -lt $lines.Count; $shown++) { Write-Host ($lines[$shown] -replace '^(\[[^\]]*\] ){3}', '') }
             $done = $lines | Where-Object { $_ -match "autotest: done, (\d+) passed, (\d+) failed" } | Select-Object -First 1
             if ($done) {
@@ -79,6 +111,9 @@ if ($crash) {
     exit 2
 }
 if (-not $result) { exit 3 }
+$pngs = @(Get-ChildItem $shots -Filter *.png -ErrorAction SilentlyContinue)
+if ($pngs.Count) { Write-Host "Screenshots: $shots ($($pngs.Count))" }
+if ($result.hang) { exit 4 }
 Write-Host ("Result: {0} passed, {1} failed" -f $result.passed, $result.failed)
 if ($result.failed -gt 0) { exit 1 }
 exit 0

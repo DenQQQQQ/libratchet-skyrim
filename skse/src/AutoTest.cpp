@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Model.h"
 #include "RatchetDll.h"
+#include "TestWindow.h"
 
 namespace AutoTest
 {
@@ -33,6 +35,17 @@ namespace AutoTest
 			std::string start = "coc qasmoke";  // console command from the main menu, or "load"
 			bool        flatGround = true;      // the landing must come back to the takeoff height
 			bool        quit = true;
+			float       holdEnd = 0.0f;         // seconds stood still after the last jump (for screenshots)
+			float       held = 0.0f;
+			bool        thirdPerson = false;    // the camera was put behind him
+			bool        shots = true;           // screenshots (bShots)
+
+			// bDiagnose: steps before the jumps that find what hangs the renderer, each logged
+			// as it starts (the last one logged is the one that hung).
+			bool        diagnose = false;
+			int         phase = 0;
+			float       phaseTime = 0.0f;
+			int         shapeCount = 0;
 
 			int   index = 0;
 			float settle = 0.0f;
@@ -80,6 +93,88 @@ namespace AutoTest
 			if (now < s.healthBefore - 0.01f) {
 				++s.failed;
 				SKSE::log::info("autotest: FAIL {}: the landing cost health ({:.1f} -> {:.1f})", kCases[a_case].name, s.healthBefore, now);
+			}
+		}
+
+		void Phase(int a_next, std::string_view a_what)
+		{
+			s.phase = a_next;
+			s.phaseTime = 0.0f;
+			SKSE::log::info("autotest: phase {}: {}", a_next, a_what);
+		}
+
+		// One diagnostic step per frame; false once they're all done.
+		bool Diagnose(float a_dt, bool a_grounded)
+		{
+			if (!s.diagnose) {
+				return false;
+			}
+			s.phaseTime += a_dt;
+			auto* camera = RE::PlayerCamera::GetSingleton();
+			const int shapesFrom = 10;
+			switch (s.phase) {
+			case 0:
+				if (a_grounded && s.phaseTime > 1.5f) {
+					if (camera) {
+						camera->ForceThirdPerson();
+					}
+					Phase(1, "third person, no Ratchet yet");
+				}
+				return true;
+			case 1:
+				if (s.phaseTime > 2.0f) {
+					Model::SetAttachAllowed(true);
+					Model::ShowShapes(-2);
+					Phase(2, "Ratchet attached, every shape hidden");
+				}
+				return true;
+			case 2:
+				if (s.phaseTime > 1.5f) {
+					const auto names = Model::ShapeNames();
+					s.shapeCount = static_cast<int>(names.size());
+					if (s.shapeCount == 0) {
+						Phase(50, "no shapes found");
+					} else {
+						Model::ShowShapes(0);
+						Phase(shapesFrom, std::format("only shape 0 ({})", names[0]));
+					}
+				}
+				return true;
+			case 50:
+				if (s.phaseTime > 2.0f) {
+					if (camera) {
+						camera->ForceFirstPerson();
+					}
+					Phase(51, "first person");
+				}
+				return true;
+			case 51:
+				if (s.phaseTime > 1.0f) {
+					if (camera) {
+						camera->ForceThirdPerson();
+					}
+					Phase(52, "back to third person");
+				}
+				return true;
+			case 52:
+				if (s.phaseTime > 2.0f) {
+					s.diagnose = false;
+					SKSE::log::info("autotest: diagnosis done");
+				}
+				return true;
+			default:
+				if (s.phase >= shapesFrom && s.phase < shapesFrom + s.shapeCount && s.phaseTime > 0.7f) {
+					const int next = s.phase - shapesFrom + 1;
+					if (next < s.shapeCount) {
+						Model::ShowShapes(next);
+						Phase(shapesFrom + next, std::format("only shape {} ({})", next, Model::ShapeNames()[next]));
+					} else {
+						Model::ShowShapes(-1);
+						TestWindow::Shot("all_shapes");
+						Phase(50, "all shapes");
+					}
+				}
+				return true;
 			}
 		}
 
@@ -169,6 +264,21 @@ namespace AutoTest
 		}
 		s.flatGround = GetPrivateProfileIntW(L"AutoTest", L"bFlatGround", 1, trigger.c_str()) != 0;
 		s.quit = GetPrivateProfileIntW(L"AutoTest", L"bQuit", 1, trigger.c_str()) != 0;
+		GetPrivateProfileStringW(L"AutoTest", L"fHoldEnd", L"0", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
+		s.holdEnd = std::max(0.0f, std::wcstof(buf, nullptr));
+		s.diagnose = GetPrivateProfileIntW(L"AutoTest", L"bDiagnose", 0, trigger.c_str()) != 0;
+		if (s.diagnose) {
+			Model::SetAttachAllowed(false);
+		}
+		// Screenshots go where the runner says (default: next to the SKSE logs).
+		GetPrivateProfileStringW(L"AutoTest", L"sShots", L"", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
+		std::filesystem::path shots = buf;
+		if (shots.empty()) {
+			shots = SKSE::log::log_directory().value_or(a_pluginDir) / L"RatchetMovement_shots";
+		}
+		TestWindow::SetFolder(shots);
+		s.shots = GetPrivateProfileIntW(L"AutoTest", L"bShots", 1, trigger.c_str()) != 0;
+		TestWindow::Install(GetPrivateProfileIntW(L"AutoTest", L"bCorner", 1, trigger.c_str()) != 0);
 		// One run per trigger: the next start is a normal game.
 		std::filesystem::remove(trigger, ec);
 		s.active = true;
@@ -187,6 +297,7 @@ namespace AutoTest
 		// The bSaveOn* switches aren't in either INI collection; `coc` from the main menu saves
 		// nothing anyway (checked: no new save after a run).
 		SetPref("fAutosaveEveryXMins:SaveGame", false, 1.0e6f, true);
+		TestWindow::OnDataLoaded(s.shots);
 		static MainMenuSink sink;
 		RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
 	}
@@ -196,8 +307,12 @@ namespace AutoTest
 		if (!s.active || s.done) {
 			return false;
 		}
+		TestWindow::Keep();
+		if (Diagnose(a_dt, a_grounded && !a_inJump)) {
+			return false;
+		}
 		s.total += a_dt;
-		if (s.total > kTimeout) {
+		if (s.total > kTimeout + s.holdEnd) {
 			Fail(std::format("the run took over {:.0f} s", kTimeout));
 			Finish();
 			return false;
@@ -205,9 +320,16 @@ namespace AutoTest
 		if (s.index >= static_cast<int>(std::size(kCases))) {
 			// Stand still a moment, so the last landing's damage (if any) has been dealt.
 			s.settle = a_grounded && !a_inJump ? s.settle + a_dt : 0.0f;
-			if (s.settle >= kSettle) {
+			if (s.settle >= kSettle && s.held == 0.0f) {
 				CheckHealthAfter(s.index - 1);
-				Finish();
+				TestWindow::Shot("end");
+				SKSE::log::info("autotest: holding {:.0f} s", s.holdEnd);
+			}
+			if (s.settle >= kSettle) {
+				s.held += a_dt;
+				if (s.held >= s.holdEnd) {
+					Finish();
+				}
 			}
 			return false;
 		}
@@ -215,8 +337,19 @@ namespace AutoTest
 
 		if (s.pressed < 0.0f) {
 			s.settle = a_grounded && !a_inJump ? s.settle + a_dt : 0.0f;
+			// The camera behind him (coc starts in first person, where his model isn't drawn).
+			if (!s.thirdPerson && s.settle > 0.0f) {
+				s.thirdPerson = true;
+				if (auto* camera = RE::PlayerCamera::GetSingleton()) {
+					camera->ForceThirdPerson();
+					SKSE::log::info("autotest: third person");
+				}
+			}
 			if (s.settle < kSettle) {
 				return false;
+			}
+			if (s.index == 0) {
+				TestWindow::Shot("idle");
 			}
 			if (s.index > 0) {
 				CheckHealthAfter(s.index - 1);
@@ -249,6 +382,15 @@ namespace AutoTest
 	{
 		if (s.active) {
 			s.launched = true;
+		}
+	}
+
+	void OnApex()
+	{
+		if (s.active && !s.done && s.index < static_cast<int>(std::size(kCases))) {
+			std::string name = kCases[s.index].name;
+			std::ranges::replace(name, ' ', '_');
+			TestWindow::Shot(name + "_apex");
 		}
 	}
 

@@ -3,6 +3,7 @@
 
 #include "AutoTest.h"
 #include "Input.h"
+#include "Model.h"
 #include "RatchetDll.h"
 #include "Settings.h"
 
@@ -244,6 +245,7 @@ namespace Jump
 					if (!g.falling && r.velocity.y <= 0.0f) {
 						g.falling = true;
 						Animate(a_player, "JumpFall");
+						AutoTest::OnApex();
 					}
 				}
 			}
@@ -306,11 +308,18 @@ namespace Jump
 			static void Update(RE::PlayerCharacter* a_this, float a_delta)
 			{
 				const float dt = std::clamp(a_delta, 0.0f, 0.1f);
-				if (dt > 0.0f && !RE::UI::GetSingleton()->GameIsPaused()) {
+				const bool running = dt > 0.0f && !RE::UI::GetSingleton()->GameIsPaused();
+				if (running) {
 					Step(a_this, dt);
 				}
 				_Update(a_this, a_delta);
 				Observe(a_this);
+				if (running) {
+					// Ratchet's pose follows the move Skyrim has just made.
+					const auto* ctrl = a_this->GetCharController();
+					Model::Update(a_this, dt, { .simJump = g.ours, .simState = g.last.state, .events = g.last.events,
+												  .grounded = !ctrl || Grounded(ctrl) });
+				}
 			}
 			static inline REL::Relocation<decltype(Update)> _Update;
 		};

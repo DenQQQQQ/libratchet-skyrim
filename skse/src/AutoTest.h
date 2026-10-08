@@ -27,6 +27,8 @@ namespace AutoTest
 		float airTime;
 	};
 	void OnTakeoff();
+	// The jump turned down (a screenshot of the pose at its top).
+	void OnApex();
 	void OnLanded(const Jump& a_jump);
 	// The jump code gave the player back to Skyrim in the air (he died, was ragdolled...).
 	void OnHandedBack(const char* a_why);

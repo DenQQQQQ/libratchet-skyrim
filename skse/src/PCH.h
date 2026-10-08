@@ -15,6 +15,8 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
