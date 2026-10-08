@@ -57,6 +57,9 @@ pub struct RatchetContact {
     /// 1 inside one of the level's wall-jump zones (where the game's designers placed
     /// wall-jump stretches): wall jumps keep their line there.
     pub wall_jump_zone: u8,
+    /// 1 if sweeping his flight path from here (his velocity, `gravity` from the last step
+    /// down) meets a floor before a wall; only needed during wall jumps (state 11).
+    pub landing_ahead: u8,
 }
 
 pub const RATCHET_EVENT_JUMPED: u32 = 1 << 0;
@@ -95,6 +98,8 @@ pub struct RatchetStepResult {
     pub melee_swing: u32,
     /// On a wall or in a wall jump: 1 if the game's right wall clips fit, 0 for the left.
     pub wall_right: u8,
+    /// His current jump's pull down (m/s²), for `RatchetContact::landing_ahead`.
+    pub gravity: f32,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -216,6 +221,7 @@ pub unsafe extern "C" fn ratchet_step(
             sticky: contact.wall_sticky != 0,
         }),
         wall_jump_zone: contact.wall_jump_zone != 0,
+        landing_ahead: contact.landing_ahead != 0,
     };
     let v = sim.sim.step(dt, &input, &contact, Vec3::new(position.x, position.y, position.z));
     let mut events = 0;
@@ -256,6 +262,7 @@ pub unsafe extern "C" fn ratchet_step(
         landed_fall_speed,
         melee_swing,
         wall_right: sim.sim.wall_right() as u8,
+        gravity: sim.sim.gravity(),
     }
 }
 

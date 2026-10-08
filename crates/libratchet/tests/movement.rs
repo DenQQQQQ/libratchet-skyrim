@@ -17,22 +17,23 @@ struct Flat {
     wall_x: Option<f32>,
     wall_facing: f32,
     wall_sticky: bool,
-    /// In a wall-jump zone.
+    /// In a wall-jump zone, and whether his flight path meets a floor before a wall.
     zone: bool,
+    landing_ahead: bool,
     time: f32,
     events: Vec<(f32, Event)>,
 }
 
 impl Flat {
     fn new(tuning: Tuning) -> Self {
-        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, wall_facing: -1.0, wall_sticky: true, zone: false, time: 0.0, events: vec![] }
+        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, wall_facing: -1.0, wall_sticky: true, zone: false, landing_ahead: false, time: 0.0, events: vec![] }
     }
 
     /// No floor: the character starts in the air and falls.
     fn falling(tuning: Tuning) -> Self {
         let mut h = Flat::new(tuning);
         h.floor = false;
-        h.contact = Contact { grounded: false, ground_distance: None, hit_ceiling: false, wall: None, wall_jump_zone: false };
+        h.contact = Contact { grounded: false, ground_distance: None, hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
         h
     }
 
@@ -62,6 +63,7 @@ impl Flat {
             hit_ceiling: false,
             wall,
             wall_jump_zone: self.zone,
+            landing_ahead: self.landing_ahead,
         };
     }
 
@@ -797,7 +799,7 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     h.wall_x = Some(1.0);
     // Falling toward the wall, 3 m up: he sticks when he reaches it.
     h.pos = Vec3::new(0.0, 3.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     let toward = Vec2::new(1.0, 0.0);
     while h.r.state() != MoveState::WallStick && h.time < 1.0 {
         h.tick(false, toward);
@@ -838,7 +840,7 @@ fn the_opposite_wall_takes_him_only_after_the_jump_offs_block() {
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.pos = Vec3::new(0.0, 3.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     while h.r.state() != MoveState::WallStick && h.time < 1.0 {
         h.tick(false, Vec2::new(1.0, 0.0));
     }
@@ -871,7 +873,7 @@ fn in_a_wall_jump_zone_the_jump_keeps_its_line() {
         h.zone = zone;
         h.wall_x = Some(1.0);
         h.pos = Vec3::new(0.9, 3.0, 0.0);
-        h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: zone };
+        h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: zone, landing_ahead: false };
         while h.r.state() != MoveState::WallStick && h.time < 1.0 {
             h.tick(false, Vec2::new(1.0, 0.0));
         }
@@ -894,12 +896,41 @@ fn in_a_wall_jump_zone_the_jump_keeps_its_line() {
 }
 
 #[test]
+fn outside_a_zone_a_wall_jump_falls_once_its_coming_down_toward_a_floor() {
+    let t = Tuning::default();
+    for (zone, floor) in [(false, true), (false, false), (true, true)] {
+        let mut h = by_a_plain_wall(&t);
+        h.wall_sticky = true;
+        h.zone = zone;
+        h.landing_ahead = floor;
+        while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+            h.tick(false, Vec2::new(1.0, 0.0));
+        }
+        h.wall_x = None;
+        h.tick(true, Vec2::ZERO);
+        assert_eq!(h.r.state(), MoveState::WallJump);
+        let start = h.time;
+        while h.r.state() == MoveState::WallJump && h.time - start < 1.0 {
+            h.tick(false, Vec2::ZERO);
+        }
+        let flew = h.time - start;
+        if zone || !floor {
+            assert_eq!(h.r.state(), MoveState::WallJump, "zone {zone}, floor ahead {floor}");
+        } else {
+            // Just past the top of its arc.
+            assert_eq!(h.r.state(), MoveState::Fall);
+            assert!(close(flew, t.wall_jump.time_to_peak, 2.0 * DT), "fell after {flew:.3} s");
+        }
+    }
+}
+
+#[test]
 fn a_wall_jump_turns_off_the_wall_toward_the_camera() {
     let t = Tuning::default();
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.pos = Vec3::new(0.9, 3.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     // The camera looks along +Z from -Z, so the wall (at +X) is on its left.
     let view_right = Vec2::new(-1.0, 0.0);
     let input = |jump| Input { move_dir: Vec2::new(1.0, 0.0), jump, view_right, ..Default::default() };
@@ -926,7 +957,7 @@ fn on_a_wall_jump_wall_he_sticks_facing_any_way() {
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.pos = Vec3::new(0.95, 3.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     // Backing into it while aiming away from it.
     for _ in 0..10 {
         h.tick_with(Input { move_dir: Vec2::new(1.0, 0.0), aim: Some(Vec2::new(-1.0, 0.0)), ..Default::default() });
@@ -935,29 +966,150 @@ fn on_a_wall_jump_wall_he_sticks_facing_any_way() {
 }
 
 #[test]
-fn ordinary_walls_and_low_heights_dont_stick() {
+fn low_heights_dont_stick() {
     let t = Tuning::default();
-    let toward = Vec2::new(1.0, 0.0);
     // Below WallStickMinGroundHeight: no stick.
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.pos = Vec3::new(0.0, 0.5, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(0.5), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(0.5), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     for _ in 0..60 {
-        h.tick(false, toward);
+        h.tick(false, Vec2::new(1.0, 0.0));
     }
     assert_eq!(h.count(|e| *e == Event::WallStuck), 0);
-    // A plain wall, high up and running into it: no stick either.
+}
+
+/// High up next to a plain wall at x = 1 (facing -X), with the floor far below.
+fn by_a_plain_wall(t: &Tuning) -> Flat {
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.wall_sticky = false;
-    h.pos = Vec3::new(0.9, 3.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
-    for _ in 0..30 {
-        h.tick(false, toward);
+    h.pos = Vec3::new(0.9, 20.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(20.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
+    h
+}
+
+#[test]
+fn plain_walls_take_him_once_per_air_time_and_only_facing_them() {
+    let t = Tuning::default();
+    // Drifting into it backwards, aiming away, the stick let go: no stick.
+    let mut h = by_a_plain_wall(&t);
+    h.r.set_velocity(Vec3::new(3.0, 0.0, 0.0));
+    for _ in 0..20 {
+        h.tick_with(Input { aim: Some(Vec2::new(-1.0, 0.0)), ..Default::default() });
     }
     assert!(h.contact.wall.is_some(), "never reached the wall");
     assert_eq!(h.count(|e| *e == Event::WallStuck), 0);
+    // Facing it (or pushing the stick into it), he sticks.
+    let mut h = by_a_plain_wall(&t);
+    while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    assert_eq!(h.r.state(), MoveState::WallStick, "never stuck");
+    // Let go of it (the wall goes away), then meet it again in the same air time: no second
+    // stick on a plain wall, but a wall-jump wall still takes him.
+    h.wall_x = None;
+    h.tick(false, Vec2::ZERO);
+    h.tick(false, Vec2::ZERO);
+    assert_eq!(h.r.state(), MoveState::Fall);
+    for _ in 0..90 {
+        h.tick(false, Vec2::ZERO);
+    }
+    h.wall_x = Some(h.pos.x + 0.05);
+    for _ in 0..20 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    assert!(h.contact.wall.is_some(), "never reached the wall again");
+    assert_eq!(h.count(|e| *e == Event::WallStuck), 1);
+    h.wall_sticky = true;
+    h.tick(false, Vec2::new(1.0, 0.0));
+    h.tick(false, Vec2::new(1.0, 0.0));
+    assert_eq!(h.r.state(), MoveState::WallStick);
+}
+
+#[test]
+fn a_plain_wall_takes_the_jump_after_a_moment_a_wall_jump_wall_at_once() {
+    let t = Tuning::default();
+    for marked in [false, true] {
+        let mut h = by_a_plain_wall(&t);
+        h.wall_sticky = marked;
+        while h.r.state() != MoveState::WallStick && h.time < 1.0 {
+            h.tick(false, Vec2::new(1.0, 0.0));
+        }
+        h.tick(false, Vec2::ZERO);
+        let pressed = h.time;
+        // Pressed straight away (and let go): a plain wall holds it until he's been on it 0.15 s.
+        h.tick(true, Vec2::ZERO);
+        while h.r.state() == MoveState::WallStick && h.time - pressed < 1.0 {
+            h.tick(false, Vec2::ZERO);
+        }
+        let waited = h.events.iter().find(|(_, e)| *e == Event::WallJumped).map(|(at, _)| at - pressed).expect("never jumped off");
+        if marked {
+            assert!(waited < DT / 2.0, "a wall-jump wall waited {waited:.3} s");
+        } else {
+            assert!(close(waited, 0.15 - DT, 2.0 * DT), "a plain wall waited {waited:.3} s");
+        }
+    }
+}
+
+#[test]
+fn a_press_just_before_reaching_a_wall_jump_wall_jumps_off_it_at_once() {
+    let t = Tuning::default();
+    let mut h = by_a_plain_wall(&t);
+    h.wall_sticky = true;
+    h.pos.x = 0.95;
+    // Pressed in the air a moment before he gets there, too early in the fall for a double jump.
+    h.tick(true, Vec2::new(1.0, 0.0));
+    assert_eq!(h.r.state(), MoveState::Fall);
+    while h.r.state() != MoveState::WallJump && h.time < 0.5 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    let at = |event: Event| h.events.iter().find(|(_, e)| *e == event).map(|(t, _)| *t);
+    let (stuck, off) = (at(Event::WallStuck).expect("never stuck"), at(Event::WallJumped).expect("never jumped off"));
+    assert!(off - stuck < 1.5 * DT, "stuck at {stuck:.3} s, off at {off:.3} s");
+}
+
+#[test]
+fn pushing_into_a_plain_wall_jumps_up_it_with_the_double_jump() {
+    let t = Tuning::default();
+    for double_jump_used in [false, true] {
+        let mut h = by_a_plain_wall(&t);
+        if double_jump_used {
+            // A jump and its double jump first, then into the wall.
+            h.floor = false;
+            h.tick(true, Vec2::ZERO);
+            for _ in 0..30 {
+                h.tick(false, Vec2::ZERO);
+            }
+            h.tick(true, Vec2::ZERO);
+            assert_eq!(h.r.state(), MoveState::DoubleJump);
+        }
+        while h.r.state() != MoveState::WallStick && h.time < 2.0 {
+            h.tick(false, Vec2::new(1.0, 0.0));
+        }
+        assert_eq!(h.r.state(), MoveState::WallStick, "never stuck");
+        h.tick(false, Vec2::new(1.0, 0.0));
+        let on_wall = h.pos.y;
+        // Jump with the stick pushed into the wall.
+        h.tick(true, Vec2::new(1.0, 0.0));
+        let start = h.time;
+        while h.r.state() == MoveState::WallStick && h.time - start < 0.5 {
+            h.tick(true, Vec2::new(1.0, 0.0));
+        }
+        if double_jump_used {
+            // Nothing left to jump up with: off the wall as usual.
+            assert_eq!(h.r.state(), MoveState::WallJump);
+            continue;
+        }
+        assert_eq!(h.r.state(), MoveState::DoubleJump);
+        let mut peak = h.pos.y;
+        while h.r.velocity().y > 0.0 && h.time - start < 2.0 {
+            h.tick(true, Vec2::new(1.0, 0.0));
+            peak = peak.max(h.pos.y);
+        }
+        assert!(peak - on_wall >= t.wall_stick.up_min_height_gain - 0.05, "only {:.2} m up the wall", peak - on_wall);
+        assert!((h.pos.x - 1.0).abs() < 0.05, "left the wall: x {:.2}", h.pos.x);
+    }
 }
 
 #[test]
@@ -966,7 +1118,7 @@ fn sliding_down_near_the_ground_lets_go() {
     let mut h = Flat::new(t.clone());
     h.wall_x = Some(1.0);
     h.pos = Vec3::new(0.9, 2.0, 0.0);
-    h.contact = Contact { grounded: false, ground_distance: Some(2.0), hit_ceiling: false, wall: None, wall_jump_zone: false };
+    h.contact = Contact { grounded: false, ground_distance: Some(2.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
     while h.r.state() != MoveState::WallStick && h.time < 1.0 {
         h.tick(false, Vec2::new(1.0, 0.0));
     }

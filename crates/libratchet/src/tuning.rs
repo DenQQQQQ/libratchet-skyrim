@@ -194,8 +194,11 @@ pub struct WallStickParams {
     pub slide_terminal: f32,
     /// He sticks only at least this high above the ground.
     pub min_ground_height: f32,
-    /// He sticks only facing within this many degrees of straight into the wall.
+    /// On a plain wall, he sticks only facing (or pushing the stick) within this many degrees of
+    /// straight into it.
     pub facing_threshold: f32,
+    /// Jumping up a plain wall (a double jump off it) leaves him at least this much height.
+    pub up_min_height_gain: f32,
 }
 
 impl WallStickParams {
@@ -204,6 +207,7 @@ impl WallStickParams {
             slide_gravity: self.slide_gravity * s,
             slide_terminal: self.slide_terminal * s,
             min_ground_height: self.min_ground_height * s,
+            up_min_height_gain: self.up_min_height_gain * s,
             ..self.clone()
         }
     }
@@ -527,7 +531,15 @@ impl Default for Tuning {
                 ..JumpParams::FALLBACK
             },
             // The game's wall-jump values (hero_traversal), as defaults.
-            wall_stick: WallStickParams { no_slide_time: 0.3, slide_gravity: 20.0, slide_terminal: 40.0, min_ground_height: 1.0, facing_threshold: 50.0 },
+            // WallJumpUpMinHeightGain isn't in the asset; 0.5 is the exe's default for it.
+            wall_stick: WallStickParams {
+                no_slide_time: 0.3,
+                slide_gravity: 20.0,
+                slide_terminal: 40.0,
+                min_ground_height: 1.0,
+                facing_threshold: 50.0,
+                up_min_height_gain: 0.5,
+            },
             wall_jump: JumpParams {
                 height_min: 2.18,
                 height_max: 2.18,
@@ -627,6 +639,7 @@ fn wall_stick_from(v: &Value, base: &WallStickParams) -> WallStickParams {
         slide_terminal: f(v, "WallStickTerminalVelocity").map(f32::abs).unwrap_or(base.slide_terminal),
         min_ground_height: f(v, "WallStickMinGroundHeight").unwrap_or(base.min_ground_height),
         facing_threshold: f(v, "WallStickFacingIntoWallThreshold").unwrap_or(base.facing_threshold),
+        up_min_height_gain: f(v, "WallJumpUpMinHeightGain").unwrap_or(base.up_min_height_gain),
     }
 }
 

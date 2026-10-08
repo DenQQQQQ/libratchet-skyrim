@@ -229,7 +229,10 @@ impl CameraConfigs {
             },
             wall_jump_in: Blend { gain: -0.5, damp: -8.0, max_speed: 4.0 },
             wall_jump_out: Blend { gain: -1.0, damp: -15.0, max_speed: 4.0 },
-            wall_jump_turn: [(300f32.to_radians(), 500f32.to_radians(), 300f32.to_radians()); 2],
+            wall_jump_turn: [
+                (300f32.to_radians(), 500f32.to_radians(), 300f32.to_radians()),
+                (300f32.to_radians(), 500f32.to_radians(), 57f32.to_radians()),
+            ],
             source: "generic",
         }
     }
@@ -254,17 +257,17 @@ impl CameraConfigs {
             ),
             None => (generic.wall_jump.clone(), generic.wall_jump_in, generic.wall_jump_out),
         };
-        // hero_traversal's WallStickConfig: degrees, per second (squared). The pitch speed isn't
-        // set in the game's asset and its default isn't known; it takes the yaw's.
+        // hero_traversal's WallStickConfig: degrees, per second (squared). The asset doesn't set
+        // the pitch speed; the exe's default for it is 57°/s.
         let wall_jump_turn = std::fs::read_to_string(dir.join("hero_traversal.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .map(|t| {
                 let c = &t["WallStickConfig"];
-                let [(accel, decel, max), _] = generic.wall_jump_turn;
+                let [(accel, decel, yaw), (_, _, pitch)] = generic.wall_jump_turn;
                 let deg = |key: &str, base: f32| num(&c[key]).map_or(base, f32::to_radians);
-                let (accel, decel, yaw) = (deg("WallJumpCameraAccel", accel), deg("WallJumpCameraDecel", decel), deg("WallJumpCameraMaxSpeedYaw", max));
-                [(accel, decel, yaw), (accel, decel, deg("WallJumpCameraMaxSpeedPitch", yaw))]
+                let (accel, decel) = (deg("WallJumpCameraAccel", accel), deg("WallJumpCameraDecel", decel));
+                [(accel, decel, deg("WallJumpCameraMaxSpeedYaw", yaw)), (accel, decel, deg("WallJumpCameraMaxSpeedPitch", pitch))]
             })
             .unwrap_or(generic.wall_jump_turn);
         CameraConfigs {

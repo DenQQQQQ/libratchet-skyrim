@@ -515,8 +515,10 @@ pub fn simulate(
         grounded,
         ground_distance,
         hit_ceiling: moved.hit_ceiling,
-        wall: moved.wall.map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump }),
+        wall: moved.wall.filter(|w| w.probed).map(|w| libratchet::WallContact { normal: w.normal, sticky: w.wall_jump }),
         wall_jump_zone: level.wall_jump_zone(feet).is_some(),
+        landing_ahead: p.sim.state() == MoveState::WallJump
+            && level::landing_ahead(&level, feet, p.sim.velocity(), p.sim.gravity(), half_w, height),
     };
 
     // Jump measurements for the HUD.

@@ -155,6 +155,8 @@ const THROW_LAYER: &str = "throw_additive";
 const LAYER_FADE_IN: f32 = 0.08;
 const LAYER_FADE_OUT: f32 = 0.25;
 const MELEE_CLIPS: &[&str] = &["melee_1", "melee_2", "melee_3"];
+/// The wall jump's in-air clip plays at this rate (see `play_clips`).
+const WALL_JUMP_CLIP_RATE: f32 = 0.25;
 const LOOPING: &[&str] = &[
     "idle", "run", "fall", "glide", "aim_idle", "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw",
     "pistol_idle", "pistol_run", "walk", "glove_idle", "wrench_aim_idle", "wrench_strafe_n", "wrench_strafe_ne", "wrench_strafe_e",
@@ -934,8 +936,6 @@ fn play_clips(
         MoveState::SmashLand => "smash",
         MoveState::WallStick if rig.wall_looping => wall_slide,
         MoveState::WallStick => wall_stick,
-        // The in-air clip holds its last pose (the stick) until he reaches the wall, or falls.
-        MoveState::WallJump if v.y < -5.0 => "fall",
         MoveState::WallJump => wall_jump,
     };
     let want = match carried(want) {
@@ -1008,6 +1008,15 @@ fn play_clips(
             let range = if want.contains("land") { (0.7, 1.3) } else { (0.5, 1.5) };
             active.set_speed((speed / authored.max(0.1)).clamp(range.0, range.1));
         }
+    }
+    // The wall jump's in-air clip plays at a quarter speed, the slowest the game plays a jump
+    // clip: it speeds it up only to finish as he lands, and between walls it never does, so the
+    // 0.2 s clip lasts the flight (RiftApart.exe). Past its end it holds its last pose.
+    if want == wall_jump
+        && let Some(&node) = rig.clips.get(want)
+        && let Some(active) = player.animation_mut(node)
+    {
+        active.set_speed(WALL_JUMP_CLIP_RATE);
     }
     rig.walking = if rig.walking { speed < WALK_TO_RUN } else { speed < RUN_TO_WALK };
     lean_into_turns(&mut rig, &mut player, p.sim.facing_yaw(), want, time.delta_secs());

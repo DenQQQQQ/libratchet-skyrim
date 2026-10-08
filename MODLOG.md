@@ -35,6 +35,66 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (morning): plain walls, and the wall jump's flight
+
+The user played it. The jump off the wall felt "a bit static". They also pointed out that the game
+lets you jump off any wall, though you can't climb ordinary walls the way you climb the shaft.
+A research agent read both in RiftApart.exe.
+
+### Read from RiftApart.exe
+- **Plain walls** (the collision surface without the wall-jump flag):
+  - **Sticking:** he must face within 50° of straight into the wall, or push the stick that way.
+    He gets one stick per air time, wall-jump walls included; landing resets it.
+  - **Jumping off:** the jump comes after 0.15 s on the wall (wall-jump walls take it at once). A
+    press counts for 0.15 s, so one just before reaching a wall-jump wall jumps off it at once.
+  - **Jumping up:** pushing the stick into the wall (stick ≥ 0.07, at most −0.25 against its
+    normal) with the double jump unused gives a double jump up it instead.
+    - It gets at least WallJumpUpMinHeightGain (default 0.5) of the chain's MaxTotalJump.
+    - That makes it 0.5–1.5 m in 0.31 s.
+  - Either jump sets the 0.5 s block first.
+  - **Finding walls:** the game probes with three rays, straight at the wall and 0.25 m to each
+    side.
+- **The flight:** the wall jump plays its in-air clip at
+  clamp((clip end − t) / time to land, 0.25, 4).
+  - The time to land comes from a sweep of his path (4 s, 32 steps), and only a floor counts.
+  - Between walls that stays at 0.25, so the 0.2 s clip spans 0.8 s. Past its end, it holds.
+- **The early end:** outside wall-jump zones, once he's coming down and the sweep finds a floor
+  before a wall, the wall jump becomes a fall. He keeps his velocity, can steer at once, and the
+  fall clip plays.
+- **Defaults the asset doesn't set:** WallJumpUpMinHeightGain 0.5, and WallJumpCameraMaxSpeedPitch
+  57°/s.
+
+### Built
+- **libratchet:**
+  - The plain-wall rules above, the press buffer and the jump up.
+  - The early end. `Contact::landing_ahead` comes from the host's sweep, along the pull from
+    `Ratchet::gravity()`; in C, `landing_ahead` and the step result's `gravity`.
+  - The double jump and air dash now come back with the jump off the wall, not with the stick.
+    The jump up needs the double jump still unused when he stuck.
+  - 47 tests pass. New ones cover the plain-wall rules, the delay, the buffered press, the jump
+    up and the early end.
+- **Sandbox:**
+  - **The wall probe:** a wall must reach 0.25 m past him either side at his middle, so thin
+    poles and corners don't take him.
+  - **The path sweep:** run with the level's collision.
+  - **The in-air clip:** plays at a quarter speed, with no fall clip during the wall jump.
+  - **The zone camera:** pitches at the exe's 57°/s.
+  - **A second grey wall:** beside the first, 3.4 m apart.
+- **Demo (`--demo-part walljump`):**
+  - Between the plain walls he sticks once, jumps across, bumps the other wall and drops.
+  - Then he jumps up one.
+  - Shots `74_plain_wall`, `75_plain_wall_no_second_stick` and `76_plain_wall_jump_up`.
+
+### Derived or assumed
+- **The clip's rate:** a constant 0.25. The game's formula gives that between walls and before
+  the early end, so we don't compute the time to land for it.
+- **Arriving at a wall:** the in-air clip crossfades into the stick clip over 0.16 s. The animset
+  lists no blend, and the code's wasn't traced.
+- **Air moves:** the jump off the wall bringing back the double jump and air dash is ours. The game
+  starts a fresh jump state there, and how it counts air moves across that isn't read.
+- **Not built:** the plain wall's drop button, and NoFallTime (the game's base jump turns into a
+  fall after it).
+
 ## 2026-10-08 (small hours): wall-jump zones and their camera
 
 A second research agent looked for the game's wall-jump camera.
@@ -78,8 +138,8 @@ A second research agent looked for the game's wall-jump camera.
 ### Derived or assumed
 - **The blends:** we read them with the mover's turn law, whose configs share the form: each tick
   takes 1 − e^(gain·dt) of what's left, plus part of the last step. That reading is ours.
-- **Pitch speed:** MaxSpeedPitch isn't set in the asset and its default is unknown, so it takes
-  the yaw's 300°/s.
+- **Pitch speed:** MaxSpeedPitch isn't set in the asset. It took the yaw's 300°/s until the
+  exe's default, 57°/s, was found (the plain-walls entry above).
 - **The mouse:** it ends the zone's turn. The game's rule for the stick isn't read.
 - **The margin:** the game tests the volume with a 0.5 margin. That it widens the box is our
   reading.
@@ -113,7 +173,7 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   - On the game's wall-jump surfaces (a flag on the collision surface), facing doesn't matter, and
     he can stick any number of times in one air time.
   - Plain walls need him facing within 50° of the wall (or pushing the stick into it), once per
-    air time. Here only marked walls stick, so those rules don't come up.
+    air time. At first only marked walls stuck here; the plain-walls entry above adds them.
 - **The jump-off's block:** for 0.5 s after a jump-off, no wall within 7.5 m of the take-off point
   takes him (a 15 × 15 m box along the wall), the opposite wall included. Landing ends it.
 - **On the wall:**
@@ -167,7 +227,8 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
 - **The in-air clip's side:** the wall ahead's (taken as facing back at the one he left), since the
   clip ends in that wall's stick pose (see the wall-jump zones entry above).
 - **Turning in the air:** from along the wall round to where he's going, at our air turn rate.
-- **Air moves:** sticking gives his double jump and air dash back.
+- **Air moves:** sticking gave his double jump and air dash back; since the plain-walls entry
+  above, the jump off the wall does.
 - **Holding him on the wall:** pressing him into it at 0.5 m/s keeps it reported; that's ours.
 - **The wall-jump camera:** see the wall-jump zones entry above.
 

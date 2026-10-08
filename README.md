@@ -92,7 +92,7 @@ cargo run -p sandbox
 | Key | Action |
 |---|---|
 | WASD | Move (camera-relative) |
-| Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide. On a wall-jump wall (jump, fall or glide into it, at least 1 m up), press to jump off it; left alone he slides down and lets go |
+| Space | Jump. Hold longer to jump higher, press again in the air to double jump, hold to glide. On a wall (jump, fall or glide into it, at least 1 m up), press to jump off it; left alone he slides down and lets go. The teal wall-jump walls take him any number of times; plain walls only once per jump and only facing them, and pushing into one jumps up it with the double jump |
 | Shift | Dash (on the ground or once in the air) |
 | 1 / 2 | Burst Pistol / Shatterbomb (not while the wrench is thrown). The wrench isn't one to pick: as in the game, melee swings it whatever gun is out |
 | Left mouse | Fire (where the crosshair points); Shatterbomb: hold to wind up and see the throw arc, release to throw |
@@ -118,7 +118,7 @@ to play one section (combat: the combo's timing, aiming and throwing mid-jump, a
 walk; face: his face through a jump; carry: the weapon in hand, the whole wrench after the
 combo, the Shatterbomb's glove, dashing while aiming; dashjump: jumps out of a dash beside a
 running jump; throwswitch: switching weapons around a wrench throw; strafejump: the strafe-jump
-flips and a long glide; walljump: up the wall-jump shaft onto its ledge, a slide down a wall, and an ordinary wall).
+flips and a long glide; walljump: up the wall-jump shaft onto its ledge, a slide down a wall, and the plain walls beside it).
 
 ## Tests
 

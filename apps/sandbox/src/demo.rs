@@ -715,16 +715,29 @@ fn wall_jumps() -> Vec<Act> {
         hold(0.45, Vec2::ZERO, false),
         Act::Shot("73b_wall_slide"),
         hold(1.3, Vec2::ZERO, false),
-        // An ordinary wall: he only bumps into it.
-        Act::Teleport(shaft + Vec3::new(-7.5, 0.0, 0.0)),
-        hold(0.12, -Vec2::X, false),
-        Act::Watch { focus: shaft + Vec3::new(-9.0, 2.0, 0.0), yaw: 0.0, pitch: 0.12, distance: 12.0 },
-        hold(0.4, Vec2::ZERO, false),
-        hold(0.1, -Vec2::X, false),
-        hold(0.25, -Vec2::X, true),
-        hold(0.35, -Vec2::X, false),
-        Act::Shot("74_ordinary_wall"),
-        hold(1.0, Vec2::ZERO, false),
+        // Plain walls (grey): he sticks to one only once per air time, so between two of them he
+        // jumps across, bumps into the other and drops.
+        Act::Teleport(shaft + Vec3::new(-13.3, 0.0, 0.0)),
+        hold(0.12, Vec2::X, false),
+        Act::Watch { focus: shaft + Vec3::new(-12.1, 2.5, 0.0), yaw: 0.0, pitch: 0.12, distance: 11.0 },
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.1, Vec2::X, false),
+        hold(0.25, Vec2::X, true),
+        hold(0.15, Vec2::X, false),
+        Act::Shot("74_plain_wall"),
+        hold(0.15, Vec2::ZERO, false),
+        hold(0.05, Vec2::ZERO, true),
+        hold(0.5, Vec2::ZERO, false),
+        Act::Shot("75_plain_wall_no_second_stick"),
+        hold(1.3, Vec2::ZERO, false),
+        // Pushing the stick into a plain wall jumps up it instead, with his double jump.
+        hold(0.1, Vec2::X, false),
+        hold(0.25, Vec2::X, true),
+        hold(0.35, Vec2::X, false),
+        hold(0.05, Vec2::X, true),
+        hold(0.3, Vec2::X, false),
+        Act::Shot("76_plain_wall_jump_up"),
+        hold(1.5, Vec2::ZERO, false),
     ]);
     acts
 }

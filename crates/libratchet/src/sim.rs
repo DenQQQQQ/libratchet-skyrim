@@ -45,6 +45,10 @@ pub struct Contact {
     /// He's in one of the level's wall-jump zones (the game's "WallJump" volumes, placed over
     /// wall-jump stretches): there a wall jump keeps its line once NoInputTime is over.
     pub wall_jump_zone: bool,
+    /// Sweeping his flight path from here (his velocity, and `Ratchet::gravity` down), the
+    /// first thing it meets is a floor, not a wall: the game predicts this to end a wall jump in
+    /// a fall outside wall-jump zones. Only needed during wall jumps.
+    pub landing_ahead: bool,
 }
 
 /// A wall the character ran into.
@@ -58,7 +62,7 @@ pub struct WallContact {
 
 impl Default for Contact {
     fn default() -> Self {
-        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false, wall: None, wall_jump_zone: false }
+        Contact { grounded: true, ground_distance: Some(0.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false }
     }
 }
 
@@ -156,6 +160,13 @@ const WALL_BLOCK_TIME: f32 = 0.5;
 /// A wall jump's momentum weights once NoInputTime is over, outside the level's wall-jump
 /// zones (fixed in the exe). In a zone it takes its config's, which keep its line.
 const WALL_JUMP_MOMENTUM: (f32, f32) = (0.0, 1.4);
+/// A jump press counts this long on a wall, and a plain wall takes it once he's been on it this
+/// long; a wall-jump wall at once (RiftApart.exe).
+const WALL_JUMP_BUFFER: f32 = 0.15;
+const PLAIN_WALL_JUMP_DELAY: f32 = 0.15;
+/// Pushing the stick into a plain wall this much (its direction against the wall's normal)
+/// jumps up it instead of off it (RiftApart.exe).
+const WALL_UP_STICK: f32 = -0.25;
 
 #[derive(Clone, Debug)]
 pub struct Ratchet {
@@ -207,6 +218,12 @@ pub struct Ratchet {
     wall_block: Option<(Vec3, f32)>,
     /// Whether the game's right wall clips fit (see `wall_right`).
     wall_right: bool,
+    /// The wall he's on takes wall jumps; walls stuck to this air time; whether his double
+    /// jump was still unused when he stuck; and the time left on an unused jump press.
+    wall_marked: bool,
+    wall_sticks: u32,
+    wall_up_ok: bool,
+    jump_buffer: f32,
     /// In a wall-jump zone (`Contact::wall_jump_zone`) this tick.
     in_wall_jump_zone: bool,
     prev_melee: bool,
@@ -275,6 +292,10 @@ impl Ratchet {
             wall_time: 0.0,
             wall_block: None,
             wall_right: false,
+            wall_marked: false,
+            wall_sticks: 0,
+            wall_up_ok: false,
+            jump_buffer: 0.0,
             in_wall_jump_zone: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
@@ -368,6 +389,7 @@ impl Ratchet {
         self.events.clear();
         let pressed = input.jump && !self.prev_jump;
         self.prev_jump = input.jump;
+        self.jump_buffer = if pressed { WALL_JUMP_BUFFER } else { (self.jump_buffer - dt).max(0.0) };
         let dash_pressed = input.dash && !self.prev_dash;
         self.prev_dash = input.dash;
         let melee_pressed = input.melee && !self.prev_melee;
@@ -470,6 +492,11 @@ impl Ratchet {
                 } else if self.can_glide(input.jump, &params, contact) {
                     self.enter_glide();
                 }
+                // Outside a wall-jump zone, a wall jump coming down toward a floor rather than a
+                // wall becomes a fall he can steer (RiftApart.exe).
+                if self.state == MoveState::WallJump && self.velocity.y < 0.0 && !contact.wall_jump_zone && contact.landing_ahead {
+                    self.enter_fall();
+                }
             }
             MoveState::Fall => {
                 let params = self.tuning.fall.clone();
@@ -490,9 +517,9 @@ impl Ratchet {
             }
             MoveState::WallStick => {
                 self.wall_time += dt;
-                if pressed {
-                    self.start_wall_jump(dt, position);
-                } else if (self.wall_time > dt && contact.wall.is_none_or(|w| !w.sticky))
+                if self.jump_buffer > 0.0 && (self.wall_marked || self.wall_time > PLAIN_WALL_JUMP_DELAY) {
+                    self.jump_off_wall(dt, position);
+                } else if (self.wall_time > dt && contact.wall.is_none())
                     || contact.ground_distance.is_some_and(|d| d < self.tuning.wall_stick.min_ground_height)
                 {
                     // Slid off the wall's edge, or down near the ground (RiftApart.exe: below
@@ -723,6 +750,7 @@ impl Ratchet {
     /// from the tap height, so every jump of a kind peaks at `time_to_peak` when tapped
     /// (RiftApart.exe).
     fn start_jump(&mut self, dt: f32, kind: MoveState, position: Vec3) {
+        self.jump_buffer = 0.0;
         self.jump_aimed = self.aim_mode;
         let params = self.params(kind).clone();
         let (mut h_min, mut h_max) = (params.height_min, params.height_max);
@@ -912,13 +940,15 @@ impl Ratchet {
         self.events.push(Event::GlideStarted);
     }
 
-    /// Airborne against a wall that takes wall jumps, at least WallStickMinGroundHeight above
-    /// the ground, he sticks to it, whichever way he faces: on the game's wall-jump surfaces
-    /// the WallStickFacingIntoWallThreshold test and the once-per-airtime limit are skipped
-    /// (RiftApart.exe; those apply to plain walls, which never stick here). Not to any wall
-    /// near the last jump-off for WALL_BLOCK_TIME.
+    /// Airborne against a wall, at least WallStickMinGroundHeight above the ground, he sticks
+    /// to it (RiftApart.exe):
+    /// - a wall that takes wall jumps, whichever way he faces, any number of times;
+    /// - a plain one only facing, or pushing the stick, within WallStickFacingIntoWallThreshold
+    ///   of straight into it, and only if he hasn't stuck to a wall yet this air time.
+    ///
+    /// Not to any wall near the last jump-off for WALL_BLOCK_TIME.
     fn try_wall_stick(&mut self, contact: &Contact, position: Vec3) -> bool {
-        let Some(wall) = contact.wall.filter(|w| w.sticky && w.normal.length_squared() > 0.5) else {
+        let Some(wall) = contact.wall.filter(|w| w.normal.length_squared() > 0.5) else {
             return false;
         };
         let p = &self.tuning.wall_stick;
@@ -937,6 +967,21 @@ impl Ratchet {
                 return false;
             }
         }
+        if !wall.sticky {
+            if self.wall_sticks > 0 {
+                return false;
+            }
+            let into = -wall.normal;
+            let cos = p.facing_threshold.to_radians().cos();
+            let facing = Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos());
+            let pushing = self.stick.length() > MOVE_STICK && self.stick.normalize().dot(into) > cos;
+            if facing.dot(into) <= cos && !pushing {
+                return false;
+            }
+        }
+        self.wall_sticks += 1;
+        self.wall_marked = wall.sticky;
+        self.wall_up_ok = self.midair_jumps < self.tuning.max_midair_jumps;
         self.wall_normal = wall.normal;
         // The game's right clips when the wall faces against the camera's right.
         self.wall_right = wall.normal.dot(self.view_right) <= 0.0;
@@ -944,11 +989,29 @@ impl Ratchet {
         self.state = MoveState::WallStick;
         self.velocity = Vec3::ZERO;
         self.extending = false;
-        // On the wall, his air moves are back.
-        self.midair_jumps = 0;
-        self.air_dash_used = false;
         self.events.push(Event::WallStuck);
         true
+    }
+
+    /// Jumping on a wall (RiftApart.exe): off it, or, on a plain wall with the stick pushed into
+    /// it and his double jump unused, up it, as a double jump with at least
+    /// WallJumpUpMinHeightGain of the chain's MaxTotalJump left. Either way, nearby walls are
+    /// blocked for WALL_BLOCK_TIME.
+    fn jump_off_wall(&mut self, dt: f32, position: Vec3) {
+        self.jump_buffer = 0.0;
+        self.wall_block = Some((position, WALL_BLOCK_TIME));
+        let into = self.stick.length() >= MOVE_STICK && self.stick.normalize().dot(self.wall_normal) <= WALL_UP_STICK;
+        if self.wall_marked || !into || !self.wall_up_ok {
+            self.start_wall_jump(dt, position);
+            return;
+        }
+        if let Some(cap) = self.params(MoveState::DoubleJump).max_total_jump {
+            let gain = self.tuning.wall_stick.up_min_height_gain;
+            let used = self.chain_origin_y.map_or(0.0, |o| (position.y - o).max(0.0)).min((cap - gain).max(0.0));
+            self.chain_origin_y = Some(position.y - used);
+        }
+        self.velocity = Vec3::ZERO;
+        self.start_jump(dt, MoveState::DoubleJump, position);
     }
 
     /// Holding on for WallStickNoSlideTime, then sliding down at WallStickGravity up to
@@ -961,9 +1024,13 @@ impl Ratchet {
     }
 
     /// The jump off a wall: the WallJumpConfig jump, straight away from the wall at the jump run
-    /// speed, which it keeps for NoInputTime.
+    /// speed, which it keeps for NoInputTime. It starts a new jump, so his double jump and air
+    /// dash are back (ours: the game starts a fresh jump state; how it counts air moves across
+    /// it isn't read).
     fn start_wall_jump(&mut self, dt: f32, position: Vec3) {
         self.velocity = Vec3::ZERO;
+        self.midair_jumps = 0;
+        self.air_dash_used = false;
         self.start_jump(dt, MoveState::WallJump, position);
         self.jump_dir = self.wall_normal;
         self.jump_stick = 1.0;
@@ -984,8 +1051,12 @@ impl Ratchet {
             -left
         };
         self.facing_yaw = face.x.atan2(face.y);
-        self.wall_block = Some((position, WALL_BLOCK_TIME));
         self.events.push(Event::WallJumped);
+    }
+
+    /// How fast his current jump pulls him down (m/s²), for the host's `Contact::landing_ahead`.
+    pub fn gravity(&self) -> f32 {
+        self.jump_gravity
     }
 
     /// The wall he's stuck to, or last jumped off: the way it faces (out of it, x/z).
@@ -1023,6 +1094,7 @@ impl Ratchet {
         self.air_time = 0.0;
         self.velocity.y = 0.0;
         self.wall_block = None;
+        self.wall_sticks = 0;
     }
 
     fn air_steer(&mut self, dt: f32, stick: Vec2) {

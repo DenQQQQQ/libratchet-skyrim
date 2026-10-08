@@ -144,7 +144,7 @@ pub fn spawn_level(
 
     // Wall-jump shaft: two 13 m walls that take wall jumps (teal), 3.4 m apart across Z, with a
     // ledge behind the +Z one, in a wall-jump zone whose camera looks along the shaft from +X.
-    // Beside it, an ordinary wall of the same height (grey).
+    // Beside it, two plain walls of the same height and spacing (grey), across X.
     let shaft = spots::WALL_SHAFT;
     const GAP: f32 = 3.4;
     for side in [-1.0, 1.0] {
@@ -152,7 +152,9 @@ pub fn spawn_level(
         add(&mut commands, wall.wall_jump(), Color::srgb(0.15, 0.7, 0.75));
     }
     add(&mut commands, Block::new(Vec2::new(shaft.x, shaft.z + GAP * 0.5 + 2.8), 0.0, Vec3::new(6.0, 13.0, 4.0)), Color::srgb(0.15, 0.6, 0.65));
-    add(&mut commands, Block::new(Vec2::new(shaft.x - 10.0, shaft.z), 0.0, Vec3::new(0.8, 13.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
+    for x in [shaft.x - 10.0, shaft.x - 10.0 - GAP - 0.8] {
+        add(&mut commands, Block::new(Vec2::new(x, shaft.z), 0.0, Vec3::new(0.8, 13.0, 6.0)), Color::srgb(0.55, 0.55, 0.6));
+    }
     level.zones.push(WallJumpZone {
         min: Vec3::new(shaft.x - 3.0, 0.0, shaft.z - GAP * 0.5),
         max: Vec3::new(shaft.x + 3.0, 13.0, shaft.z + GAP * 0.5),
@@ -186,13 +188,20 @@ fn checker_image() -> Image {
     image
 }
 
-/// A wall the character ran into: the way it faces (out of the wall, on the ground plane) and
-/// whether it takes wall jumps.
+/// A wall the character ran into: the way it faces (out of the wall, on the ground plane),
+/// whether it takes wall jumps, and whether the game's wall probe would find it (see
+/// `PROBE_SIDE`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WallHit {
     pub normal: Vec2,
     pub wall_jump: bool,
+    pub probed: bool,
 }
+
+/// The game finds a wall to stick to with three rays at a time: straight at it and this far
+/// to either side (RiftApart.exe), so the wall has to reach that far past him both ways, at
+/// his middle.
+const PROBE_SIDE: f32 = 0.25;
 
 /// Result of moving the character's box through the level.
 pub struct MoveResult {
@@ -254,7 +263,10 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
             }
             hit_wall = true;
             let out = -d.signum();
-            wall = Some(WallHit { normal: if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) }, wall_jump: b.wall_jump });
+            let side = 2 - axis;
+            let middle = p.y + height * 0.5;
+            let probed = b.min[side] <= p[side] - PROBE_SIDE && b.max[side] >= p[side] + PROBE_SIDE && b.min.y <= middle && b.max.y >= middle;
+            wall = Some(WallHit { normal: if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) }, wall_jump: b.wall_jump, probed });
             next[axis] = if d > 0.0 { b.min[axis] - half_w - SKIN } else { b.max[axis] + half_w + SKIN };
         }
         p = next;
@@ -266,6 +278,27 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
     }
 
     MoveResult { feet: p, grounded, hit_ceiling, hit_wall, wall }
+}
+
+/// Sweeps a flight path (the box from `feet`, at velocity `v`, pulled down at `gravity`) for up
+/// to 4 s in 32 steps, as the game's trajectory prediction does: true if the first thing it
+/// meets is a floor, false for a wall or nothing.
+pub fn landing_ahead(level: &Level, feet: Vec3, v: Vec3, gravity: f32, half_w: f32, height: f32) -> bool {
+    const STEPS: usize = 32;
+    let dt = 4.0 / STEPS as f32;
+    let (mut p, mut v) = (feet, v);
+    for _ in 0..STEPS {
+        let next = v - Vec3::Y * gravity * dt;
+        let moved = move_box(level, p, half_w, height, (v + next) * 0.5 * dt, 0.0);
+        if moved.hit_wall {
+            return false;
+        }
+        if moved.grounded {
+            return true;
+        }
+        (p, v) = (moved.feet, next);
+    }
+    false
 }
 
 /// Distance from the feet straight down to the nearest top surface.

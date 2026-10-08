@@ -41,6 +41,8 @@ typedef struct RatchetContact {
     float wall_normal_x;   /* out of the wall, on the ground plane */
     float wall_normal_z;
     uint8_t wall_jump_zone; /* inside a level's wall-jump zone: wall jumps keep their line there */
+    uint8_t landing_ahead;  /* his flight path (velocity, result.gravity down) meets a floor before a
+                               wall; only needed during wall jumps */
 } RatchetContact;
 
 enum {
@@ -83,6 +85,7 @@ typedef struct RatchetStepResult {
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
+    float gravity;           /* his current jump's pull down, m/s^2, for RatchetContact.landing_ahead */
 } RatchetStepResult;
 
 typedef struct RatchetSwingInfo {
