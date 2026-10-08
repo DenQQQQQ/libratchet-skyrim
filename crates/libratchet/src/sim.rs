@@ -485,6 +485,11 @@ impl Ratchet {
     /// should move by.
     pub fn step_in(&mut self, dt: f32, input: &Input, contact: &Contact, position: Vec3, world: &dyn World) -> Vec3 {
         self.events.clear();
+        // A tick that takes no time (a paused frame) changes nothing, and several rules divide
+        // by it. Its presses still count on the next tick.
+        if !(dt > 0.0 && dt.is_finite()) {
+            return self.velocity;
+        }
         let pressed = input.jump && !self.prev_jump;
         self.prev_jump = input.jump;
         self.jump_press_age = if pressed { 0.0 } else { self.jump_press_age + dt };

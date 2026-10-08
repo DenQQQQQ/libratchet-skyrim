@@ -35,6 +35,30 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (afternoon): a tick that takes no time; a fuzz test
+
+The user asked for the code to be reviewed and refined. A new test drives the sim with random
+play and found a NaN on its first game.
+
+### Fixed
+- **A zero-length tick left his facing NaN for good.**
+  - Turning on the ground, the turn law's rate is the step divided by the tick, 0/0 when a
+    tick takes no time. The NaN then stuck to his facing, and the next move that goes where
+    he faces (the Hyper-Strike's hop) moved him by NaN.
+  - A host easily sends such ticks: a paused frame, a menu in Skyrim.
+  - Now a tick of zero, negative or non-finite length changes nothing and returns the velocity
+    as it was. Its button presses still count on the next tick.
+
+### Built
+- **`tests/robustness.rs`:** random games against a world with a ledge and Swingshot targets:
+  - a player's stick, buttons, camera (sometimes missing or straight up) and aiming;
+  - tick lengths of zero, a frame, or long hitches, and a switch of scale mid-game;
+  - crude collision, plus contacts that contradict it (grounded in mid-air, walls that
+    aren't there, zero normals).
+  - Every velocity must be finite and under 1000 m/s. 96 games of 4000 ticks by default;
+    `ROBUST_SEEDS=5000` plays more (5000 games passed).
+- **A test** that a zero-length tick changes nothing and keeps its jump press.
+
 ## 2026-10-08 (midday): Clank stuck in his bind pose, sometimes
 
 Found while checking the swingshot demo: in some runs Clank rode on Ratchet's back in his bind
