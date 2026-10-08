@@ -574,11 +574,9 @@ impl Ratchet {
                 | MoveState::LedgeJump
                 | MoveState::SwingJump
         );
-        if free && self.state == MoveState::Glide && input.swingshot && self.swing_press_age <= 0.2 && self.swing_pick.is_some() {
+        let gliding = self.state == MoveState::Glide;
+        if free && self.try_swingshot(input, position) && gliding {
             self.events.push(Event::GlideEnded);
-        }
-        if free {
-            self.try_swingshot(input, position);
         }
 
         match self.state {
@@ -753,7 +751,7 @@ impl Ratchet {
         if index >= self.tuning.melee.combo.len() {
             return false;
         }
-        if stick.length() > 0.1 {
+        if stick.length() > MOVE_STICK {
             self.facing_yaw = stick.x.atan2(stick.y);
         }
         self.state = MoveState::Melee;
@@ -915,8 +913,6 @@ impl Ratchet {
         match state {
             MoveState::DoubleJump if self.jump_aimed => &self.tuning.aim_double_jump,
             MoveState::DoubleJump => &self.tuning.double_jump,
-            MoveState::Fall => &self.tuning.fall,
-            MoveState::Glide => &self.tuning.glide,
             MoveState::WallJump => &self.tuning.wall_jump,
             MoveState::LedgeJump => &self.tuning.ledge_jump,
             MoveState::SwingJump => &self.tuning.swingshot.jump,
@@ -1391,7 +1387,6 @@ impl Ratchet {
         self.velocity.z = next.y;
     }
 
-    /// Turns towards the movement direction, or while aiming towards the aim (twice as fast).
     /// Turns Ratchet toward where he should face: the aim while strafing, else where he's
     /// going. On the ground this is the game's mover turn (RiftApart.exe): each tick takes an
     /// exponential share of the angle left (gain) plus part of the last tick's turn (damp),
@@ -1399,9 +1394,7 @@ impl Ratchet {
     /// a quarter second, standing it's nearly a snap. In the air and during moves, a plain turn
     /// rate (ours).
     fn turn(&mut self, dt: f32) {
-        // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
-        // started, else where the dash goes (RiftApart.exe).
-        // On a wall he faces it.
+        // On a ledge, a swing or a wall, the move sets his facing.
         if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::Swing | MoveState::Hook) {
             self.turn_omega = 0.0;
             return;
@@ -1411,6 +1404,8 @@ impl Ratchet {
             self.turn_omega = 0.0;
             return;
         }
+        // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
+        // started, else where the dash goes (RiftApart.exe).
         if matches!(self.state, MoveState::Dash | MoveState::AirDash) {
             let toward = if self.dash_strafe { self.aiming } else { Some(self.dash_dir) };
             if let Some(d) = toward {

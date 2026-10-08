@@ -141,6 +141,17 @@ fixing.
   A press just before landing, with the air dash used up, now dashes on landing. In the air,
   the press still has to come on the tick (the air states' lookback wasn't read).
 
+### Cleanups
+- **WallJumpSpeeds' default walk minimum** is the asset's 0, not 5.
+- **A melee swing's direction** takes the stick from the game's moving threshold (0.07), like
+  everything else; it used 0.1.
+- **Code tidying:** dead `params()` arms are gone. The glide's end on a Swingshot uses
+  `try_swingshot`'s answer instead of repeating its checks.
+- **Doc fixes:** `time_to_peak` (it's the tap's apex), the dash's braking, the turn's comments.
+- **The config tests** both read `riftapart-configs/`. They now check values the configs set
+  that differ from the defaults (jump heights and times, run and aim speeds, the dodge,
+  NoFallTime), so a misread key no longer passes unnoticed.
+
 ### Tests
 - **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
   out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.

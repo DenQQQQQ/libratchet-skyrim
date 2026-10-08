@@ -285,18 +285,31 @@ fn scaling_scales_heights_but_not_timing() {
     assert!(close(at, t.single_jump.time_to_peak, 2.0 * DT), "time to peak {at}");
 }
 
-/// Uses the user's extracted Rift Apart configs when they exist (set RIFTAPART_CONFIGS or use
-/// the default location). Skipped otherwise, since the repo ships no game data.
+/// Where the extractor puts the user's own Rift Apart configs (or RIFTAPART_CONFIGS).
+fn configs_dir() -> std::path::PathBuf {
+    std::env::var("RIFTAPART_CONFIGS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../riftapart-configs"))
+}
+
+/// Uses the user's extracted Rift Apart configs when they exist. Skipped otherwise, since the
+/// repo ships no game data.
 #[test]
 fn loads_riftapart_configs_when_present() {
-    let dir = std::env::var("RIFTAPART_CONFIGS").unwrap_or_else(|_| r"G:\programmering\riftapart-decomp\configs".into());
-    let dir = std::path::Path::new(&dir);
+    let dir = configs_dir();
+    let dir = dir.as_path();
     if !dir.join("hero_traversal.json").exists() {
         eprintln!("skipping: no configs at {}", dir.display());
         return;
     }
     let t = Tuning::from_riftapart_configs(dir).expect("configs should parse");
     assert!(t.single_jump.height_max > 0.0 && t.single_jump.time_to_peak > 0.0);
+    // Values the configs set that differ from the defaults, so a misread key shows.
+    assert!(close(t.single_jump.height_max, 1.5, 1e-3) && close(t.single_jump.time_to_peak, 0.27, 1e-3));
+    assert!(close(t.double_jump.height_min, 1.5, 1e-3) && close(t.double_jump.time_to_peak, 0.31, 1e-3));
+    assert!(close(t.ground_speeds.run_max, 5.75, 1e-3) && close(t.aim_speeds.run_max, 2.0, 1e-3));
+    assert!(close(t.ground_dash.distance, 7.0, 1e-3) && close(t.ground_dash.max_speed, 30.0, 1e-3));
+    assert!(close(t.single_jump.no_fall_time, 0.75, 1e-3) && close(t.wall_jump.no_fall_time, 1.2, 1e-3));
     assert!(t.glide.time_to_peak_is_gravity);
     let j = &t.single_jump;
     let (tap, tap_at) = Flat::new(t.clone()).jump(DT, 2.0);
@@ -557,9 +570,7 @@ fn thrown_wrench_turns_back_when_it_hits_something() {
 
 #[test]
 fn loads_wrench_configs_when_present() {
-    let dir = std::env::var("RIFTAPART_CONFIGS")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../riftapart-configs"));
+    let dir = configs_dir();
     if !dir.join("hero_melee_clips.json").exists() {
         eprintln!("skipping: no hero_melee_clips.json in {}", dir.display());
         return;

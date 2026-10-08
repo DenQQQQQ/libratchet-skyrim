@@ -24,8 +24,8 @@ pub struct JumpParams {
     pub height_min: f32,
     /// Apex height when the button is held for `button_max_hold` or longer.
     pub height_max: f32,
-    /// Seconds to reach `height_max`, or the gravity itself (m/s²) when
-    /// `time_to_peak_is_gravity` is set.
+    /// Seconds a tap takes to reach its apex, `height_min` (gravity follows from it), or the
+    /// gravity itself (m/s²) when `time_to_peak_is_gravity` is set.
     pub time_to_peak: f32,
     pub time_to_peak_is_gravity: bool,
     /// Hold time at which the height starts growing past `height_min`.
@@ -648,8 +648,9 @@ fn ledge_from(dir: &Path, traversal: &Value, base: &LedgeParams) -> LedgeParams 
     }
 }
 
-/// A dash: speed up to `max_speed` at `accel`, and once `distance` is covered slow down at
-/// `decel`. Shaped like Rift Apart's DodgeConfig / AirDashConfig.
+/// A dash: speed up to `max_speed` at `accel`, then on the ground brake at `decel` early
+/// enough to be back at run speed as `distance` is covered (in the air it just ends there).
+/// Shaped like Rift Apart's DodgeConfig / AirDashConfig.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DashParams {
     pub distance: f32,
@@ -996,7 +997,7 @@ impl Default for Tuning {
                 ..JumpParams::FALLBACK
             },
             ledge_jump_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.0, run_min: 1.0, run_max: 2.0, walk_run_threshold: 0.98 },
-            wall_jump_speeds: SpeedParams { walk_min: 5.0, walk_max: 5.0, run_min: 5.0, run_max: 5.0, walk_run_threshold: 0.5 },
+            wall_jump_speeds: SpeedParams { walk_min: 0.0, walk_max: 5.0, run_min: 5.0, run_max: 5.0, walk_run_threshold: 0.5 },
             // The game's wall-jump values (hero_traversal), as defaults.
             // WallJumpUpMinHeightGain isn't in the asset; 0.5 is the exe's default for it.
             wall_stick: WallStickParams {
