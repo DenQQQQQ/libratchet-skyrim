@@ -34,6 +34,9 @@ namespace AutoTest
 			float       minDamage = 0.0f;
 			int         minHits = 0;
 			float       throwAt = -1.0f;   // the wrench thrown (one frame), s from the start
+			bool        awake = false;     // the target's AI on: being hit has to put it in combat
+			RE::FormID  target = 0x00023A90;  // the target's base (EncCow)
+			bool        crime = false;     // the hit has to cost him a bounty in Whiterun (an assault)
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -53,11 +56,16 @@ namespace AutoTest
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
-			{ .name = "wrench combo", .hold = -1.0f, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
+			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
 			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 1.5f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
+			// Last: a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
+			// owner: hits raised no hostility until a kill).
+			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },
+			// And a Whiterun guard (GuardWhiterunImperialExterior): hitting him is an assault.
+			{ .name = "hitting a guard is a crime", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 0.0f, .minHits = 1, .awake = true, .target = 0x001000EC, .crime = true },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -115,6 +123,7 @@ namespace AutoTest
 			RE::ActorHandle target;
 			bool            targetPlaced = false;
 			float           targetHealth = 0.0f;  // as the fight began
+			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -151,6 +160,9 @@ namespace AutoTest
 		// applies fall damage after the landing frame).
 		void CheckHealthAfter(int a_case)
 		{
+			if (kCases[a_case].awake) {
+				return;  // its target fought back
+			}
 			const float now = Health();
 			if (now < s.healthBefore - 0.01f) {
 				++s.failed;
@@ -322,16 +334,20 @@ namespace AutoTest
 		// The fight's target, a_metres ahead of the start, its AI off (it stands still) and
 		// with plenty of health (it lasts every fight). Placed while he settles, so it's loaded
 		// when the fight starts.
-		void PlaceTarget(float a_metres)
+		void PlaceTarget(float a_metres, RE::FormID a_base)
 		{
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			if (!player || !s.startPos) {
 				return;
 			}
 			RE::Actor* target = Target();
+			if (target && target->GetActorBase() && target->GetActorBase()->GetFormID() != a_base) {
+				target->KillImmediate();  // another kind of target this time (killed: a disabled actor with a path request in flight crashed Skyrim's pathing thread)
+				target = nullptr;
+			}
 			if (!target || target->IsDead()) {
-				auto* cow = RE::TESForm::LookupByID<RE::TESNPC>(0x00023A90);  // EncCow
-				const auto placed = cow ? player->PlaceObjectAtMe(cow, false) : nullptr;
+				auto* base = RE::TESForm::LookupByID<RE::TESNPC>(a_base);
+				const auto placed = base ? player->PlaceObjectAtMe(base, false) : nullptr;
 				target = placed ? placed->As<RE::Actor>() : nullptr;
 				if (!target) {
 					SKSE::log::info("autotest: couldn't place the target");
@@ -345,6 +361,13 @@ namespace AutoTest
 			auto* av = target->AsActorValueOwner();
 			av->SetBaseActorValue(RE::ActorValue::kHealth, 1000.0f);
 			av->RestoreActorValue(RE::ActorValue::kHealth, 10000.0f);
+		}
+
+		std::uint32_t WhiterunBounty()
+		{
+			auto*       player = RE::PlayerCharacter::GetSingleton();
+			const auto* whiterun = RE::TESForm::LookupByID<RE::TESFaction>(0x000267EA);  // CrimeFactionWhiterun
+			return player && whiterun ? player->GetCrimeGoldValue(whiterun) : 0;
 		}
 
 		// What Skyrim multiplies the player's damage by at the save's difficulty (Master: 0.5).
@@ -376,6 +399,21 @@ namespace AutoTest
 			if (tally.hits < a_case.minHits) {
 				bad += " hits";
 			}
+			const bool fighting = Target() && Target()->IsInCombat();
+			if (a_case.awake && !fighting) {
+				bad += " not-in-combat";
+			}
+			if (a_case.crime) {
+				const std::uint32_t bounty = WhiterunBounty();
+				SKSE::log::info("autotest: {}: his bounty in Whiterun {} -> {}", a_case.name, s.bounty, bounty);
+				if (bounty <= s.bounty) {
+					bad += " no-crime";
+				}
+			}
+			if (a_case.awake) {
+				SKSE::log::info("autotest: {}: the target is {}in combat, {}hostile to him", a_case.name, fighting ? "" : "not ",
+					Target() && Target()->IsHostileToActor(RE::PlayerCharacter::GetSingleton()) ? "" : "not ");
+			}
 			if (bad.empty()) {
 				++s.passed;
 			} else {
@@ -387,6 +425,31 @@ namespace AutoTest
 			if (a_case.throwAt >= 0.0f && Combat::ThrownWrench()) {
 				SKSE::log::info("autotest: {}: the wrench is still out after {:.1f} s", a_case.name, a_case.duration);
 			}
+			// An awake target fights on: it goes, so the run can end in peace.
+			if (auto* target = Target(); target && a_case.awake) {
+				target->KillImmediate();
+			}
+		}
+
+		// The test place keeps itself clear: wild animals and anyone else hostile to him nearby (a
+		// wolf on the Whiterun road bit him through a run) go, except the fight's target.
+		void ClearHostiles()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* lists = RE::ProcessLists::GetSingleton();
+			if (!player || !lists) {
+				return;
+			}
+			const float reach = 60.0f * Units();
+			const RE::Actor* target = Target();
+			lists->ForEachHighActor([&](RE::Actor* a_actor) {
+				if (a_actor && a_actor != player && a_actor != target && !a_actor->IsDead() &&
+					a_actor->GetPosition().GetDistance(player->GetPosition()) < reach && a_actor->IsHostileToActor(player)) {
+					SKSE::log::info("autotest: clearing {} (hostile to him)", a_actor->GetName());
+					a_actor->KillImmediate();
+				}
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
 		}
 
 		void RunConsole(const std::string& a_command)
@@ -548,6 +611,7 @@ namespace AutoTest
 			return {};
 		}
 		s.total += a_dt;
+		ClearHostiles();
 		if (s.total > kTimeout + s.holdEnd) {
 			Fail(std::format("the run took over {:.0f} s", kTimeout));
 			Finish();
@@ -580,7 +644,8 @@ namespace AutoTest
 				s.settle = 0.0f;
 				return {};
 			}
-			s.settle = a_grounded && !a_busy ? s.settle + a_dt : 0.0f;
+			// Settled before the run-up; once it's begun he's running (and the sim moves him).
+			s.settle = s.running > 0.0f ? kSettle : (a_grounded && !a_busy ? s.settle + a_dt : 0.0f);
 			if (!s.startPos && player && s.settle > 1.0f) {
 				s.startPos = player->GetPosition();
 				s.startHeading = ClearHeading(player->GetPosition(), player->GetAngleZ());
@@ -596,7 +661,7 @@ namespace AutoTest
 			// A fight's target, in place while he settles.
 			if (c.targetAt > 0.0f && s.startPos && !s.targetPlaced && s.settle > 0.0f) {
 				s.targetPlaced = true;
-				PlaceTarget(c.targetAt);
+				PlaceTarget(c.targetAt, c.target);
 			}
 			if (s.settle < kSettle) {
 				return {};
@@ -610,6 +675,14 @@ namespace AutoTest
 			if (s.running < c.run) {
 				if (s.running == 0.0f) {
 					SKSE::log::info("autotest: {}: running up for {:.1f} s", c.name, c.run);
+				}
+				// How fast he gets going from standing (the owner: "slow acceleration"; Skyrim's own
+				// locomotion idles 0.14 s and reaches its run after 0.4 s).
+				if (const auto* ctrl = player ? player->GetCharController() : nullptr) {
+					RE::hkVector4 v;
+					ctrl->GetLinearVelocityImpl(v);
+					const float speed = std::sqrt(v.quad.m128_f32[0] * v.quad.m128_f32[0] + v.quad.m128_f32[1] * v.quad.m128_f32[1]);
+					SKSE::log::info("autotest: run-up {:.3f} s: {:.2f} m/s", s.running, speed);
 				}
 				Input::SetTestStick(RE::NiPoint2{ 0.0f, 1.0f });
 				s.running += a_dt;
@@ -625,8 +698,12 @@ namespace AutoTest
 			if (c.duration > 0.0f) {
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
-				if (auto* target = Target(); target && c.fireFrom >= 0.0f) {
-					// The shots go for its middle.
+				s.bounty = WhiterunBounty();
+				if (auto* target = Target(); target && c.awake) {
+					target->EnableAI(true);  // awake from the fight's start (it would wander off while he settles)
+				}
+				if (auto* target = Target(); target && (c.fireFrom >= 0.0f || c.throwAt >= 0.0f)) {
+					// The shots (and the throw) go for its middle.
 					Combat::SetTestAim(target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() });
 				}
 			}

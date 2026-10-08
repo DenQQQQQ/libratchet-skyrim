@@ -242,16 +242,19 @@ namespace Model
 
 		// The thrown wrench: under the player's root, where the sim has it, laid flat and spun
 		// about the up axis, at his size.
+		// Under his model, not the player's root: everything else under the root is the
+		// Dragonborn's, which HideDragonborn culls every frame (the first build hid the thrown
+		// wrench that way).
 		void Throw(Weapon& a_weapon, RE::NiNode* a_root, const RE::NiPoint3& a_at, float a_spin)
 		{
-			if (!Load(a_weapon) || !a_root) {
+			if (!Load(a_weapon) || !a_root || !s.model) {
 				return;
 			}
-			if (a_weapon.node->parent != a_root) {
+			if (a_weapon.node->parent != s.model.get()) {
 				if (a_weapon.node->parent) {
 					a_weapon.node->parent->DetachChild(a_weapon.node.get());
 				}
-				a_root->AttachChild(a_weapon.node.get(), true);
+				s.model->AttachChild(a_weapon.node.get(), true);
 			}
 			// glTF to Skyrim (Orientation's M), the handle (glTF +Y, Skyrim up after M) laid along
 			// the ground (90° about x), then the spin about up.
@@ -268,8 +271,9 @@ namespace Model
 			spin.entry[1][1] = c;
 			spin.entry[2][2] = 1.0f;
 			const RE::NiMatrix3 world = spin * flat * Orientation(0.0f);
-			const auto& parent = a_root->world;
-			const RE::NiMatrix3 back = parent.rotate.Transpose();
+			// His model's world this frame (its local is set; Skyrim updates the world after).
+			const RE::NiTransform parent = a_root->world * s.model->local;
+			const RE::NiMatrix3   back = parent.rotate.Transpose();
 			a_weapon.node->local.translate = (back * (a_at - parent.translate)) / parent.scale;
 			a_weapon.node->local.rotate = back * world;
 			a_weapon.node->local.scale = UnitsPerMetre() * Settings::Get().scale / parent.scale;

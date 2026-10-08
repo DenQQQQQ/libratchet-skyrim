@@ -84,10 +84,19 @@ namespace Input
 			return {};
 		}
 		RE::NiPoint2 v = controls->data.moveInputVec;
+		// Skyrim's auto-move runs ahead with the stick at rest.
+		if (controls->data.autoMove && v.x * v.x + v.y * v.y < 0.01f) {
+			v = { 0.0f, 1.0f };
+		}
 		const float len = std::sqrt(v.x * v.x + v.y * v.y);
 		if (len > 1.0f) {
 			v.x /= len;
 			v.y /= len;
+		}
+		// Walking (Skyrim's run toggle off): half the stick, which is a walk for the sim.
+		if (!controls->data.running && !g_testStick) {
+			v.x *= 0.5f;
+			v.y *= 0.5f;
 		}
 		return v;
 	}

@@ -64,6 +64,18 @@ namespace Spells
 
 	bool Build()
 	{
+		// The assault alarm's script command, as the console sees it (Attacked runs it).
+		if (const auto* alarm = RE::SCRIPT_FUNCTION::LocateScriptCommand("SendAssaultAlarm")) {
+			std::string params;
+			for (std::uint16_t i = 0; i < alarm->numParams && alarm->params; ++i) {
+				params += std::format(" {}{}:{}", alarm->params[i].optional ? "?" : "", alarm->params[i].paramName ? alarm->params[i].paramName : "",
+					static_cast<std::uint32_t>(alarm->params[i].paramType.get()));
+			}
+			SKSE::log::info("combat: SendAssaultAlarm is a script command ({}reference function; params:{})", alarm->referenceFunction ? "" : "not a ",
+				params.empty() ? " none" : params);
+		} else {
+			SKSE::log::warn("combat: no SendAssaultAlarm script command");
+		}
 		auto* damage = RE::TESForm::LookupByID<RE::EffectSetting>(kDamageHealth);
 		auto* stagger = RE::TESForm::LookupByID<RE::EffectSetting>(kStagger);
 		auto* bolt = RE::TESForm::LookupByID<RE::BGSProjectile>(kBolt);
@@ -80,6 +92,30 @@ namespace Spells
 		return g_hit && g_stagger && g_shot;
 	}
 
+	// Skyrim's reaction to the player attacking a_target. A spell cast by a plugin
+	// (CastSpellImmediate, the player blamed) hurts, but raises nothing until the target dies
+	// (the owner, in game: no hostility, no crime). So for a target not already fighting him:
+	// the console's SendAssaultAlarm on it (the crime, and the witnesses' reaction; Papyrus's
+	// Actor.SendAssaultAlarm can't be called on an actor without scripts) and combat (it fights
+	// back or flees).
+	void Attacked(RE::PlayerCharacter* a_player, RE::Actor* a_target)
+	{
+		if (a_target->IsDead() || (a_target->IsInCombat() && a_target->IsHostileToActor(a_player))) {
+			return;
+		}
+		bool alarm = false;
+		auto* factory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();
+		if (auto* script = factory ? factory->Create() : nullptr) {
+			script->SetCommand("SendAssaultAlarm");
+			script->CompileAndRun(a_target);
+			delete script;
+			alarm = true;
+		}
+		const bool combat = a_target->StartCombat(a_player);
+		SKSE::log::info("combat: {} attacked by him (assault alarm {}, combat {})", a_target->GetName(), alarm ? "sent" : "not sent",
+			combat ? "started" : "not started");
+	}
+
 	void Hit(RE::Actor* a_target, float a_damage, float a_stagger)
 	{
 		auto* player = RE::PlayerCharacter::GetSingleton();
@@ -90,6 +126,7 @@ namespace Spells
 		if (!caster) {
 			return;
 		}
+		Attacked(player, a_target);
 		if (g_hit && a_damage > 0.0f) {
 			caster->CastSpellImmediate(g_hit, false, a_target, 1.0f, false, a_damage, player);
 		}

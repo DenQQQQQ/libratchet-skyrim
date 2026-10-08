@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Combat.h"
 
+#include "AutoTest.h"
 #include "Input.h"
 #include "Jump.h"
 #include "Model.h"
@@ -70,6 +71,10 @@ namespace Combat
 			RE::NiPoint3   wrenchAt;            // where it is, game units
 			float          wrenchSpin = 0.0f;
 			std::uint8_t   blocked = 0;         // it hit a wall since its last step
+			bool           turned = false;      // a wall turned it back (logged once)
+			RE::NiPoint3   thrownFrom;
+			float          thrownFor = 0.0f;    // seconds out
+			float          thrownFar = 0.0f;    // metres out at most
 			std::vector<RE::ActorHandle> struck;  // hit by this throw already
 		};
 		State c;
@@ -119,6 +124,22 @@ namespace Combat
 			});
 		}
 
+		// The point of a_target's body nearest a_from: actors are long (a cow is 2.5 m nose to
+		// tail, a horse or a dragon more), and a hit counts to their body, not their middle (a
+		// lunge along a cow's side missed it). The body: a segment along their heading, as long as
+		// their bounds less their width, at the bounds' middle.
+		RE::NiPoint3 NearestOfBody(RE::Actor* a_target, const RE::NiPoint3& a_from)
+		{
+			const RE::NiPoint3 lo = a_target->GetBoundMin(), hi = a_target->GetBoundMax();
+			const float        scale = a_target->GetScale();
+			const float        half = std::max(0.0f, ((hi.y - lo.y) - (hi.x - lo.x)) * 0.5f * scale);
+			const float        heading = a_target->GetAngleZ();
+			const RE::NiPoint3 axis{ std::sin(heading), std::cos(heading), 0.0f };
+			const RE::NiPoint3 middle = a_target->GetPosition() + axis * ((hi.y + lo.y) * 0.5f * scale);
+			const float        t = std::clamp((a_from - middle).Dot(axis), -half, half);
+			return middle + axis * t;
+		}
+
 		void Deal(RE::Actor* a_target, float a_damage, float a_stagger)
 		{
 			const float damage = a_damage * Settings::Get().damageMult;
@@ -144,7 +165,7 @@ namespace Combat
 			const float stagger = info.knockback >= 3.0f * s ? 1.0f : 0.5f;
 			int hits = 0;
 			ForEachTarget(a_player, [&](RE::Actor* a_target) {
-				const RE::NiPoint3 d = a_target->GetPosition() - me;
+				const RE::NiPoint3 d = NearestOfBody(a_target, me) - me;
 				const float across = std::sqrt(d.x * d.x + d.y * d.y) / u;
 				if (across > kSwingReach * s || std::abs(d.z) / u > kHitHeight * s) {
 					return;
@@ -168,7 +189,7 @@ namespace Combat
 			const RE::NiPoint3 me = a_player->GetPosition();
 			int hits = 0;
 			ForEachTarget(a_player, [&](RE::Actor* a_target) {
-				const RE::NiPoint3 d = a_target->GetPosition() - me;
+				const RE::NiPoint3 d = NearestOfBody(a_target, me) - me;
 				if (std::sqrt(d.x * d.x + d.y * d.y) / u > radius || std::abs(d.z) / u > kHitHeight * s) {
 					return;
 				}
@@ -227,14 +248,28 @@ namespace Combat
 		void Release(RE::PlayerCharacter* a_player, RatchetSim* a_sim)
 		{
 			const RE::NiPoint3 hand = HandAt(a_player);
-			c.thrown = ratchet_wrench_throw(a_sim, ToSim(hand), RatchetVec3{ c.throwView.x, 0.0f, -c.throwView.y });
+			RE::NiPoint2       dir = c.throwView;
+			if (c.testAim) {
+				// Tests: at their target, flat.
+				const RE::NiPoint2 d{ c.testAim->x - hand.x, c.testAim->y - hand.y };
+				const float        len = std::sqrt(d.x * d.x + d.y * d.y);
+				if (len > 1.0f) {
+					dir = { d.x / len, d.y / len };
+				}
+			}
+			c.thrown = ratchet_wrench_throw(a_sim, ToSim(hand), RatchetVec3{ dir.x, 0.0f, -dir.y });
 			c.wrenchAt = hand;
 			c.wrenchSpin = 0.0f;
 			c.blocked = 0;
+			c.turned = false;
+			c.thrownFrom = hand;
+			c.thrownFor = 0.0f;
+			c.thrownFar = 0.0f;
 			c.struck.clear();
 			++c.tally.throws;
 			Sounds::Play("wrench_throw", hand);
 			Sounds::Play("voice_throw", hand);
+			SKSE::log::info("combat: the wrench leaves his hand ({})", c.thrown ? "flying" : "the sim didn't throw it");
 		}
 
 		// Everyone within reach of its path from a_from to a_to takes the throw's hit, once.
@@ -251,7 +286,7 @@ namespace Combat
 					return;
 				}
 				const float half = a_target->GetHeight() * 0.5f;
-				const RE::NiPoint3 middle = a_target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, half };
+				const RE::NiPoint3 middle = NearestOfBody(a_target, a_from + path * 0.5f) + RE::NiPoint3{ 0.0f, 0.0f, half };
 				const float t = len2 > 0.0f ? std::clamp((middle - a_from).Dot(path) / len2, 0.0f, 1.0f) : 0.0f;
 				const RE::NiPoint3 d = middle - (a_from + path * t);
 				if (std::sqrt(d.x * d.x + d.y * d.y) > reach || std::abs(d.z) > half + kThrowRadius * s * u) {
@@ -270,11 +305,21 @@ namespace Combat
 			const bool  caught = ratchet_wrench_step(c.thrown, a_dt, ToSim(HandAt(a_player)), c.blocked, &pos, &spin) != 0;
 			const RE::NiPoint3 now = FromSim(pos);
 			c.blocked = 0;
+			if (c.thrownFor < 0.15f && c.thrownFor + a_dt >= 0.15f) {
+				AutoTest::OnMove("wrench_flying");
+			}
+			c.thrownFor += a_dt;
+			c.thrownFar = std::max(c.thrownFar, now.GetDistance(c.thrownFrom) / Units());
 			if (!caught) {
 				// A wall turns it back; actors don't (it flies on through, hitting them).
 				const auto hit = Physics::Ray(c.wrenchAt, now);
 				if (hit && !(hit->ref && hit->ref->As<RE::Actor>())) {
 					c.blocked = 1;
+					if (!c.turned) {
+						c.turned = true;
+						SKSE::log::info("combat: the wrench hit {} {:.1f} m out and turns back", hit->ref ? hit->ref->GetName() : "the world",
+							hit->point.GetDistance(c.thrownFrom) / Units());
+					}
 				}
 				Strike(a_player, c.wrenchAt, now);
 			}
@@ -286,6 +331,7 @@ namespace Combat
 				c.struck.clear();
 				Sounds::Stop("wrench_throw_loop");
 				Sounds::Play("wrench_catch", now);
+				SKSE::log::info("combat: the wrench is back after {:.2f} s, {:.1f} m out at most", c.thrownFor, c.thrownFar);
 			} else {
 				Sounds::Loop("wrench_throw_loop", now);
 			}
@@ -318,6 +364,9 @@ namespace Combat
 			dir.Unitize();
 			Spells::Shoot(muzzle, Scatter(dir, c.spread), kShotDamage * Settings::Get().damageMult);
 			Sounds::Play("pistol_shot", muzzle);
+			if (c.shotsInARow == 1) {
+				AutoTest::OnMove("shot");
+			}
 			if (something) {
 				// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
 				Sounds::Play("bolt_impact", aim, distance / 2500.0f);

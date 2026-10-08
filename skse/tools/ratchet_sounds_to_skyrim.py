@@ -9,9 +9,10 @@ tools/extract_riftapart_sounds.py) and writes, into a folder laid out like Skyri
 - SKSE/Plugins/RatchetMovement/sounds.txt, the moments in lines simple enough to read in C++:
 
       moment <name> <level_db> <chance>
-      layer <volume> <delay> <loop 0|1> <pitch low, cents> <pitch high, cents> <file> [<file> ...]
+      layer <volume> <delay> <loop 0|1> <pitch low, cents> <pitch high, cents> <file>|<seconds> [...]
 
-  Files are paths under Data (Sound\\FX\\RatchetMovement\\run_foley\\1060039170.wav).
+  Files are paths under Data (Sound\\FX\\RatchetMovement\\run_foley\\1060039170.wav), each with
+  its length (loops start their next round when it's over).
 
 These are game data: the output stays on this PC (target/ and the MO2 mod), never in the repo.
 """
@@ -47,7 +48,7 @@ def main():
                     out = os.path.join(a.out, *rel.split("\\"))
                     os.makedirs(os.path.dirname(out), exist_ok=True)
                     sf.write(out, mono, rate, subtype="PCM_16")
-                    converted[f] = rel
+                    converted[f] = f"{rel}|{len(mono) / rate:.3f}"
                     total += os.path.getsize(out)
                 files.append(converted[f])
             if not files:

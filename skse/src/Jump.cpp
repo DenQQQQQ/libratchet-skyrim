@@ -475,7 +475,12 @@ namespace Jump
 			in.crouch = Input::SneakHeld() ? 1 : 0;
 			// The stick, turned by the camera: Rift Apart's controls are camera-relative.
 			const View view = CameraView();
-			const RE::NiPoint2 stick = Input::MoveStick();
+			RE::NiPoint2 stick = Input::MoveStick();
+			// Sneaking, he walks (Rift Apart has no sneak).
+			if (a_player->IsSneaking()) {
+				stick.x *= 0.5f;
+				stick.y *= 0.5f;
+			}
 			const float wx = stick.x * view.flatRight.x + stick.y * view.flatForward.x;
 			const float wy = stick.x * view.flatRight.y + stick.y * view.flatForward.y;
 			in.move_x = wx;
@@ -513,11 +518,12 @@ namespace Jump
 					contact.landing_ahead = LandingAhead(feet, g.last.velocity, g.last.gravity) ? 1 : 0;
 				}
 			}
-			if (!g.ours) {
-				// On the ground Skyrim moves him: the sim starts from what he really does across the
-				// ground, so a jump keeps his speed. Not up and down: standing, Skyrim's vertical
-				// speed can sit a hair above zero, and the sim lands only when not rising (a fall
-				// it entered after a teleport never ended).
+			if (!g.ours || (g.groundMove && g.last.state == RATCHET_STATE_GROUND)) {
+				// The sim goes on from what he really does across the ground: Skyrim's locomotion, or
+				// the sim's own walk after the collisions (a wall stops him). So a jump keeps his
+				// speed. Not up and down: standing, Skyrim's vertical speed can sit a hair above
+				// zero, and the sim lands only when not rising (a fall it entered after a teleport
+				// never ended).
 				const RatchetVec3 v = ControllerVelocity(ctrl);
 				ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
 			}
@@ -544,15 +550,22 @@ namespace Jump
 				Land(a_player, ctrl);
 			}
 			const bool wasGroundMove = g.groundMove;
+			// The sim walks and runs him too (INI bSimGround) while he's moving: Skyrim's own
+			// locomotion idles 0.14 s and takes 0.4 s to its run (measured), Rift Apart's run is
+			// there in about 0.16 s. Standing still, Skyrim's ground state has him (waiting,
+			// sitting, talking).
+			const bool walking = Settings::Get().simGround && r.state == RATCHET_STATE_GROUND &&
+			                     (stick.x * stick.x + stick.y * stick.y > 0.0025f || r.velocity.x * r.velocity.x + r.velocity.z * r.velocity.z > 0.05f);
+			const bool groundMove = GroundMove(r.state) || walking;
 			// The dash is over (into a swing, back on his feet, off a ledge, a jump).
 			if (g.groundMove && g.last.state == RATCHET_STATE_DASH && r.state != RATCHET_STATE_DASH) {
 				g.ticks.push_back(tick);
 				ReportDash(feet);
 			}
-			// The ground move ended: back on his feet, off a ledge, or jumping out of it.
-			if (g.groundMove && !GroundMove(r.state)) {
+			// The ground move ended: standing still, off a ledge, or jumping out of it.
+			if (g.groundMove && !groundMove) {
 				if (r.state == RATCHET_STATE_GROUND) {
-					// Skyrim's run takes over at the speed the sim left him with.
+					// Skyrim's ground state takes over, at the speed the sim left him with.
 					EndOurs(ctrl);
 				} else if (!(r.events & RATCHET_EVENT_JUMPED)) {
 					// Off a ledge: a fall at the speed he had.
@@ -563,9 +576,10 @@ namespace Jump
 			if (r.events & RATCHET_EVENT_JUMPED) {
 				g.startVelocity = ControllerVelocity(ctrl);
 				// Out of a dash or swing it keeps their speed, which a replay from standing can't.
-				Launch(a_player, ctrl, r.velocity, !wasGroundMove, TakeoffEvent(ctrl));
+				// (Out of the sim's own run it's the same as Skyrim's: the speed he really has.)
+				Launch(a_player, ctrl, r.velocity, !wasGroundMove || g.last.state == RATCHET_STATE_GROUND, TakeoffEvent(ctrl));
 				AutoTest::OnTakeoff();
-			} else if (GroundMove(r.state) && (!g.groundMove || (r.events & RATCHET_EVENT_DASHED))) {
+			} else if (groundMove && (!g.groundMove || (r.events & RATCHET_EVENT_DASHED))) {
 				// A dash or a swing from his feet (or a dash out of a swing), or the slam's landing.
 				StartGroundMove(a_player, ctrl, r.state == RATCHET_STATE_DASH);
 				if (r.state == RATCHET_STATE_DASH) {
@@ -586,7 +600,13 @@ namespace Jump
 				// In the air state with the sim's velocity (see StartGroundMove). Bumps along the way
 				// aren't falls.
 				ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
-				SetVelocity(ctrl, r.velocity);
+				RatchetVec3 v = r.velocity;
+				// Down a slope or a step the ground falls away under him: he follows it while it's
+				// in reach (Skyrim's ground state would snap him down too).
+				if (ground && *ground > 0.02f && *ground < kDashGroundReach) {
+					v.y = std::min(v.y, -*ground / a_dt);
+				}
+				SetVelocity(ctrl, v);
 				ctrl->fallStartHeight = z;
 				ctrl->fallTime = 0.0f;
 			} else if (g.ours && !started) {

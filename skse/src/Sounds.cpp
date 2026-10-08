@@ -15,14 +15,20 @@ namespace Sounds
 		// match, and its own sound volume applies on top.
 		constexpr float kFullLevelDb = 15.0f;
 
+		struct File
+		{
+			std::string path;  // under Data
+			float       seconds = 0.0f;
+		};
+
 		struct Layer
 		{
-			float                    volume = 1.0f;
-			float                    delay = 0.0f;
-			bool                     loop = false;
-			float                    pitchLow = 0.0f;  // cents
-			float                    pitchHigh = 0.0f;
-			std::vector<std::string> files;  // paths under Data
+			float             volume = 1.0f;
+			float             delay = 0.0f;
+			bool              loop = false;
+			float             pitchLow = 0.0f;  // cents
+			float             pitchHigh = 0.0f;
+			std::vector<File> files;
 		};
 
 		struct Moment
@@ -42,16 +48,18 @@ namespace Sounds
 			std::string  loop;  // the looping moment it belongs to, if any
 		};
 
+		// A looping moment: a round of its layers, and the next round when the longest is over
+		// (Skyrim's handles don't say reliably whether a sound is still playing).
 		struct Looping
 		{
-			RE::NiPoint3                    where;
 			std::vector<RE::BSSoundHandle> handles;
-			bool                            started = false;
+			double                          nextRound = 0.0;
 		};
 
 		std::unordered_map<std::string, Moment>  g_moments;
 		std::vector<Pending>                     g_pending;
 		std::unordered_map<std::string, Looping> g_loops;
+		double                                   g_clock = 0.0;
 		std::uint32_t                            g_random = 0x2545F491u;
 		bool                                     g_warned = false;
 
@@ -89,24 +97,30 @@ namespace Sounds
 			return handle;
 		}
 
-		// Each layer of a moment, one of its files, now or after its delay.
-		void Queue(const Moment& a_moment, const RE::NiPoint3& a_where, const std::string& a_loop)
+		// Each layer of a moment, one of its files, now or after its delay. Returns how long
+		// the round lasts (its longest layer, from now).
+		float Queue(const Moment& a_moment, const RE::NiPoint3& a_where, const std::string& a_loop, float a_after)
 		{
 			const float master = Settings::Get().soundVolume;
+			float       longest = 0.0f;
 			for (const Layer& layer : a_moment.layers) {
 				if (layer.files.empty() || layer.volume <= 0.0f) {
 					continue;
 				}
-				Pending p;
-				p.in = layer.delay;
-				p.file = layer.files[std::min(layer.files.size() - 1, static_cast<std::size_t>(Random01() * layer.files.size()))];
-				p.volume = std::clamp(std::pow(10.0f, (a_moment.levelDb - kFullLevelDb) / 20.0f) * layer.volume * master, 0.0f, 1.0f);
+				const File& file = layer.files[std::min(layer.files.size() - 1, static_cast<std::size_t>(Random01() * layer.files.size()))];
 				const float cents = layer.pitchLow + (layer.pitchHigh - layer.pitchLow) * Random01();
+				Pending p;
+				p.in = layer.delay + a_after;
+				p.file = file.path;
+				p.volume = std::clamp(std::pow(10.0f, (a_moment.levelDb - kFullLevelDb) / 20.0f) * layer.volume * master, 0.0f, 1.0f);
 				p.frequency = std::pow(2.0f, cents / 1200.0f);
 				p.where = a_where;
 				p.loop = a_loop;
+				// A higher pitch plays the file faster.
+				longest = std::max(longest, p.in + file.seconds / p.frequency);
 				g_pending.push_back(std::move(p));
 			}
+			return longest;
 		}
 	}
 
@@ -126,7 +140,7 @@ namespace Sounds
 		std::size_t files = 0;
 		while (std::getline(in, line)) {
 			std::istringstream words(line);
-			std::string kind;
+			std::string        kind;
 			words >> kind;
 			if (kind == "moment") {
 				std::string name;
@@ -139,7 +153,11 @@ namespace Sounds
 				words >> l.volume >> l.delay >> loop >> l.pitchLow >> l.pitchHigh;
 				l.loop = loop != 0;
 				for (std::string f; words >> f;) {
-					l.files.push_back(std::move(f));
+					File        file;
+					const auto  bar = f.find('|');
+					file.path = f.substr(0, bar);
+					file.seconds = bar == std::string::npos ? 1.0f : std::strtof(f.c_str() + bar + 1, nullptr);
+					l.files.push_back(std::move(file));
 				}
 				files += l.files.size();
 				current->layers.push_back(std::move(l));
@@ -155,28 +173,23 @@ namespace Sounds
 		if (it == g_moments.end() || Random01() >= it->second.chance) {
 			return;
 		}
-		const std::size_t first = g_pending.size();
-		Queue(it->second, a_where, {});
-		for (std::size_t i = first; i < g_pending.size(); ++i) {
-			g_pending[i].in += a_after;
-		}
+		Queue(it->second, a_where, {}, a_after);
 	}
 
 	void Loop(std::string_view a_moment, const RE::NiPoint3& a_where)
 	{
 		const std::string name(a_moment);
-		if (!g_moments.contains(name)) {
+		const auto        it = g_moments.find(name);
+		if (it == g_moments.end()) {
 			return;
 		}
 		auto& loop = g_loops[name];
-		loop.where = a_where;
 		for (auto& handle : loop.handles) {
 			handle.SetPosition(a_where);
 		}
-		std::erase_if(loop.handles, [](const RE::BSSoundHandle& h) { return !h.IsPlaying(); });
-		const bool waiting = std::ranges::any_of(g_pending, [&](const Pending& p) { return p.loop == name; });
-		if (loop.handles.empty() && !waiting) {
-			Queue(g_moments[name], a_where, name);
+		if (g_clock >= loop.nextRound) {
+			loop.handles.clear();
+			loop.nextRound = g_clock + std::max(0.05f, Queue(it->second, a_where, name, 0.0f));
 		}
 	}
 
@@ -194,6 +207,7 @@ namespace Sounds
 
 	void Update(float a_dt)
 	{
+		g_clock += a_dt;
 		for (std::size_t i = 0; i < g_pending.size();) {
 			auto& p = g_pending[i];
 			p.in -= a_dt;

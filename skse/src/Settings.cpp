@@ -53,6 +53,7 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	animations = ReadBool(a_ini, L"General", L"bAnimations", animations);
 	ratchetModel = ReadBool(a_ini, L"General", L"bRatchet", ratchetModel);
 	dashControl = Narrow(ReadString(a_ini, L"General", L"sDashControl", L"Sprint"));
+	simGround = ReadBool(a_ini, L"General", L"bSimGround", simGround);
 	combat = ReadBool(a_ini, L"Combat", L"bCombat", combat);
 	fireControl = Narrow(ReadString(a_ini, L"Combat", L"sFireControl", L"Right Attack/Block"));
 	aimControl = Narrow(ReadString(a_ini, L"Combat", L"sAimControl", L"Left Attack/Block"));

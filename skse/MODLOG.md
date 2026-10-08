@@ -364,3 +364,38 @@ A survey of the repo found:
   pistol shots, and the bolt's impact when it would arrive. Levels: 15 dB is full volume (ours).
 - **The wrench and the pistol are in his hand** (the converted NIFs on igLoc_RT_gunAttach), and
   the thrown wrench flies as its own model. Built and installed, not yet seen in game.
+
+## 2026-10-09: the owner's first fights, and the fixes
+
+The owner played the combat build and reported three things:
+
+- **"Throwing doesn't work", and the throw's sound was spammed.**
+  - The throw did fly: the log now shows it going 15 m out and back in 1.64 s.
+  - The sound: loops started a new round whenever Skyrim's handle said the sound wasn't playing,
+    and right after `Play()` it says that, so a new round started every frame. Loops now start
+    the next round when the longest layer of the last one is over (the converter writes each
+    file's length into sounds.txt). Same for the glide's heli-pack.
+  - The flying wrench was invisible: it hung under the player's root, and everything there except
+    Ratchet's model is the Dragonborn's, which the model culls every frame. It hangs under his
+    model now.
+- **"Slow acceleration".** Measured in game: from standing, Skyrim's locomotion does nothing for
+  0.14 s, then ramps at about 18 m/s² and reaches its run (4.64 m/s) after 0.4 s. Rift Apart's
+  Ratchet is at his run (5.74 m/s at scale 1) in about 0.2 s. So **the sim now walks and runs him
+  too** (INI `bSimGround`, on): while he's moving on the ground he's in the same air state as the
+  dash. His real velocity (after collisions) feeds back into the sim each frame, and he follows
+  the ground down within 0.3 m. Standing still, Skyrim's ground state has him (waiting,
+  sitting, talking). Walking (the run toggle off) and sneaking halve the stick, and auto-move
+  pushes it forward. In game the run-up now goes from 0 to 5.74 m/s in 0.22 s.
+- **"Damage doesn't trigger hostility until the NPC dies."** A plugin-cast spell hurts, but with
+  the player blamed it still raised no reaction. A hit on someone not already fighting him now
+  also runs the console's `SendAssaultAlarm` on them (the crime and the witnesses) and
+  `StartCombat`. Papyrus's `Actor.SendAssaultAlarm` couldn't be dispatched on actors without
+  scripts. In game: a neutral hunter fights back after one swing, and one swing at a Whiterun
+  guard costs a 40-gold bounty.
+- Hits now count to the nearest point of the target's body (a segment along its heading, from
+  its bounds), not its middle: a lunge along a cow's 2.5 m side used to miss.
+
+Tests: **17/17 pass at lore size**, now with a wrench throw, a hunter who has to fight back and a
+guard who has to report the assault. The test place clears hostiles that wander in (a wolf and a
+mudcrab bit him on the Whiterun road) by killing them. Disabling them instead crashed Skyrim's
+pathfinding thread on the way out, since a path request was still in flight.
