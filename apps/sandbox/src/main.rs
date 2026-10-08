@@ -8,7 +8,9 @@
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
 //!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
-//!   --demo-part wrench|weapons|moves|combat|face|sounds  with --demo: only that section
+//!   --demo-part <part> with --demo: only that section (wrench, weapons, moves, combat, face,
+//!                     sounds, carry, dashjump, throwswitch, strafejump, walljump, ledges,
+//!                     swingshot)
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;
@@ -42,6 +44,8 @@ const STEP_HEIGHT: f32 = 0.35;
 /// Roughly how much bigger the Dragonborn is than Ratchet.
 const DRAGONBORN_SCALE: f32 = 1.55;
 const TRAIL_LEN: usize = 4000;
+/// The jump peaks marked on the trail (the oldest go).
+const MAX_APEXES: usize = 200;
 
 /// Demo runs draw into this image instead of the window, so their screenshots and recordings
 /// work whatever happens to the window (minimised, behind a game).
@@ -62,8 +66,22 @@ pub struct Settings {
 pub struct Player {
     sim: Ratchet,
     feet: Vec3,
+    /// Where he was before the last tick: drawn in between (`drawn_feet`).
+    prev_feet: Vec3,
     contact: Contact,
     stats: JumpStats,
+    /// Counts what the frame's systems would miss as events (the sim keeps a tick's events
+    /// only until the next tick, and a frame can run several): ledge let-gos, respawns.
+    drops: u32,
+    respawns: u32,
+}
+
+impl Player {
+    /// Where to draw him: between the last two ticks, `alpha` of the way (the fixed step's
+    /// overstep), so the 120 Hz sim moves smoothly at any frame rate.
+    fn drawn_feet(&self, alpha: f32) -> Vec3 {
+        self.prev_feet.lerp(self.feet, alpha.clamp(0.0, 1.0))
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -112,6 +130,8 @@ pub struct CameraRig {
     swing_turn: Option<SwingTurn>,
     swing_blend: f32,
     swing_blend_speed: f32,
+    /// The player's respawn count this has seen: a respawn moves the camera with him.
+    respawns_seen: u32,
     /// Seconds of camera wobble left (Hyper-Strike landings; ours).
     pub shake: f32,
     /// 0..1: how far the camera has moved over the shoulder for aiming, and back for running.
@@ -255,6 +275,7 @@ fn main() {
         swing_turn: None,
         swing_blend: 0.0,
         swing_blend_speed: 0.0,
+        respawns_seen: 0,
     })
     .insert_resource(camera_configs)
     .insert_resource(DebugOverlay(!clean))
@@ -335,7 +356,15 @@ fn setup(
     let r = BODY_HALF_WIDTH;
     let player = commands
         .spawn((
-            Player { sim: Ratchet::new(tuning), feet: spots::SPAWN, contact: Contact::default(), stats: JumpStats::default() },
+            Player {
+                sim: Ratchet::new(tuning),
+                feet: spots::SPAWN,
+                prev_feet: spots::SPAWN,
+                contact: Contact::default(),
+                stats: JumpStats::default(),
+                drops: 0,
+                respawns: 0,
+            },
             Transform::from_translation(spots::SPAWN),
             Visibility::default(),
         ))
@@ -381,8 +410,8 @@ fn setup(
     ));
     commands.spawn((
         Text::new(
-            "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide)  |  Shift dash (also in the air)  |  Ctrl walk\n\
-             1 Burst Pistol, 2 Shatterbomb  |  left mouse fire  |  F melee (the wrench), in the air: Hyper-Strike\n\
+            "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide; on a wall: jump off)  |  Shift dash (also in the air)  |  Ctrl walk\n\
+             E Swingshot (hold)  |  C let go of a ledge  |  1 Burst Pistol, 2 Shatterbomb  |  left mouse fire  |  F melee (the wrench), in the air: Hyper-Strike\n\
              right mouse aim; melee while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
         ),
         DebugUi,
@@ -468,6 +497,7 @@ pub fn simulate(
 ) {
     let dt = time.delta_secs();
     let Ok(mut p) = players.single_mut() else { return };
+    p.prev_feet = p.feet;
     let s = settings.scale;
     let (half_w, height) = (BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
     let mut input = scripted.0.unwrap_or_else(|| keyboard_input(&keys, rig.yaw));
@@ -496,6 +526,8 @@ pub fn simulate(
     let before = p.feet;
     let contact = p.contact;
     let v = p.sim.step_in(dt, &input, &contact, before, &level::LevelWorld(&level));
+    let drops = p.sim.events().iter().filter(|e| matches!(e, MoveEvent::LedgeDropped)).count() as u32;
+    p.drops += drops;
     // The game's sounds for what the moves do (the animation clips sound the rest: steps,
     // jumps, swings, efforts). The heli-pack unfolds, spins while gliding, and folds away.
     for e in p.sim.events() {
@@ -538,13 +570,16 @@ pub fn simulate(
     let mut feet = moved.feet;
     let mut grounded = moved.grounded;
     let mut ground_distance = level::ground_distance(&level, feet, half_w);
-    // Walking down steps: stay glued to the ground instead of falling for a few ticks.
-    if !grounded && p.sim.state() == MoveState::Ground && v.y <= 0.0 {
-        if let Some(d) = ground_distance.filter(|d| *d <= STEP_HEIGHT * s) {
-            feet.y -= d;
-            grounded = true;
-            ground_distance = Some(0.0);
-        }
+    // Down steps: stay on the ground instead of falling for a few ticks, in every move the sim
+    // keeps on the ground (running, dashing, swinging, landing from the slam).
+    if !grounded
+        && matches!(p.sim.state(), MoveState::Ground | MoveState::Dash | MoveState::Melee | MoveState::SmashLand)
+        && v.y <= 0.0
+        && let Some(d) = ground_distance.filter(|d| *d <= STEP_HEIGHT * s)
+    {
+        feet.y -= d;
+        grounded = true;
+        ground_distance = Some(0.0);
     }
     p.feet = feet;
     p.contact = Contact {
@@ -574,6 +609,9 @@ pub fn simulate(
             stats.last = Some(LastJump { peak_above_takeoff: height, airtime: stats.airtime, distance });
             if height > 0.05 {
                 trail.apexes.push((stats.peak, height));
+                if trail.apexes.len() > MAX_APEXES {
+                    trail.apexes.remove(0);
+                }
             }
         }
     }
@@ -584,16 +622,21 @@ pub fn simulate(
     }
 
     if feet.y < -30.0 {
-        respawn(&mut p, spots::SPAWN);
+        respawn(&mut p, spots::SPAWN, &level, s);
     }
 }
 
-pub fn respawn(p: &mut Player, at: Vec3) {
+/// Puts him at `at`, standing if there's ground there (else in the air), afresh; the camera and
+/// his animation see the respawn by its count.
+pub fn respawn(p: &mut Player, at: Vec3, level: &Level, scale: f32) {
     let tuning = p.sim.tuning().clone();
     p.sim = Ratchet::new(tuning);
     p.feet = at;
-    p.contact = Contact::default();
+    p.prev_feet = at;
+    let ground_distance = level::ground_distance(level, at, BODY_HALF_WIDTH * scale);
+    p.contact = Contact { grounded: ground_distance.is_some_and(|d| d.abs() < 1e-3), ground_distance, ..Contact::default() };
     p.stats = JumpStats::default();
+    p.respawns += 1;
 }
 
 fn hotkeys(
@@ -603,6 +646,7 @@ fn hotkeys(
     mut trail: ResMut<Trail>,
     mut rig: ResMut<CameraRig>,
     mut overlay: ResMut<DebugOverlay>,
+    level: Res<Level>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         overlay.0 = !overlay.0;
@@ -614,6 +658,10 @@ fn hotkeys(
         rig.distance *= settings.scale / old;
         let t = settings.base.scaled(settings.scale);
         p.sim.set_tuning(t);
+        // Grown, his box may now reach into a block beside him: out of it the shortest way.
+        let s = settings.scale;
+        p.feet = level::push_out(&level, p.feet, BODY_HALF_WIDTH * s, BODY_HEIGHT * s);
+        p.prev_feet = p.feet;
     }
     if keys.just_pressed(KeyCode::KeyR) {
         let (base, note) = load_tuning(&settings.configs_dir);
@@ -626,7 +674,7 @@ fn hotkeys(
         *trail = Trail::default();
     }
     if keys.just_pressed(KeyCode::Backspace) {
-        respawn(&mut p, spots::SPAWN);
+        respawn(&mut p, spots::SPAWN, &level, settings.scale);
     }
 }
 
@@ -698,12 +746,13 @@ fn state_color(state: MoveState) -> Color {
 
 fn update_visuals(
     settings: Res<Settings>,
+    fixed: Res<Time<Fixed>>,
     mut players: Query<(&Player, &mut Transform)>,
     bodies: Query<&MeshMaterial3d<StandardMaterial>, With<Body>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Ok((p, mut tf)) = players.single_mut() else { return };
-    tf.translation = p.feet;
+    tf.translation = p.drawn_feet(fixed.overstep_fraction());
     tf.rotation = Quat::from_rotation_y(p.sim.facing_yaw());
     tf.scale = Vec3::splat(settings.scale);
     if let Ok(handle) = bodies.single()
@@ -719,6 +768,7 @@ fn update_visuals(
 #[allow(clippy::too_many_arguments)]
 fn camera_follow(
     time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
     settings: Res<Settings>,
     configs: Res<camera::CameraConfigs>,
     level: Res<Level>,
@@ -728,6 +778,13 @@ fn camera_follow(
     mut cams: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
 ) {
     let (Ok(p), Ok((mut cam, mut projection))) = (players.single(), cams.single_mut()) else { return };
+    // Where he's drawn (between the sim's ticks); a respawn takes the camera with him at once.
+    let feet = p.drawn_feet(fixed.overstep_fraction());
+    if p.respawns != rig.respawns_seen {
+        rig.respawns_seen = p.respawns;
+        rig.focus = feet;
+        rig.film_focus = feet;
+    }
     let dt = time.delta_secs();
     // The game's shakes, added up (degrees of yaw, pitch and roll).
     let mut shake = Vec3::ZERO;
@@ -797,7 +854,7 @@ fn camera_follow(
     // and away from the camera, quick toward it and sideways); otherwise ours.
     if p.sim.state() == MoveState::Swing {
         let t = configs.swing_tracking;
-        let gap = p.feet - rig.focus;
+        let gap = feet - rig.focus;
         let ahead = Vec3::new(-rig.yaw.sin(), 0.0, -rig.yaw.cos());
         let side = Vec3::new(ahead.z, 0.0, -ahead.x);
         let rate = |gain: f32| 1.0 - (gain * dt).exp();
@@ -805,7 +862,7 @@ fn camera_follow(
         rig.focus += ahead * along * rate(if along > 0.0 { t.forward } else { t.back }) + side * gap.dot(side) * rate(t.left) + Vec3::Y * gap.y * rate(t.up);
     } else {
         let k = 1.0 - (-10.0 * dt).exp();
-        rig.focus = rig.focus.lerp(p.feet, k);
+        rig.focus = rig.focus.lerp(feet, k);
     }
     // A short 20 Hz wobble, fading out (ours, for melee impacts).
     rig.shake = (rig.shake - dt).max(0.0);
@@ -850,7 +907,7 @@ fn camera_follow(
     let focus = rig.focus + Vec3::Y * (pivot + offset.y) + right * offset.x;
     // Demo side shots: drawn from their own angles around him, the follow camera behind them.
     if let Some((yaw, pitch, distance)) = rig.film {
-        rig.film_focus = rig.film_focus.lerp(p.feet, 1.0 - (-4.0 * dt).exp());
+        rig.film_focus = rig.film_focus.lerp(feet, 1.0 - (-4.0 * dt).exp());
         let at = rig.film_focus + Vec3::Y * CHEST * s;
         let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
         *cam = Transform::from_translation(at + back * distance * s).looking_at(at, Vec3::Y);
@@ -888,7 +945,10 @@ fn draw_trail(trail: Res<Trail>, overlay: Res<DebugOverlay>, mut gizmos: Gizmos)
         return;
     }
     let lift = Vec3::Y * 0.05;
-    for pair in trail.points.as_slices().0.windows(2).chain(trail.points.as_slices().1.windows(2)) {
+    // (The ring buffer's two halves, and the step between them.)
+    let (first, second) = trail.points.as_slices();
+    let seam = first.last().zip(second.first()).map(|(a, b)| [*a, *b]);
+    for pair in first.windows(2).chain(seam.as_ref().map(|s| &s[..])).chain(second.windows(2)) {
         let ((a, _), (b, state)) = (pair[0], pair[1]);
         if a.distance(b) < 2.0 {
             gizmos.line(a + lift, b + lift, state_color(state));
@@ -922,7 +982,7 @@ fn update_hud(
          last jump: {last}\n\
          config: jump tap {:.2} m in {:.2} s, held up to {:.2} m  |  double +{:.2} m (max total {})  |  glide falls {:.1} m/s, moves {:.2} m/s  |  run {:.2} m/s\n\
          dash {:.1} m up to {:.1} m/s  |  air dash {:.1} m at {:.1} m/s\n\
-         wrench: swings {}  |  Hyper-Strike hop {:.2} m, slam at {:.0} m/s², {:.1} m wide  |  throw {:.0} m/s out to {:.0} m
+         wrench: swings {}  |  Hyper-Strike hop {:.2} m, slam at {:.0} m/s², {:.1} m wide  |  throw {:.0} m/s out to {:.0} m\n\
          dummies hit: {}  {}\n\
          {}",
         settings.load_note,

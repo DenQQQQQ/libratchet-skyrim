@@ -103,7 +103,7 @@ impl Ratchet {
         let mut best = (0.0, None);
         for t in targets {
             // A host's mistakes: a target nowhere, or a swing without a cable to swing on.
-            if !t.position.is_finite() || (t.kind == SwingKind::Swing && !(t.length > 0.0)) {
+            if !t.position.is_finite() || (t.kind == SwingKind::Swing && (!t.length.is_finite() || t.length <= 0.0)) {
                 continue;
             }
             let known = self.swing_seen.iter().position(|(k, _)| k.id == t.id && k.kind == t.kind);

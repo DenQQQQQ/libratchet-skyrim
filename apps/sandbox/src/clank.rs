@@ -63,6 +63,7 @@ pub fn spawn(commands: &mut Commands, assets: &AssetServer, ratchet_attach_bone:
     commands.entity(ratchet_attach_bone).add_child(clank);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn on_ready(
     ev: On<WorldInstanceReady>,
     mut rig: ResMut<ClankRig>,

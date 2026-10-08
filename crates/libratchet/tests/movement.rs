@@ -204,8 +204,8 @@ fn glide_started_slowly_sinks_at_4() {
 
 #[test]
 fn glide_started_late_keeps_its_speed_up_to_12() {
-    let mut t = Tuning::default();
-    t.max_midair_jumps = 0; // so the press glides instead of double jumping
+    // No mid-air jumps, so the press glides instead of double jumping.
+    let t = Tuning { max_midair_jumps: 0, ..Default::default() };
     // 0.4 s at 25 m/s² is about 10 m/s (kept); 1 s would be 25 m/s (cut to 12).
     for (fall_secs, expected) in [(0.4, 10.0), (1.0, 12.0)] {
         let mut h = Flat::falling(t.clone());

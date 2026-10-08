@@ -45,9 +45,10 @@ pub struct Wrench {
     /// The clip playing (see CLIPS).
     playing: Option<&'static str>,
     show: f32,
-    /// The thrown copy's holder and its flight.
+    /// The thrown copy's holder and its flight, and where it was a frame ago.
     thrown: Option<Entity>,
     pub flight: Option<WrenchThrow>,
+    flight_from: Option<Vec3>,
     throw_requested: bool,
     /// A throw whose animation has started: seconds until the wrench leaves the hand, and
     /// where it goes.
@@ -98,6 +99,13 @@ pub fn spawn(commands: &mut Commands, assets: &AssetServer, hand: Entity) {
     let thrown = commands.spawn((Name::new("Thrown wrench"), Transform::default(), Visibility::Hidden)).id();
     let thrown_scene = commands.spawn((WorldAssetRoot(scene), Transform::default())).observe(inherit_visibility).id();
     commands.entity(thrown).add_child(thrown_scene);
+    // Ratchet's scene spawned again (see clank.rs): the last thrown copy's holder goes (the held
+    // one went with his old hand).
+    commands.queue(|world: &mut World| {
+        if let Some(old) = world.get_resource::<Wrench>().and_then(|w| w.thrown) {
+            world.despawn(old);
+        }
+    });
     commands.insert_resource(Wrench { hand: Some(hand), held: Some(held), thrown: Some(thrown), ..default() });
 }
 
@@ -275,6 +283,7 @@ fn fly(
     let Ok(p) = players.single() else { return };
     let hand = hand_position(&wrench, &globals, p, settings.scale);
     let s = settings.scale;
+    let from = wrench.flight_from.take();
     let Some(flight) = wrench.flight.as_mut() else { return };
     let throw = p.sim.tuning().melee.throw.clone();
     let pos = flight.position();
@@ -290,8 +299,10 @@ fn fly(
         hits.count += n as u32;
         hits.last = format!("thrown wrench hit {n} ({} damage)", throw.damage);
     }
-    // The floor is block 0; anything else stops the wrench.
-    let wall = level.blocks.iter().skip(1).any(|b| pos.cmpge(b.min).all() && pos.cmple(b.max).all());
+    // The floor is block 0; anything else stops the wrench, on the way here since the last frame
+    // too (a thin wall fits between two frames).
+    let from = from.unwrap_or(pos);
+    let wall = level.blocks.iter().skip(1).any(|b| crate::weapons::segment_hits_box(from, pos, b.min, b.max).is_some());
     let status = flight.step(time.delta_secs(), hand, n > 0 || wall);
     if art.available {
         art.wrench_trail(&mut commands, &mut materials, pos, flight.position(), s);
@@ -299,7 +310,9 @@ fn fly(
     if let Some(&(at, _)) = hit_at.first() {
         cues.write(crate::sound::SoundCue::at("wrench_hit", at));
     }
+    wrench.flight_from = Some(pos);
     if status == ThrowStatus::Caught {
+        wrench.flight_from = None;
         cues.write(crate::sound::SoundCue::stop("wrench_throw_loop"));
         cues.write(crate::sound::SoundCue::play("wrench_catch"));
         wrench.flight = None;

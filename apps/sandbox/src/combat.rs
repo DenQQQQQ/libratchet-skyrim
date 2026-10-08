@@ -55,6 +55,10 @@ impl Dummy {
     pub fn velocity(&self) -> Vec3 {
         self.vel
     }
+    /// How tall it is.
+    pub fn height(&self) -> f32 {
+        self.height
+    }
     /// Takes on a model `height` tall that animates its own reactions.
     pub fn wear_model(&mut self, height: f32) {
         self.height = height;

@@ -69,6 +69,10 @@ fn on_ready(
     if let Ok(parent) = parents.get(ev.entity)
         && let Ok(mut look) = looks.get_mut(parent.parent())
     {
+        // A scene spawned again (see clank.rs): the new player has no clip playing yet.
+        if look.player != Some(player) {
+            look.clip = None;
+        }
         look.player = Some(player);
     }
 }

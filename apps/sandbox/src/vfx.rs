@@ -905,7 +905,7 @@ fn run_fx(
             continue;
         }
         let t = fx.age / fx.life;
-        let drag = (1.0 - fx.drag * dt).max(0.0);
+        let drag = (-fx.drag * dt).exp();
         let g = fx.gravity;
         fx.vel = fx.vel * drag - Vec3::Y * g * dt;
         tf.translation += fx.vel * dt;

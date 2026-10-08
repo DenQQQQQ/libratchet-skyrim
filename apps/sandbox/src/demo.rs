@@ -347,8 +347,6 @@ fn script() -> Vec<Act> {
     acts
 }
 
-/// The Burst Pistol and the Shatterbomb on the dummies in the arena (Ratchet facing +X, the
-/// camera behind him, aiming where it looks).
 /// The playtest fixes: the combo at the game's timing (mashing, then a press just after a
 /// swing), throwing the wrench while aiming (mid-jump too) and a Shatterbomb thrown on the walk.
 /// Ratchet faces +X.
@@ -667,9 +665,6 @@ fn strafe_jumps() -> Vec<Act> {
     acts
 }
 
-/// Wall jumps up the shaft (two walls that take wall jumps, 3.4 m apart, 14 m tall): onto the
-/// first wall from a running jump, then back and forth up to the ledge on top; then a jump at an
-/// ordinary wall, which he only bumps into. Filmed from the shaft's open side.
 /// Ledges: falling short of a platform and catching its lip, then climbing up; grabbing a
 /// placed ledge on the way down, going up to the next one, and jumping up over it; letting go
 /// of one.
@@ -794,6 +789,9 @@ fn crouch(secs: f32) -> Act {
     Act::Hold { secs, dir: Vec2::ZERO, jump: false, dash: false, melee: false, crouch: true, swing: false }
 }
 
+/// Wall jumps up the shaft (two walls that take wall jumps, 3.4 m apart, 12.5 m tall): onto
+/// the first wall from a running jump, then back and forth up to the ledge on top; then the
+/// plain walls beside it, which take one wall jump each. Filmed from the shaft's open side.
 fn wall_jumps() -> Vec<Act> {
     let shaft = spots::WALL_SHAFT;
     // The walls face each other across Z.
@@ -931,6 +929,8 @@ fn face() -> Vec<Act> {
     ]
 }
 
+/// The Burst Pistol and the Shatterbomb on the dummies in the arena (Ratchet facing +X, the
+/// camera behind him, aiming where it looks).
 fn weapon_moves() -> Vec<Act> {
     use crate::weapons::Slot;
     // South of the dummy ring, facing it (+Z), so nothing stands between him and the camera.
@@ -1022,6 +1022,7 @@ fn run_script(
     mut players: Query<&mut Player>,
     mut trail: ResMut<Trail>,
     mut exit: MessageWriter<AppExit>,
+    level: Res<crate::level::Level>,
 ) {
     let dt = time.delta_secs();
     let Ok(mut p) = players.single_mut() else { return };
@@ -1036,7 +1037,7 @@ fn run_script(
             return;
         };
         match act {
-            Act::Teleport(at) => respawn(&mut p, at),
+            Act::Teleport(at) => respawn(&mut p, at, &level, settings.scale),
             Act::ClearTrail => *trail = Trail::default(),
             Act::Scale(s) => {
                 settings.scale = s;
@@ -1105,7 +1106,7 @@ fn record_frames(mut demo: ResMut<Demo>, view: Res<crate::DemoView>, mut command
     demo.frame += 1;
     let shot = || view.0.clone().map_or_else(Screenshot::primary_window, Screenshot::image);
     if let Some(dir) = demo.record.clone()
-        && demo.frame % 2 == 0
+        && demo.frame.is_multiple_of(2)
     {
         let path = dir.join(format!("f_{:05}.png", demo.frame / 2));
         commands.spawn(shot()).observe(save_to_disk(path));

@@ -242,7 +242,13 @@ fn play(
     let now = time.elapsed_secs();
     let listener = players.single().ok().map(|p| p.feet);
     let mut lines = String::new();
-    for cue in cues.read() {
+    let cues: Vec<SoundCue> = cues.read().cloned().collect();
+    for (k, cue) in cues.iter().enumerate() {
+        // Started and stopped again within one frame (a glide one tick long): the stop can't see
+        // a loop that only starts at the end of the frame, so it never starts.
+        if cue.looping == Some(true) && cues[k + 1..].iter().any(|c| c.looping == Some(false) && c.name == cue.name) {
+            continue;
+        }
         let moment = if sounds.moments.contains_key(&cue.name) { cue.name.clone() } else { sounds.events.get(&cue.name).cloned().unwrap_or_default() };
         let Some(chance) = sounds.moments.get(&moment).map(|m| m.chance) else { continue };
         match cue.looping {

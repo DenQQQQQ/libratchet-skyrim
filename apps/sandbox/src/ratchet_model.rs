@@ -12,7 +12,7 @@ use bevy::animation::AnimationTargetId;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
-use libratchet::{Event, LedgeMove, MoveState};
+use libratchet::{LedgeMove, MoveState};
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::PathBuf;
@@ -216,6 +216,9 @@ pub struct Rig {
     fire_layer: Option<(AnimationNodeIndex, f32)>,
     fire_time: Option<f32>,
     shots_seen: u32,
+    /// The player's let-go and respawn counts this has seen.
+    drops_seen: u32,
+    respawns_seen: u32,
     /// The speed each clip was authored for (its root motion over its length, from the
     /// converter's ratchet.json), to play it at the rate that keeps the feet planted.
     authored_speed: HashMap<String, f32>,
@@ -331,6 +334,7 @@ pub fn spawn(commands: &mut Commands, assets: &AssetServer, player: Entity) {
     commands.entity(player).add_child(model);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn on_ready(
     ev: On<WorldInstanceReady>,
     mut commands: Commands,
@@ -441,6 +445,8 @@ fn on_ready(
         fire_layer: None,
         fire_time: None,
         shots_seen: 0,
+        drops_seen: 0,
+        respawns_seen: 0,
         authored_speed,
         clip_sounds,
         sound_clock: None,
@@ -590,6 +596,13 @@ fn play_clips(
     mut cues: MessageWriter<crate::sound::SoundCue>,
 ) {
     let (Some(mut rig), Ok(p)) = (rig, players.single()) else { return };
+    // Respawned: no landing or let-go clip from where he was before.
+    if p.respawns != rig.respawns_seen {
+        rig.respawns_seen = p.respawns;
+        rig.prev_state = None;
+        rig.land_timer = 0.0;
+        rig.ledge_drop_time = 0.0;
+    }
     let Some(entity) = rig.player else { return };
     if rig.clips.is_empty() {
         return;
@@ -797,8 +810,11 @@ fn play_clips(
             "ledge_from_fall"
         };
     }
-    // Letting go of a caught ledge plays its let-go clip as he starts to fall.
-    rig.ledge_drop_time = if p.sim.events().contains(&Event::LedgeDropped) && state == MoveState::Fall {
+    // Letting go of a caught ledge plays its let-go clip as he starts to fall (counted, since a
+    // frame can run two ticks and the event lasts one).
+    let dropped = p.drops != rig.drops_seen;
+    rig.drops_seen = p.drops;
+    rig.ledge_drop_time = if dropped && state == MoveState::Fall {
         0.5
     } else if state == MoveState::Fall {
         (rig.ledge_drop_time - time.delta_secs()).max(0.0)
@@ -1149,7 +1165,10 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, clip: 
         // Each run's leans follow it, also while it fades out.
         let run = rig.clips.get(run_clip).and_then(|&n| player.animation(n)).map(|a| (a.seek_time(), a.speed(), a.weight()));
         for (node, w) in nodes.into_iter().zip(weights) {
+            // The transitions hold the run's own weight at 1, so a lean weighted w/(1−w) takes
+            // its share w of the blend.
             let w = w * rig.lean_blend;
+            let w = w.min(0.95) / (1.0 - w.min(0.95));
             match run {
                 Some((time, speed, run_weight)) if w > 1e-3 => {
                     if player.animation(node).is_none() {
@@ -1165,17 +1184,8 @@ fn lean_into_turns(rig: &mut Rig, player: &mut AnimationPlayer, yaw: f32, clip: 
             }
         }
     }
-    // The run itself gives up what the lean takes.
-    if running
-        && let Some(&node) = rig.clips.get(clip)
-        && let Some(active) = player.animation_mut(node)
-    {
-        active.set_weight(1.0 - rig.lean.abs() * rig.lean_blend);
-    }
 }
 
-/// Reads each clip's authored ground speed (root motion over its length) from the converter's
-/// manifest.
 /// The first time of `event` in a converted clip (the converter's ratchet.json).
 pub fn clip_event(manifest: &std::path::Path, clip: &str, event: &str) -> Option<f32> {
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
@@ -1220,6 +1230,8 @@ fn clip_sounds(manifest: &std::path::Path, wrench: &std::path::Path) -> HashMap<
     out
 }
 
+/// Reads each clip's authored ground speed (root motion over its length) from the converter's
+/// manifest.
 fn authored_speeds(manifest: &std::path::Path) -> HashMap<String, f32> {
     let Ok(text) = std::fs::read_to_string(manifest) else { return HashMap::new() };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return HashMap::new() };

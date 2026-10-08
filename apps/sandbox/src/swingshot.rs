@@ -4,6 +4,7 @@
 use crate::level::Level;
 use crate::Player;
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
 
 /// A target's orb, at the target.
 #[derive(Component)]
@@ -26,7 +27,10 @@ struct Hand(Option<Entity>);
 pub fn plugin(app: &mut App) {
     app.init_resource::<Hand>()
         .add_systems(Startup, setup.after(crate::level::spawn_level))
-        .add_systems(Update, (find_hand, light_orbs, draw_cable));
+        .add_systems(Update, (find_hand, light_orbs))
+        // After this frame's transforms, so the cable leaves his hand where it is now, not where
+        // it was a frame ago (0.4 m behind at full swing).
+        .add_systems(PostUpdate, draw_cable.after(TransformSystems::Propagate));
 }
 
 fn setup(mut commands: Commands, level: Res<Level>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -66,8 +70,13 @@ fn light_orbs(players: Query<&Player>, level: Res<Level>, looks: Res<Looks>, mut
 }
 
 /// The cable, from his hand to the target, while he's on one.
-fn draw_cable(players: Query<&Player>, hand: Res<Hand>, globals: Query<&GlobalTransform>, mut cable: Query<(&mut Transform, &mut Visibility), With<Cable>>) {
-    let (Ok(p), Ok((mut tf, mut vis))) = (players.single(), cable.single_mut()) else { return };
+fn draw_cable(
+    players: Query<&Player>,
+    hand: Res<Hand>,
+    globals: Query<&GlobalTransform, Without<Cable>>,
+    mut cable: Query<(&mut Transform, &mut GlobalTransform, &mut Visibility), With<Cable>>,
+) {
+    let (Ok(p), Ok((mut tf, mut global, mut vis))) = (players.single(), cable.single_mut()) else { return };
     let Some((target, _)) = p.sim.swinging_on() else {
         vis.set_if_neq(Visibility::Hidden);
         return;
@@ -83,5 +92,8 @@ fn draw_cable(players: Query<&Player>, hand: Res<Hand>, globals: Query<&GlobalTr
         rotation: Quat::from_rotation_arc(Vec3::Y, along / length),
         scale: Vec3::new(1.0, length, 1.0),
     };
+    // Transforms are already propagated this frame; the cable has no parent, so its global
+    // transform is its own.
+    *global = GlobalTransform::from(*tf);
     vis.set_if_neq(Visibility::Inherited);
 }

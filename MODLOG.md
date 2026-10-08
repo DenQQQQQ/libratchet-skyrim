@@ -141,6 +141,41 @@ fixing.
   A press just before landing, with the air dash used up, now dashes on landing. In the air,
   the press still has to come on the tick (the air states' lookback wasn't read).
 
+### Fixed: the sandbox
+- **What you see:**
+  - **Stutter:** he's drawn between the 120 Hz sim's last two ticks, so he no longer
+    stutters at frame rates that don't divide 120. Demo recordings are unchanged (exactly
+    two ticks a frame).
+  - **The let-go clip** from a caught ledge never played at 60 fps: the event lasts one
+    tick and frames run two. It's counted now.
+  - **Respawning** (Backspace, the demo's teleports) takes the camera with him; it used to
+    sweep across the map. It also no longer plays a landing clip, and in the air he isn't
+    told he's standing.
+  - **Dummies spawned again** stood in their bind pose, the same bug as Clank's.
+  - **The Swingshot cable** left his hand a frame late, 0.4 m behind at full swing.
+  - **The run's lean** only ever reached half strength: Bevy keeps the run's own weight at 1.
+- **Moving:**
+  - **Steps:** dashes, swings and the slam's landing no longer fall off every step down.
+  - **Tab beside a block** grew his box into it, and the next move threw him through or along
+    it. He's pushed out the short way now, and a block he's inside doesn't catch his moves.
+  - **The wall probe's width** scales with him.
+- **Weapons and the wrench:**
+  - The weapons now follow a change of size: shots, lobs, knockback and blast radii were
+    stuck at the startup size.
+  - The crosshair skips a block the camera is inside; shots used to fly back at the camera.
+  - Blasts measure to each dummy's own middle.
+  - The thrown wrench tests the path it flew, so thin blocks stop it.
+  - When Ratchet's scene spawns again, the old glove and thrown-wrench holders go.
+- **Smaller things:**
+  - **Sound:** a sound loop started and stopped in one frame no longer plays on.
+  - **Effects:** their drag is per second, not per frame.
+  - **Text:** the help text has E and C, the `--demo-part` list is complete, and the HUD's
+    last line isn't indented.
+  - **Trail:** it caps its jump marks and draws across its buffer's seam.
+  - **Docs and clippy:** misplaced doc comments are back on their functions, and the four old
+    clippy warnings are gone (clippy is clean).
+- **A sandbox test:** a box grown into a block moves out the short way.
+
 ### Cleanups
 - **WallJumpSpeeds' default walk minimum** is the asset's 0, not 5.
 - **A melee swing's direction** takes the stick from the game's moving threshold (0.07), like

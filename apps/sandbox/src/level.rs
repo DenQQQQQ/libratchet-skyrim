@@ -287,7 +287,9 @@ pub struct WallHit {
 /// The game finds a wall to stick to with three rays at a time: straight at it and this far
 /// to either side (RiftApart.exe), so the wall has to reach that far past him both ways, at
 /// his middle.
-const PROBE_SIDE: f32 = 0.25;
+/// The game's probe reaches 0.25 m to either side at Ratchet's 0.35 m half width; it scales
+/// with him.
+const PROBE_SIDE_PER_HALF_WIDTH: f32 = 0.25 / 0.35;
 
 /// Result of moving the character's box through the level.
 pub struct MoveResult {
@@ -337,7 +339,8 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
         let mut next = p;
         next[axis] += d;
         for b in &level.blocks {
-            if !overlaps_box(b, next, half_w, height) {
+            // Already inside it (grown into it, say): moving out isn't blocked.
+            if !overlaps_box(b, next, half_w, height) || overlaps_box(b, p, half_w, height) {
                 continue;
             }
             // Step up onto low ledges instead of stopping.
@@ -351,7 +354,8 @@ pub fn move_box(level: &Level, feet: Vec3, half_w: f32, height: f32, delta: Vec3
             let out = -d.signum();
             let side = 2 - axis;
             let middle = p.y + height * 0.5;
-            let probed = b.min[side] <= p[side] - PROBE_SIDE && b.max[side] >= p[side] + PROBE_SIDE && b.min.y <= middle && b.max.y >= middle;
+            let probe = half_w * PROBE_SIDE_PER_HALF_WIDTH;
+            let probed = b.min[side] <= p[side] - probe && b.max[side] >= p[side] + probe && b.min.y <= middle && b.max.y >= middle;
             wall = Some(WallHit { normal: if axis == 0 { Vec2::new(out, 0.0) } else { Vec2::new(0.0, out) }, wall_jump: b.wall_jump, probed });
             next[axis] = if d > 0.0 { b.min[axis] - half_w - SKIN } else { b.max[axis] + half_w + SKIN };
         }
@@ -395,6 +399,25 @@ pub fn ground_distance(level: &Level, feet: Vec3, half_w: f32) -> Option<f32> {
         .filter(|b| overlaps_xz(b, feet, half_w) && b.max.y <= feet.y + 1e-3)
         .map(|b| feet.y - b.max.y)
         .fold(None, |best: Option<f32>, d| Some(best.map_or(d, |x| x.min(d))))
+}
+
+/// Moves the box out of any block it's inside, the shortest way sideways (after it grows).
+pub fn push_out(level: &Level, mut feet: Vec3, half_w: f32, height: f32) -> Vec3 {
+    for b in &level.blocks {
+        if !overlaps_box(b, feet, half_w, height) {
+            continue;
+        }
+        let ways = [
+            (b.max.x + half_w - feet.x, Vec3::X),
+            (feet.x + half_w - b.min.x, Vec3::NEG_X),
+            (b.max.z + half_w - feet.z, Vec3::Z),
+            (feet.z + half_w - b.min.z, Vec3::NEG_Z),
+        ];
+        if let Some((d, dir)) = ways.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)) {
+            feet += dir * (d + 1e-4);
+        }
+    }
+    feet
 }
 
 fn overlaps_xz(b: &Block, p: Vec3, half_w: f32) -> bool {
@@ -461,6 +484,18 @@ mod tests {
             ledges: Vec::new(),
             swing_targets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_box_grown_into_a_block_moves_out_the_short_way_and_isnt_thrown_through() {
+        let level = level();
+        // Standing against the block's -X face, the box grows from 0.35 to 0.55 m half width.
+        let feet = Vec3::new(2.0 - 0.36, 0.0, 0.0);
+        let out = push_out(&level, feet, 0.55, 1.8);
+        assert!((out.x - (2.0 - 0.55)).abs() < 1e-3 && out.z == 0.0, "pushed to {out:?}");
+        // Moving while still inside it doesn't put him on its far side.
+        let moved = move_box(&level, feet, 0.55, 1.8, Vec3::new(-0.05, 0.0, 0.0), 0.0);
+        assert!(moved.feet.x < 2.0, "thrown to {:?}", moved.feet);
     }
 
     #[test]

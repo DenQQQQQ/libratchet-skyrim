@@ -108,6 +108,32 @@ struct WeaponShakes {
     blast: Option<(Shake, f32, f32)>,
 }
 
+/// The weapons' own numbers before scaling, and the scale they're at, to follow Ratchet's
+/// size when it changes.
+#[derive(Resource)]
+struct WeaponBases {
+    pistol: WeaponParams,
+    grenade: WeaponParams,
+    blast: Option<(f32, f32)>,
+    scale: f32,
+}
+
+/// Rescales the weapons (keeping their ammo and wait) and the blast shake's reach when
+/// Ratchet's size changes.
+fn rescale(settings: Res<Settings>, bases: Option<ResMut<WeaponBases>>, mut arsenal: ResMut<Arsenal>, mut shakes: ResMut<WeaponShakes>) {
+    let Some(mut bases) = bases else { return };
+    let s = settings.scale;
+    if (bases.scale - s).abs() < 1e-6 {
+        return;
+    }
+    bases.scale = s;
+    arsenal.pistol.set_params(bases.pistol.scaled(s));
+    arsenal.grenade.set_params(bases.grenade.scaled(s));
+    if let (Some((inner, outer)), Some((_, i, o))) = (bases.blast, shakes.blast.as_mut()) {
+        (*i, *o) = (inner * s, outer * s);
+    }
+}
+
 /// The Shatterbomb's glove on Ratchet's right hand, and his own right glove, which it replaces.
 #[derive(Resource, Default)]
 struct Glove {
@@ -157,7 +183,7 @@ pub fn plugin(app: &mut App) {
         })
         .add_systems(Startup, setup.after(crate::setup))
         .add_systems(FixedUpdate, (fire, fly_bolts, fly_grenades).chain().after(simulate))
-        .add_systems(Update, (controls, gun_clips, gun_visibility, glove_visibility, blasts, throw_arc).chain());
+        .add_systems(Update, (rescale, controls, gun_clips, gun_visibility, glove_visibility, blasts, throw_arc).chain());
 }
 
 fn load_weapon(settings: &Settings, file: &str, base: WeaponParams) -> (WeaponParams, String) {
@@ -187,6 +213,12 @@ fn setup(mut commands: Commands, settings: Res<Settings>, assets: Res<AssetServe
         Shake::load(&settings.configs_dir, &r.config).map(|sh| (sh, r.inner * s, r.outer * s))
     };
     commands.insert_resource(WeaponShakes { recoil: shake(&pistol.recoil_shake).map(|(sh, _, _)| sh), blast: shake(&grenade.blast_shake) });
+    commands.insert_resource(WeaponBases {
+        pistol: pistol.clone(),
+        grenade: grenade.clone(),
+        blast: grenade.blast_shake.as_ref().map(|r| (r.inner, r.outer)),
+        scale: s,
+    });
     commands.insert_resource(Arsenal {
         slot: Slot::BurstPistol,
         requested: None,
@@ -244,6 +276,9 @@ fn on_gun_ready(
     mut commands: Commands,
 ) {
     commands.entity(ev.entity).insert(Visibility::Inherited);
+    // A copy spawned again has its own locators.
+    arsenal.muzzle = None;
+    arsenal.ejector = None;
     for e in children.iter_descendants(ev.entity) {
         // A scene spawned again (see clank.rs) brings a new player, which needs its clip again.
         if players.contains(e) && arsenal.gun_player != Some(e) {
@@ -288,6 +323,13 @@ pub fn spawn_glove(commands: &mut Commands, assets: &AssetServer, model: Entity,
         )
         .id();
     commands.entity(holder).add_child(glove);
+    // Ratchet's scene spawned again (see clank.rs): the last glove, under his model root,
+    // which stays, goes.
+    commands.queue(|world: &mut World| {
+        if let Some(old) = world.get_resource::<Glove>().and_then(|g| g.holder) {
+            world.despawn(old);
+        }
+    });
     commands.insert_resource(Glove { holder: Some(holder), bare });
 }
 
@@ -334,7 +376,8 @@ fn crosshair_target(cam: &GlobalTransform, level: &Level, dummies: &Query<&mut D
     let from = cam.translation();
     let dir = cam.forward().as_vec3();
     let mut best = range;
-    for b in level.blocks.iter() {
+    // A block the camera's inside (backed up against a wall) isn't what it aims at.
+    for b in level.blocks.iter().filter(|b| !(from.cmpgt(b.min).all() && from.cmplt(b.max).all())) {
         if let Some(t) = ray_box(from, dir, b.min, b.max)
             && t < best
         {
@@ -378,7 +421,7 @@ fn ray_box_normal(from: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<(f32, V
 }
 
 /// Where along a→b (0..1) the segment enters a box, and that face's normal.
-fn segment_hits_box(a: Vec3, b: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
+pub(crate) fn segment_hits_box(a: Vec3, b: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
     let d = b - a;
     let len = d.length();
     if len < 1e-6 {
@@ -532,8 +575,6 @@ fn fire(
     }
 }
 
-/// The weapon already spent the ammo when the throw started; at release, aim again from the
-/// hand (this re-solves the lob for where the hand is now).
 /// While a grenade throw winds up: where it would fly, as a dashed arc with a ring where it
 /// lands (the game draws a throw arc while the fire button is held).
 fn throw_arc(
@@ -571,6 +612,8 @@ fn throw_arc(
     }
 }
 
+/// The weapon already spent the ammo when the throw started; at release, aim again from the
+/// hand (this re-solves the lob for where the hand is now).
 fn last_grenade_shot(arsenal: &Arsenal, aim: &Aim) -> Option<libarsenal::Shot> {
     let w = arsenal.grenade.params();
     let to = aim.target - aim.muzzle;
@@ -733,7 +776,7 @@ fn fly_grenades(
         let mut n = 0;
         let mut total = 0.0;
         for mut d in dummies.iter_mut() {
-            let dist = (d.pos + Vec3::Y * 0.6 * settings.scale).distance(at);
+            let dist = (d.pos + Vec3::Y * d.height() * 0.5).distance(at);
             if dist > ex.outer_radius {
                 continue;
             }
