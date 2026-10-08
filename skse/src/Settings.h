@@ -15,6 +15,8 @@ struct Settings
 	bool animations = true;
 	// Ratchet's own model and clips instead of the Dragonborn (needs the converted files).
 	bool ratchetModel = true;
+	// Clank on his back, his heli-pack out while he glides (needs the converted files too).
+	bool clank = true;
 	// The Skyrim control (user event) that dashes, on the ground and in the air. Sprint's own
 	// sprint is off on foot then (Rift Apart has none). Empty: no dash.
 	std::string dashControl = "Sprint";

@@ -66,4 +66,7 @@ namespace Anim
 
 	// a = a + (b - a) * w, joint by joint (rotations by shortest-arc nlerp).
 	void Blend(Pose& a_a, const Pose& a_b, float a_w);
+
+	// The Hamilton product a * b (b's turn first, then a's), as glam's.
+	RE::NiQuaternion Multiply(const RE::NiQuaternion& a_a, const RE::NiQuaternion& a_b);
 }

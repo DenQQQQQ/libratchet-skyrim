@@ -13,15 +13,19 @@ repository is unchanged.
   `SKSE\Plugins\RatchetMovement\` and checks the C API version.
 - **Ratchet is the player:** his model, textures and move clips replace the Dragonborn in third
   person, converted from the owner's extraction (see [Ratchet's model](#ratchets-model)).
+- **Clank rides on his back,** placed the way the sandbox and the game place him, playing his
+  backpack idle. While Ratchet glides, Clank's heli-pack unfolds (top rotor and both arm rotors,
+  spinning) and folds away when he lands.
 - **Jump, double jump, glide, dash and air dash, with air control.** Skyrim's jump is switched
   off. libratchet gets the jump button as it is and drives the player in the air: the jump (the
   press and the hold), a second press for the double jump, holding on for the glide, and across
   with the stick (camera-relative, as in Rift Apart). The Sprint control dashes, on the ground
   and in the air (Skyrim's own sprint is off on foot). A double jump, glide or air dash also works
-  out of a fall off a ledge. Otherwise Skyrim moves him on the ground.
-- In game the moves match the sandbox replaying the same frames: a full hold peaks at 2.325 m at
-  Dragonborn scale (1.55) in both, shorter holds within 0.01 m, the double jump at 4.340 m in
-  both, a ground dash 10.82 m (10.83), and every landing within one frame of the replay (see
+  out of a fall off a ledge. The sim walks and runs him on the ground too, with Rift Apart's quick
+  starts (`bSimGround = 0` gives Skyrim's locomotion back).
+- In game the moves match the sandbox replaying the same frames: at Ratchet's size (scale 1) a
+  full hold peaks at 1.500 m in both, shorter holds within 0.02 m, the double jump at 2.800 m in
+  both, a ground dash 7.00 m (6.99), and every landing within one frame of the replay (see
   [MODLOG.md](MODLOG.md)).
 - A glide comes down softly: the height it sinks doesn't count toward fall damage.
 - **He fights:** the OmniWrench (the sim's three-swing combo with its lunges, the Hyper-Strike in
@@ -74,9 +78,14 @@ the last conversion, and copies it into the mod:
 - `textures/RatchetMovement/*.dds`: colour, normal and specular maps;
 - `SKSE/Plugins/RatchetMovement/ratchet.anim`: his move clips.
 
+The same tool converts `wrench.glb` and `burstpistol.glb` (models only) and `clank.glb`
+(`clank.nif` with his heli-pack's shapes named `RK_heli_*`, and `clank.anim` with his backpack
+clips).
+
 The plugin hangs him under the player's third-person 3D, hides the Dragonborn's meshes, and
-picks and blends his clips by the sandbox's rules. INI: `bRatchet = 0` keeps the Dragonborn.
-`skse/tools/nif.py` is the NIF reader/writer the converter uses.
+picks and blends his clips by the sandbox's rules. Clank hangs on Ratchet's `ClankAttach` bone.
+INI: `bRatchet = 0` keeps the Dragonborn, `bClank = 0` leaves Clank off. `skse/tools/nif.py` is
+the NIF reader/writer the converter uses.
 
 ## Checking the jump
 At load the plugin runs libratchet's flat-floor jump on its own (the same test as the sandbox
@@ -111,13 +120,14 @@ selected, and follows the log.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor
-  within 0.05 m in qasmoke). A ground dash: distance within 0.25 m, time the same.
+  within 0.05 m in qasmoke). A ground dash: distance within 0.25 m, time the same. The glide
+  also has to bring Clank's heli-pack out.
 - Then it quits the game. The exit code is 0 when everything passed, 1 on a failure, 2 on a crash
   (it prints CrashLogger's log), 3 when there's no result, 4 when the game hung (the main thread's
   stack goes to `hang.txt` first, through cdb).
 
 The game runs in a small window in the corner behind other windows; `-Fullscreen` gives it the
-screen. Screenshots (idle, each jump's top, double jump and glide, the end) go to
+screen. Screenshots (idle, each jump's top, double jump and glide, the heli-pack out, the end) go to
 `target/skse/shots/<run>/`. Other
 options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his front), `-NoShots`.
 

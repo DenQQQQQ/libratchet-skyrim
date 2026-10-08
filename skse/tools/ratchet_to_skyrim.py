@@ -6,6 +6,8 @@ YOUR OWN Rift Apart install) into what the SKSE plugin draws in Skyrim SE:
   textures/RatchetMovement/ratchet/*.dds             their textures
   SKSE/Plugins/RatchetMovement/ratchet.anim          his clips, for the plugin to play
 
+The same for Clank (--name clank: clank.nif, clank.anim) and the weapons (models only).
+
 The output is game data: it stays on this PC (the build installs it into the MO2 mod), never in
 the repository.
 
@@ -35,6 +37,7 @@ import nif as N  # noqa: E402
 PREFIX = "RC_"
 MESH_PATH = "RatchetMovement\\ratchet.nif"           # under Data\meshes
 TEXTURE_DIR = "RatchetMovement\\ratchet"             # under Data\textures
+ANIM_FILE = "ratchet.anim"                            # under Data\SKSE\Plugins\RatchetMovement
 ROOT_NAME = "RatchetRoot"
 MAX_BONES_PER_PARTITION = 60                          # Skyrim's shaders take up to 80
 MAX_TEXTURE = 1024  # uncompressed for now: 4 MB each at 1024
@@ -247,6 +250,11 @@ def convert_model(gl, out_dir, manifest):
         # and Windows and Skyrim's paths don't tell those apart.
         name = f"{src:02}_" + re.sub(r"[^A-Za-z0-9_]+", "_", os.path.splitext(g["images"][src].get("name", f"image{src}"))[0])
         img = fit(gl.image(src)).convert("RGBA")
+        if kind == "color" and extra is not None:
+            # Times the material's colour factor (one file per factor).
+            a = np.asarray(img).astype(np.float64) * np.array(extra)[None, None, :]
+            img = Image.fromarray(np.clip(np.round(a), 0, 255).astype(np.uint8), "RGBA")
+            name += "_x" + "".join(f"{round(c * 255):02x}" for c in extra)
         if kind == "normal":
             a = np.asarray(img).copy()
             a[..., 1] = 255 - a[..., 1]  # glTF's normal maps are OpenGL-style; Skyrim's are DirectX-style
@@ -264,31 +272,61 @@ def convert_model(gl, out_dir, manifest):
         written[key] = "textures\\" + TEXTURE_DIR + "\\" + file
         return written[key]
 
+    def solid(rgba):
+        """A small texture of one colour (materials with a colour factor and no texture: Clank's
+        glass and glows, the wrench's glow strip)."""
+        px = tuple(int(np.clip(round(c * 255), 0, 255)) for c in rgba)
+        key = ("solid", px)
+        if key not in written:
+            file = "solid_" + "".join(f"{c:02x}" for c in px) + ".dds"
+            write_dds(os.path.join(tex_dir, file), Image.new("RGBA", (4, 4), px))
+            written[key] = "textures\\" + TEXTURE_DIR + "\\" + file
+        return written[key]
+
+    def gamma(rgb):
+        # glTF's colour factors are linear; Skyrim's colours and textures are gamma (sRGB).
+        return [float(c) ** (1 / 2.2) for c in rgb]
+
     # Every shape gets its own shader, texture set and alpha blocks: a shader property holds its
     # shape's render passes, and one shared by two shapes makes Skyrim's renderer loop forever
     # (found in game: 13 million bone-buffer maps in one frame with both gloves drawn).
     def material(mi):
         m = g["materials"][mi]
         pbr = m.get("pbrMetallicRoughness", {})
-        diffuse = texture(pbr["baseColorTexture"]["index"], "color") if "baseColorTexture" in pbr else ""
+        factor = [float(x) for x in pbr.get("baseColorFactor", [1, 1, 1, 1])]
+        factor = gamma(factor[:3]) + factor[3:]
+        if "baseColorTexture" in pbr:
+            plain = all(abs(c - 1.0) < 1e-6 for c in factor)
+            diffuse = texture(pbr["baseColorTexture"]["index"], "color", None if plain else tuple(factor))
+        else:
+            diffuse = solid(factor)
         normal = ""
         if "normalTexture" in m:
             normal = texture(m["normalTexture"]["index"], "normal", pbr.get("metallicRoughnessTexture", {}).get("index"))
         tex_set = nf.add({"type": "BSShaderTextureSet", "textures": [diffuse, normal, "", "", "", "", "", "", ""]})
-        masked = m.get("alphaMode") in ("MASK", "BLEND")
+        mode = m.get("alphaMode", "OPAQUE")
+        emissive = gamma(m.get("emissiveFactor", [0, 0, 0]))
+        glows = max(emissive) > 1e-3
         flags1 = 0x1 | 0x2 | 0x100 | 0x200 | 0x2000000 | 0x80000000   # specular, skinned, shadows, remappable, z test
-        flags2 = 0x1 | 0x8000 | (0x10 if m.get("doubleSided", True) else 0)  # z write, envmap light fade, two sided
+        flags1 |= 0x400000 if glows else 0                            # own emit
+        flags2 = 0x8000 | (0x10 if m.get("doubleSided", True) else 0)  # envmap light fade, two sided
+        flags2 |= 0 if mode == "BLEND" else 0x1                        # z write, but not see-through ones
         shader = nf.add({
             "type": "BSLightingShaderProperty", "shader_type": 0, "name": nf.string(m.get("name", "")), "extra_data": [], "controller": -1,
             "flags1": flags1, "flags2": flags2, "uv_offset": [0.0, 0.0], "uv_scale": [1.0, 1.0], "texture_set": tex_set,
-            "emissive_color": [0.0, 0.0, 0.0], "emissive_multiple": 1.0, "texture_clamp_mode": 3, "alpha": 1.0,
+            "emissive_color": emissive if glows else [0.0, 0.0, 0.0], "emissive_multiple": 1.0, "texture_clamp_mode": 3, "alpha": 1.0,
             "refraction_strength": 0.0, "glossiness": 40.0, "specular_color": [1.0, 1.0, 1.0], "specular_strength": 0.6,
             "lighting_effect1": 0.3, "lighting_effect2": 2.0, "type_extra": [],
         })
         alpha = -1
-        if masked:
+        if mode == "MASK":
+            # Alpha test: drawn where alpha > the cutoff.
             alpha = nf.add({"type": "NiAlphaProperty", "name": -1, "extra_data": [], "controller": -1,
                             "flags": 0x12EC, "threshold": int(255 * m.get("alphaCutoff", 0.4))})
+        elif mode == "BLEND":
+            # Blended by its alpha (Clank's glass, his rotor blades), fully clear pixels dropped.
+            alpha = nf.add({"type": "NiAlphaProperty", "name": -1, "extra_data": [], "controller": -1,
+                            "flags": 0x12ED, "threshold": 0})
         return shader, alpha
 
     attrs = N.VF_VERTEX | N.VF_UV | N.VF_NORMAL | N.VF_TANGENT | N.VF_SKINNED
@@ -385,8 +423,12 @@ def convert_model(gl, out_dir, manifest):
             skin_inst = nf.add({"type": "BSDismemberSkinInstance", "data": skin_data, "partition": partition, "skeleton_root": root,
                                 "bones": [block_of_node[joints[j]] for j in used], "body_parts": [(257, 32)] * len(partitions)})
             shader, alpha = material(prim["material"]) if "material" in prim else (-1, -1)
+            # A part the plugin shows only at times (Clank's heli-pack: "part": "heli") is in the
+            # shape's name: RK_heli_sm119.
+            part = node.get("extras", {}).get("part")
+            shape_name = PREFIX + (f"{part}_" if part else "") + node.get("name", f"shape{ni}")
             shape = nf.add({
-                "type": "BSTriShape", "name": nf.string(PREFIX + node.get("name", f"shape{ni}")), "extra_data": [], "controller": -1,
+                "type": "BSTriShape", "name": nf.string(shape_name), "extra_data": [], "controller": -1,
                 "flags": 0xE, "translation": [0.0, 0.0, 0.0], "rotation": [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0], "scale": 1.0,
                 # The bind pose's sphere, grown: animation swings arms and tail out of it.
                 "collision": -1, "bound": bounding_sphere(pos)[:3] + [bounding_sphere(pos)[3] * 1.5], "skin": skin_inst,
@@ -394,7 +436,7 @@ def convert_model(gl, out_dir, manifest):
                 "vertex_desc": desc, "num_triangles": 0, "num_vertices": 0, "data_size": 0, "particle_data_size": 0,
             })
             nf.blocks[root]["children"].append(shape)
-            stats.append((node.get("name"), nv, len(tris), len(used), len(partitions)))
+            stats.append((shape_name, nv, len(tris), len(used), len(partitions)))
 
     mesh_dir = os.path.join(out_dir, "meshes", *MESH_PATH.split("\\")[:-1])
     os.makedirs(mesh_dir, exist_ok=True)
@@ -415,7 +457,7 @@ def convert_model(gl, out_dir, manifest):
 # --- the clips
 
 def convert_clips(gl, out_dir, manifest):
-    """ratchet.anim: the skeleton (names, parents, rest pose) and every move clip at its 30 Hz keys.
+    """ratchet.anim (clank.anim): the skeleton (names, parents, rest pose) and every clip at its keys.
 
     Layout (little-endian): "RANM", u32 version 1, u32 joints, per joint (u16 name length, name,
     i32 parent, rest translation 3f, rotation 4f xyzw, scale f), u32 clips, per clip (u16 name
@@ -490,7 +532,7 @@ def convert_clips(gl, out_dir, manifest):
             w.raw(data.astype("<f4").tobytes())
             total += len(data)
     out = w.bytes()
-    path = os.path.join(out_dir, "SKSE", "Plugins", "RatchetMovement", "ratchet.anim")
+    path = os.path.join(out_dir, "SKSE", "Plugins", "RatchetMovement", ANIM_FILE)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(out)
@@ -502,14 +544,15 @@ def main():
     ap.add_argument("--glb", required=True)
     ap.add_argument("--json", help="the extractor's ratchet.json (clip speeds); default: next to the glb")
     ap.add_argument("--out", required=True, help="folder laid out like Skyrim's Data folder")
-    ap.add_argument("--name", default="ratchet", help="meshes\\RatchetMovement\\<name>.nif and textures\\RatchetMovement\\<name>")
+    ap.add_argument("--name", default="ratchet", help="meshes\\RatchetMovement\\<name>.nif, textures\\RatchetMovement\\<name>, <name>.anim")
     ap.add_argument("--prefix", default="RC_", help="put before every node name (keeps the models' nodes apart in one scene)")
     ap.add_argument("--no-clips", action="store_true", help="the model only (his weapons: their own clips aren't played)")
     a = ap.parse_args()
-    global PREFIX, MESH_PATH, TEXTURE_DIR, ROOT_NAME
+    global PREFIX, MESH_PATH, TEXTURE_DIR, ANIM_FILE, ROOT_NAME
     PREFIX = a.prefix
     MESH_PATH = f"RatchetMovement\\{a.name}.nif"
     TEXTURE_DIR = f"RatchetMovement\\{a.name}"
+    ANIM_FILE = f"{a.name}.anim"
     ROOT_NAME = "RatchetRoot" if a.name == "ratchet" else f"RatchetRoot_{a.name}"
     manifest_path = a.json or os.path.splitext(a.glb)[0] + ".json"
     manifest = json.load(open(manifest_path)) if os.path.exists(manifest_path) else None

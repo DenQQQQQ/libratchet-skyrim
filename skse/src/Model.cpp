@@ -2,6 +2,7 @@
 #include "Model.h"
 
 #include "Anim.h"
+#include "Clank.h"
 #include "Combat.h"
 #include "Settings.h"
 
@@ -628,6 +629,7 @@ namespace Model
 		s.model->local.rotate = Orientation(s.yaw);
 		s.model->local.scale = UnitsPerMetre() * scale;
 		HoldWeapons(a_player);
+		Clank::Update(s.model.get(), a_drive.simJump && a_drive.simState == RATCHET_STATE_GLIDE, a_dt);
 		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 		s.model->Update(update);
 		// Once a throw, a few frames out: where the flying wrench is drawn against where it flies.

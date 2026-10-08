@@ -100,11 +100,17 @@ if ($Install) {
             uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $glb --out $converted | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "converting Ratchet failed" }
         }
-        # His OmniWrench and Burst Pistol (models only: the plugin hangs them on his gun hand).
-        foreach ($w in @(@{ Name = "wrench"; Prefix = "RW_" }, @{ Name = "burstpistol"; Prefix = "RP_" })) {
+        # His OmniWrench and Burst Pistol (models only: the plugin hangs them on his gun hand), and
+        # Clank with his clips (he rides on Ratchet's back).
+        $others = @(
+            @{ Name = "wrench"; Prefix = "RW_"; Clips = $false; Without = "he'll fight without it in his hand" },
+            @{ Name = "burstpistol"; Prefix = "RP_"; Clips = $false; Without = "he'll fight without it in his hand" },
+            @{ Name = "clank"; Prefix = "RK_"; Clips = $true; Without = "Ratchet goes without Clank on his back" }
+        )
+        foreach ($w in $others) {
             $wglb = Join-Path (Split-Path $glb) "$($w.Name).glb"
             $wnif = Join-Path $converted "meshes\RatchetMovement\$($w.Name).nif"
-            if (-not (Test-Path $wglb)) { Write-Warning "No $wglb`: he'll fight without it in his hand"; continue }
+            if (-not (Test-Path $wglb)) { Write-Warning "No $wglb`: $($w.Without)"; continue }
             $wstale = -not (Test-Path $wnif)
             if (-not $wstale) {
                 $made = (Get-Item $wnif).LastWriteTime
@@ -112,7 +118,9 @@ if ($Install) {
             }
             if ($wstale) {
                 Write-Host "Converting $($w.Name) from $wglb..."
-                uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $wglb --out $converted --name $w.Name --prefix $w.Prefix --no-clips | Out-Host
+                $clipArgs = @()
+                if (-not $w.Clips) { $clipArgs += "--no-clips" }
+                uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $wglb --out $converted --name $w.Name --prefix $w.Prefix @clipArgs | Out-Host
                 if ($LASTEXITCODE -ne 0) { throw "converting $($w.Name) failed" }
             }
         }

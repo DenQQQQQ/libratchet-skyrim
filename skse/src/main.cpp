@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
+#include "Clank.h"
 #include "Combat.h"
 #include "Jump.h"
 #include "Model.h"
@@ -62,6 +63,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	AutoTest::Load(dir);
 	if (Model::Load(dir)) {
 		SKSE::log::info("ratchet model: on");
+		if (Clank::Load(dir)) {
+			SKSE::log::info("clank: on");
+		}
 	}
 	Sounds::Load(dir);
 	const auto& e = Ratchet::Expected();

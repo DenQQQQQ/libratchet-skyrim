@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Clank.h"
 #include "Combat.h"
 #include "Input.h"
 #include "Model.h"
@@ -124,6 +125,7 @@ namespace AutoTest
 			bool            targetPlaced = false;
 			float           targetHealth = 0.0f;  // as the fight began
 			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
+			bool            heliSeen = false;     // Clank's heli-pack came out during this case
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -317,6 +319,7 @@ namespace AutoTest
 			s.landed = false;
 			s.dashPressed = false;
 			s.targetPlaced = false;
+			s.heliSeen = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -718,6 +721,11 @@ namespace AutoTest
 		s.elapsed += a_dt;
 		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
+		s.heliSeen = s.heliSeen || Clank::HeliOut();
+		// Once the heli-pack is all the way out (the glide's own clip), a picture of it.
+		if (Clank::CurrentClip() == "glide" && std::ranges::find(s.shotsThisCase, "heli") == s.shotsThisCase.end()) {
+			OnMove("heli");
+		}
 		if (c.duration > 0.0f) {
 			// A fight: the wrench presses and the trigger on their times, then the verdict.
 			Combat::TestButtons fight;
@@ -830,6 +838,16 @@ namespace AutoTest
 			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
 			a_jump.hold, a_jump.distance, a_jump.sandboxDistance, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime,
 			bad.empty() ? "" : " - off:" + bad);
+		// A glide (the second press held on): Clank's heli-pack has to have come out.
+		if (kCases[s.index].againHold > 1.0f && Clank::Enabled()) {
+			if (s.heliSeen) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			SKSE::log::info("autotest: {} {}: Clank's heli-pack {}", s.heliSeen ? "PASS" : "FAIL", kCases[s.index].name,
+				s.heliSeen ? "came out" : "never came out");
+		}
 	}
 
 	void OnDashed(const Dash& a_dash)

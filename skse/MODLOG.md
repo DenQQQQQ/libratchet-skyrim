@@ -409,6 +409,40 @@ guard who has to report the assault.
 - In game, by the third aimed shot his arm is out in front, pointing at the target.
 - Fixed with it: sampling a clip left joints it doesn't key wherever the last clip had put
   them. They're back at rest now.
-- The flying wrench, checked by a log line: drawn 0.00 m from where the sim has it, shown. The test place clears hostiles that wander in (a wolf and a
-mudcrab bit him on the Whiterun road) by killing them. Disabling them instead crashed Skyrim's
-pathfinding thread on the way out, since a path request was still in flight.
+- The flying wrench, checked by a log line: drawn 0.00 m from where the sim has it, shown.
+- The test place clears hostiles that wander in (a wolf and a mudcrab bit him on the Whiterun
+  road) by killing them. Disabling them instead crashed Skyrim's pathfinding thread on the way
+  out, since a path request was still in flight.
+
+## 2026-10-09: Clank on his back
+
+The owner asked for Clank on his back.
+
+- **The model.** `ratchet_to_skyrim.py --name clank --prefix RK_` converts the owner's
+  `clank.glb`: 29 skinned shapes on 175 joints (`clank.nif`), 17 textures, and his 5 clips
+  (`clank.anim`: backpack idle, heli extend, glide, retract, and a fall glide the sandbox doesn't
+  use). 11 shapes are his heli-pack (glTF extras `"part": "heli"`); the converter now puts the
+  part in their names (`RK_heli_sm119`), so the plugin can find them.
+- **Materials the converter didn't handle before** (Clank has them, and the wrench's glow strip):
+  - a colour factor and no texture (his antenna and eye glows, his glass, the rotor blades): a
+    4×4 texture of that colour; with a texture, the texture times the factor. glTF's factors are
+    linear, Skyrim's colours gamma, so the factor goes through ^(1/2.2) first;
+  - an emissive colour: the shader's own-emit flag with that colour (his green glows);
+  - `BLEND` materials: alpha blending without z writes (the rotor blades and antenna glass are
+    see-through). `MASK` stays an alpha test. Ratchet's own materials have none of these, so his
+    look doesn't change.
+- **The plugin** (`src/Clank.cpp`) hangs him the way `apps/sandbox/src/clank.rs` does: his
+  `dyn_backpack_attach` joint exactly on Ratchet's `ClankAttach` bone. His root is the inverse of
+  where that joint is in his model this frame, its place and turn only (his clips scale his body
+  to 0.84 on Ratchet's back; undoing that made him 1.19 times too big in the sandbox). He plays
+  his backpack idle. As a glide starts the heli-pack's shapes show and he plays its extend
+  (0.23 s), then the glide loop, then the retract (0.3 s) as it ends, 0.1 s fades between them.
+  The three rotors spin at 22 rad/s about the axis between their blades' rest frames, as the
+  sandbox spins them. INI `bClank`.
+- **Checked:** a log line says where his head is from Ratchet's chest and which way he faces. In
+  game: 0.09 m behind, 0.15 m above, 0.11 m to the side, facing -0.60 (backward, turned with
+  Ratchet's idle stance). The sandbox's math on the same two idle clips, offline from the glbs,
+  gives 0.08-0.10 m, 0.15 m, 0.10-0.11 m and -0.55 to -0.64. Screenshots show him on the back,
+  and in the glide the top rotor on its stem with the green bulb and both arm rotors.
+- The glide test now also has to bring the heli-pack out, with a screenshot once it's all the way
+  out. **18/18 pass.**
