@@ -798,17 +798,22 @@ fn blasts(
 
 
 /// Moves that put the weapon away: melee (the wrench is out), dashes (the game suspends the
-/// weapon) and wall sticks with their jumps (the game holsters it).
+/// weapon), and walls and ledges with the jumps off them (the game holsters it).
 pub fn weapon_away(state: MoveState) -> bool {
+    matches!(state, MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash) || holstered(state)
+}
+
+/// On a wall or a ledge, or jumping off one: the game holsters the weapon.
+pub fn holstered(state: MoveState) -> bool {
     matches!(
         state,
-        MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::Dash | MoveState::AirDash | MoveState::WallStick | MoveState::WallJump
+        MoveState::WallStick | MoveState::WallJump | MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::LedgeJump
     )
 }
 
 /// The glove is on (and his own right glove off) while the Shatterbomb is out, except on a wall.
 fn glove_visibility(arsenal: Res<Arsenal>, glove: Res<Glove>, players: Query<&Player>, mut vis: Query<&mut Visibility>) {
-    let walled = players.single().is_ok_and(|p| matches!(p.sim.state(), MoveState::WallStick | MoveState::WallJump));
+    let walled = players.single().is_ok_and(|p| holstered(p.sim.state()));
     let on = arsenal.slot == Slot::Shatterbomb && !walled;
     for (entity, show) in [(glove.holder, on), (glove.bare, !on)] {
         if let Some(e) = entity

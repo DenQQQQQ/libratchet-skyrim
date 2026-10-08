@@ -5,8 +5,8 @@
 //! boundary (Skyrim: Z up, about 70 units per metre).
 
 use libratchet::glam::{Vec2, Vec3};
-use libratchet::{Contact, Event, Input, MoveState, Ratchet, ThrowStatus, Tuning, WallContact, WrenchThrow};
-use std::ffi::{CStr, c_char};
+use libratchet::{Contact, Event, Input, Ledge, LedgeFlags, MoveState, RayHit, Ratchet, ThrowStatus, Tuning, WallContact, World, WrenchThrow};
+use std::ffi::{CStr, c_char, c_void};
 use std::path::Path;
 
 #[repr(C)]
@@ -38,6 +38,8 @@ pub struct RatchetInput {
     /// from it, as in the game.
     pub view_right_x: f32,
     pub view_right_z: f32,
+    /// Crouch (the ledge drop button) held (0/1).
+    pub crouch: u8,
 }
 
 #[repr(C)]
@@ -79,6 +81,75 @@ pub const RATCHET_EVENT_SMASH_STARTED: u32 = 1 << 10;
 pub const RATCHET_EVENT_SMASH_IMPACT: u32 = 1 << 11;
 pub const RATCHET_EVENT_WALL_STUCK: u32 = 1 << 12;
 pub const RATCHET_EVENT_WALL_JUMPED: u32 = 1 << 13;
+/// Grabbed a ledge; `ledge_caught` says whether it was one found on the way down.
+pub const RATCHET_EVENT_LEDGE_GRABBED: u32 = 1 << 14;
+pub const RATCHET_EVENT_LEDGE_CLIMBED: u32 = 1 << 15;
+pub const RATCHET_EVENT_LEDGE_DROPPED: u32 = 1 << 16;
+pub const RATCHET_EVENT_LEDGE_TRANSFERRED: u32 = 1 << 17;
+pub const RATCHET_EVENT_LEDGE_JUMPED: u32 = 1 << 18;
+
+/// A placed ledge the host offers (see libratchet's `Ledge`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RatchetLedge {
+    /// The edge, end to end.
+    pub a: RatchetVec3,
+    pub b: RatchetVec3,
+    /// Out of the wall below it, on the ground plane.
+    pub normal_x: f32,
+    pub normal_z: f32,
+    pub id: u32,
+    /// What it allows (0/1): grabbing it, the jump over it, letting go, moving to or from it.
+    pub grab: u8,
+    pub jump: u8,
+    pub drop: u8,
+    pub transfer: u8,
+}
+
+/// The host's level, as the sim asks about it: callbacks with the host's own pointer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RatchetWorld {
+    pub user: *mut c_void,
+    /// Writes up to `max` placed ledges near `center` (within `radius`) to `out`; returns how
+    /// many. May be null (no placed ledges).
+    pub ledges: Option<unsafe extern "C" fn(user: *mut c_void, center: RatchetVec3, radius: f32, out: *mut RatchetLedge, max: u32) -> u32>,
+    /// The first surface the ray from `from` to `to` hits: returns 1 and fills `point` and
+    /// `normal`, or 0. May be null (no ledges to catch).
+    pub raycast: Option<unsafe extern "C" fn(user: *mut c_void, from: RatchetVec3, to: RatchetVec3, point: *mut RatchetVec3, normal: *mut RatchetVec3) -> u8>,
+}
+
+fn v3(v: RatchetVec3) -> Vec3 {
+    Vec3::new(v.x, v.y, v.z)
+}
+
+fn rv3(v: Vec3) -> RatchetVec3 {
+    RatchetVec3 { x: v.x, y: v.y, z: v.z }
+}
+
+impl World for RatchetWorld {
+    fn ledges(&self, center: Vec3, radius: f32, out: &mut Vec<Ledge>) {
+        let Some(f) = self.ledges else { return };
+        let mut buf = [RatchetLedge::default(); 32];
+        // Safety: the host promised a valid callback for its user pointer.
+        let n = unsafe { f(self.user, rv3(center), radius, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        out.extend(buf[..n.min(buf.len())].iter().map(|l| Ledge {
+            a: v3(l.a),
+            b: v3(l.b),
+            normal: Vec2::new(l.normal_x, l.normal_z).normalize_or_zero(),
+            id: l.id,
+            flags: LedgeFlags { grab: l.grab != 0, jump: l.jump != 0, drop: l.drop != 0, transfer: l.transfer != 0 },
+        }));
+    }
+
+    fn raycast(&self, from: Vec3, to: Vec3) -> Option<RayHit> {
+        let f = self.raycast?;
+        let (mut point, mut normal) = (RatchetVec3::default(), RatchetVec3::default());
+        // Safety: as above.
+        let hit = unsafe { f(self.user, rv3(from), rv3(to), &mut point, &mut normal) };
+        (hit != 0).then(|| RayHit { point: v3(point), normal: v3(normal).normalize_or_zero() })
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -86,7 +157,8 @@ pub struct RatchetStepResult {
     /// Move the character by `velocity * dt` this tick.
     pub velocity: RatchetVec3,
     /// 0 ground, 1 jump, 2 double jump, 3 fall, 4 glide, 5 dash, 6 air dash, 7 melee,
-    /// 8 Hyper-Strike, 9 Hyper-Strike landing, 10 wall stick, 11 wall jump.
+    /// 8 Hyper-Strike, 9 Hyper-Strike landing, 10 wall stick, 11 wall jump, 12 ledge hang,
+    /// 13 ledge climb, 14 ledge drop, 15 ledge jump.
     pub state: u32,
     /// `RATCHET_EVENT_*` bits for this tick.
     pub events: u32,
@@ -100,6 +172,8 @@ pub struct RatchetStepResult {
     pub wall_right: u8,
     /// His current jump's pull down (m/s²), for `RatchetContact::landing_ahead`.
     pub gravity: f32,
+    /// With RATCHET_EVENT_LEDGE_GRABBED: 1 if the ledge was caught on the way down, 0 if placed.
+    pub ledge_caught: u8,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -122,6 +196,7 @@ pub struct RatchetSwingInfo {
 pub struct RatchetSim {
     sim: Ratchet,
     base: Tuning,
+    world: Option<RatchetWorld>,
 }
 
 fn state_code(s: MoveState) -> u32 {
@@ -138,6 +213,10 @@ fn state_code(s: MoveState) -> u32 {
         MoveState::SmashLand => 9,
         MoveState::WallStick => 10,
         MoveState::WallJump => 11,
+        MoveState::LedgeHang => 12,
+        MoveState::LedgeClimb => 13,
+        MoveState::LedgeDrop => 14,
+        MoveState::LedgeJump => 15,
     }
 }
 
@@ -145,7 +224,7 @@ fn state_code(s: MoveState) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ratchet_new(scale: f32) -> *mut RatchetSim {
     let base = Tuning::default();
-    Box::into_raw(Box::new(RatchetSim { sim: Ratchet::new(base.scaled(scale)), base }))
+    Box::into_raw(Box::new(RatchetSim { sim: Ratchet::new(base.scaled(scale)), base, world: None }))
 }
 
 /// Frees a sim from `ratchet_new`. Null is ignored.
@@ -210,6 +289,7 @@ pub unsafe extern "C" fn ratchet_step(
         melee: input.melee != 0,
         aim: (input.aiming != 0).then(|| Vec2::new(input.aim_x, input.aim_z)),
         aim_mode: input.aiming == 1,
+        crouch: input.crouch != 0,
         view_right: Vec2::new(input.view_right_x, input.view_right_z),
     };
     let contact = Contact {
@@ -223,7 +303,12 @@ pub unsafe extern "C" fn ratchet_step(
         wall_jump_zone: contact.wall_jump_zone != 0,
         landing_ahead: contact.landing_ahead != 0,
     };
-    let v = sim.sim.step(dt, &input, &contact, Vec3::new(position.x, position.y, position.z));
+    let position = Vec3::new(position.x, position.y, position.z);
+    let v = match sim.world {
+        Some(world) => sim.sim.step_in(dt, &input, &contact, position, &world),
+        None => sim.sim.step(dt, &input, &contact, position),
+    };
+    let mut ledge_caught = 0;
     let mut events = 0;
     let mut landed_fall_speed = 0.0;
     let mut melee_swing = sim.sim.melee_swing().unwrap_or(0) as u32;
@@ -252,6 +337,14 @@ pub unsafe extern "C" fn ratchet_step(
             Event::SmashImpact { .. } => RATCHET_EVENT_SMASH_IMPACT,
             Event::WallStuck => RATCHET_EVENT_WALL_STUCK,
             Event::WallJumped => RATCHET_EVENT_WALL_JUMPED,
+            Event::LedgeGrabbed { caught } => {
+                ledge_caught = *caught as u8;
+                RATCHET_EVENT_LEDGE_GRABBED
+            }
+            Event::LedgeClimbed => RATCHET_EVENT_LEDGE_CLIMBED,
+            Event::LedgeDropped => RATCHET_EVENT_LEDGE_DROPPED,
+            Event::LedgeTransferred => RATCHET_EVENT_LEDGE_TRANSFERRED,
+            Event::LedgeJumped => RATCHET_EVENT_LEDGE_JUMPED,
         };
     }
     RatchetStepResult {
@@ -263,6 +356,7 @@ pub unsafe extern "C" fn ratchet_step(
         melee_swing,
         wall_right: sim.sim.wall_right() as u8,
         gravity: sim.sim.gravity(),
+        ledge_caught,
     }
 }
 
@@ -370,7 +464,20 @@ pub unsafe extern "C" fn ratchet_set_velocity(sim: *mut RatchetSim, v: RatchetVe
     }
 }
 
-/// Puts the sim back on the ground with no speed (after a teleport or a load).
+/// Gives the sim the host's level to ask about ledges (placed ones, and rays to find lips to
+/// catch). Without it, there are no ledges.
+///
+/// # Safety
+/// `sim` must be valid; the callbacks must stay valid for `world.user` while the sim steps.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ratchet_set_world(sim: *mut RatchetSim, world: RatchetWorld) {
+    if let Some(sim) = unsafe { sim.as_mut() } {
+        sim.world = Some(world);
+    }
+}
+
+/// Puts the sim back on the ground with no speed (after a teleport or a load). Keeps its tuning
+/// and world.
 ///
 /// # Safety
 /// `sim` must be valid.
@@ -438,6 +545,72 @@ mod tests {
         assert_eq!(swings, 3);
         assert!(info.hit_time > 0.0 && info.duration > info.hit_time);
         assert_eq!(caught, 1);
+    }
+
+    /// A level for the callbacks: the floor and a 5 m block whose face looks down -X at x = 1.
+    unsafe extern "C" fn block_raycast(_user: *mut c_void, from: RatchetVec3, to: RatchetVec3, point: *mut RatchetVec3, normal: *mut RatchetVec3) -> u8 {
+        let boxes = [(Vec3::new(-50.0, -1.0, -50.0), Vec3::new(50.0, 0.0, 50.0)), (Vec3::new(1.0, 0.0, -3.0), Vec3::new(5.0, 5.0, 3.0))];
+        let (from, d) = (v3(from), v3(to) - v3(from));
+        let mut best: Option<(f32, Vec3)> = None;
+        'boxes: for (lo, hi) in boxes {
+            let (mut near, mut far, mut n) = (0.0f32, best.map_or(1.0, |b| b.0), Vec3::ZERO);
+            for axis in 0..3 {
+                if d[axis].abs() < 1e-9 {
+                    if from[axis] < lo[axis] || from[axis] > hi[axis] {
+                        continue 'boxes;
+                    }
+                    continue;
+                }
+                let inv = 1.0 / d[axis];
+                let (enter, exit, face) = if inv > 0.0 {
+                    ((lo[axis] - from[axis]) * inv, (hi[axis] - from[axis]) * inv, -Vec3::AXES[axis])
+                } else {
+                    ((hi[axis] - from[axis]) * inv, (lo[axis] - from[axis]) * inv, Vec3::AXES[axis])
+                };
+                if enter > near {
+                    near = enter;
+                    n = face;
+                }
+                far = far.min(exit);
+                if near > far {
+                    continue 'boxes;
+                }
+            }
+            if n != Vec3::ZERO {
+                best = Some((near, n));
+            }
+        }
+        let Some((t, n)) = best else { return 0 };
+        unsafe {
+            *point = rv3(from + d * t);
+            *normal = rv3(n);
+        }
+        1
+    }
+
+    #[test]
+    fn catches_a_ledge_through_the_c_api() {
+        let sim = ratchet_new(1.0);
+        unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: Some(block_raycast) }) };
+        // Facing the block a metre out, falling from above its top.
+        let mut pos = RatchetVec3 { x: 0.0, y: 5.6, z: 0.0 };
+        let face = RatchetInput { move_x: 1.0, ..Default::default() };
+        let mut seen = 0;
+        let mut state = 0;
+        for i in 0..240 {
+            let contact = RatchetContact { grounded: (i == 0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
+            let input = if i < 2 { face } else { RatchetInput::default() };
+            let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
+            seen |= r.events;
+            state = r.state;
+            if i > 0 {
+                pos.y += r.velocity.y / 120.0;
+            }
+        }
+        unsafe { ratchet_free(sim) };
+        assert!(seen & RATCHET_EVENT_LEDGE_GRABBED != 0, "no grab");
+        assert_eq!(state, 12);
+        assert!((pos.y - (5.0 - Tuning::default().ledge.hang_down)).abs() < 0.05, "hangs at {}", pos.y);
     }
 
     #[test]

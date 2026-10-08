@@ -7,7 +7,11 @@
 //! Coordinates: Y up, metres. Facing yaw is `atan2(x, z)`, so yaw 0 faces +Z.
 
 use crate::tuning::{DashParams, JumpParams, SpeedParams, SwingParams, Tuning};
+use crate::world::{NoWorld, World};
 use glam::{Vec2, Vec3};
+
+mod ledge;
+pub use ledge::LedgeMove;
 
 /// What the player is asking for this tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -27,6 +31,8 @@ pub struct Input {
     /// Aim mode (the aim button held) on top of `aim`: the slower aim speeds and the aim-mode
     /// jumps. Without it, strafing keeps the normal speeds (firing from the hip).
     pub aim_mode: bool,
+    /// Crouch (the game's ledge drop button) is down: lets go of a ledge.
+    pub crouch: bool,
     /// The camera's right on the ground plane (x, z), or zero without a camera: the game picks a
     /// wall jump's side by it (its clips, and which way he turns off the wall).
     pub view_right: Vec2,
@@ -85,6 +91,14 @@ pub enum MoveState {
     WallStick,
     /// The jump off a wall.
     WallJump,
+    /// Hanging from a ledge, or moving onto one (see [`Ratchet::ledge_move`]).
+    LedgeHang,
+    /// Climbing up onto a ledge he caught.
+    LedgeClimb,
+    /// Letting go of a placed ledge, turning away from it.
+    LedgeDrop,
+    /// The jump up over a placed ledge's lip.
+    LedgeJump,
 }
 
 impl MoveState {
@@ -102,6 +116,10 @@ impl MoveState {
             MoveState::SmashLand => "hyper-strike landing",
             MoveState::WallStick => "wall stick",
             MoveState::WallJump => "wall jump",
+            MoveState::LedgeHang => "ledge hang",
+            MoveState::LedgeClimb => "ledge climb",
+            MoveState::LedgeDrop => "ledge drop",
+            MoveState::LedgeJump => "ledge jump",
         }
     }
 }
@@ -128,6 +146,16 @@ pub enum Event {
     SmashStarted,
     /// The Hyper-Strike hit the ground: the host applies the slam around the character.
     SmashImpact { fall_speed: f32 },
+    /// Grabbed a ledge (`caught`: one found on the way down, not a placed one).
+    LedgeGrabbed { caught: bool },
+    /// Climbing up a caught ledge.
+    LedgeClimbed,
+    /// Let go of a ledge.
+    LedgeDropped,
+    /// Moving to another placed ledge.
+    LedgeTransferred,
+    /// Jumped up over a placed ledge.
+    LedgeJumped,
 }
 
 /// Small downward speed on the ground so the host's collision keeps reporting contact.
@@ -223,7 +251,21 @@ pub struct Ratchet {
     wall_marked: bool,
     wall_sticks: u32,
     wall_up_ok: bool,
-    jump_buffer: f32,
+    jump_press_age: f32,
+    /// The crouch button: when it was last pressed (unused), and whether it was down.
+    crouch_press_age: f32,
+    prev_crouch: bool,
+    /// Ledges: the one he's on or moving onto, the clip-driven move onto it, where the current
+    /// clip-driven move started and how long it's run, the placed ledge he last left (no
+    /// grabbing it again until he lands), the time left to catch the edge he walked off, and
+    /// the height of the last ground he stood on.
+    hold: Option<ledge::Hold>,
+    ledge_move: Option<LedgeMove>,
+    ledge_from: Vec3,
+    ledge_time: f32,
+    left_ledge: Option<u32>,
+    walk_off_time: f32,
+    last_ground_y: f32,
     /// In a wall-jump zone (`Contact::wall_jump_zone`) this tick.
     in_wall_jump_zone: bool,
     prev_melee: bool,
@@ -295,7 +337,16 @@ impl Ratchet {
             wall_marked: false,
             wall_sticks: 0,
             wall_up_ok: false,
-            jump_buffer: 0.0,
+            jump_press_age: f32::INFINITY,
+            crouch_press_age: f32::INFINITY,
+            prev_crouch: false,
+            hold: None,
+            ledge_move: None,
+            ledge_from: Vec3::ZERO,
+            ledge_time: 0.0,
+            left_ledge: None,
+            walk_off_time: 0.0,
+            last_ground_y: 0.0,
             in_wall_jump_zone: false,
             prev_melee: false,
             since_melee_press: f32::INFINITY,
@@ -384,12 +435,23 @@ impl Ratchet {
         self.swing_time
     }
 
-    /// Advances one tick and returns the velocity the host should move by.
+    /// Advances one tick and returns the velocity the host should move by. Without a level to
+    /// ask about ledges; see [`Ratchet::step_in`].
     pub fn step(&mut self, dt: f32, input: &Input, contact: &Contact, position: Vec3) -> Vec3 {
+        self.step_in(dt, input, contact, position, &NoWorld)
+    }
+
+    /// Advances one tick in `world`, which it asks for ledges, and returns the velocity the host
+    /// should move by.
+    pub fn step_in(&mut self, dt: f32, input: &Input, contact: &Contact, position: Vec3, world: &dyn World) -> Vec3 {
         self.events.clear();
         let pressed = input.jump && !self.prev_jump;
         self.prev_jump = input.jump;
-        self.jump_buffer = if pressed { WALL_JUMP_BUFFER } else { (self.jump_buffer - dt).max(0.0) };
+        self.jump_press_age = if pressed { 0.0 } else { self.jump_press_age + dt };
+        let crouch_pressed = input.crouch && !self.prev_crouch;
+        self.prev_crouch = input.crouch;
+        self.crouch_press_age = if crouch_pressed { 0.0 } else { self.crouch_press_age + dt };
+        self.walk_off_time = (self.walk_off_time - dt).max(0.0);
         let dash_pressed = input.dash && !self.prev_dash;
         self.prev_dash = input.dash;
         let melee_pressed = input.melee && !self.prev_melee;
@@ -410,11 +472,15 @@ impl Ratchet {
         // Contact changes first, so this tick runs in the right state.
         if matches!(self.state, MoveState::Ground | MoveState::Dash | MoveState::Melee | MoveState::SmashLand) {
             if !contact.grounded {
-                // Dashing (or lunging) off a ledge keeps its speed and falls.
+                // Dashing (or lunging) off a ledge keeps its speed and falls. Walking or running
+                // off one, he can catch it for a moment (RiftApart.exe).
+                if self.state == MoveState::Ground {
+                    self.arm_walk_off();
+                }
                 self.enter_fall();
                 self.events.push(Event::LeftGround);
             }
-        } else if contact.grounded && self.velocity.y <= 0.0 {
+        } else if contact.grounded && self.velocity.y <= 0.0 && !matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop) {
             if self.state == MoveState::Smash {
                 self.smash_land();
             } else {
@@ -428,6 +494,7 @@ impl Ratchet {
 
         match self.state {
             MoveState::Ground => {
+                self.last_ground_y = position.y;
                 let speed = self.ground_speed_for(stick);
                 let (accel, decel) = (self.tuning.ground_accel, self.tuning.ground_decel);
                 self.steer(dt, stick, speed, accel, decel);
@@ -469,19 +536,21 @@ impl Ratchet {
             }
             MoveState::AirDash => {
                 self.air_time += dt;
-                if melee_pressed && self.can_smash(contact) {
+                if self.try_grab_ledge(world, position, contact.ground_distance) {
+                } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
                 } else {
                     self.air_dash(dt);
                 }
             }
-            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump => {
+            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump | MoveState::LedgeJump => {
                 let params = self.params(self.state).clone();
                 self.air_time += dt;
                 self.extend_jump(input.jump, &params, position);
                 self.jump_air(dt, stick, &params);
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
-                if self.try_wall_stick(contact, position) {
+                // Ledges come first (RiftApart.exe), on the way down.
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance)) || self.try_wall_stick(contact, position) {
                 } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -503,7 +572,7 @@ impl Ratchet {
                 self.air_time += dt;
                 self.air_steer(dt, stick);
                 self.fall_under(dt, &params);
-                if self.try_wall_stick(contact, position) {
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance)) || self.try_wall_stick(contact, position) {
                 } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -517,7 +586,7 @@ impl Ratchet {
             }
             MoveState::WallStick => {
                 self.wall_time += dt;
-                if self.jump_buffer > 0.0 && (self.wall_marked || self.wall_time > PLAIN_WALL_JUMP_DELAY) {
+                if self.jump_press_age <= WALL_JUMP_BUFFER && (self.wall_marked || self.wall_time > PLAIN_WALL_JUMP_DELAY) {
                     self.jump_off_wall(dt, position);
                 } else if (self.wall_time > dt && contact.wall.is_none())
                     || contact.ground_distance.is_some_and(|d| d < self.tuning.wall_stick.min_ground_height)
@@ -536,7 +605,7 @@ impl Ratchet {
                 let accel = self.tuning.glide_accel;
                 self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, accel);
                 self.integrate_vertical(dt, params.gravity(), self.glide_terminal);
-                if self.try_wall_stick(contact, position) {
+                if self.try_grab_ledge(world, position, contact.ground_distance) || self.try_wall_stick(contact, position) {
                     self.events.push(Event::GlideEnded);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.events.push(Event::GlideEnded);
@@ -552,6 +621,12 @@ impl Ratchet {
                     self.events.push(Event::GlideEnded);
                 }
             }
+            MoveState::LedgeHang => {
+                let (jump_age, crouch_age) = (self.jump_press_age, self.crouch_press_age);
+                self.ledge_hang(dt, jump_age, crouch_age, stick, world, position, contact.grounded);
+            }
+            MoveState::LedgeClimb => self.ledge_climb(dt, position, contact.grounded),
+            MoveState::LedgeDrop => self.ledge_drop(dt, position, contact.grounded),
         }
 
         self.turn(dt);
@@ -729,6 +804,7 @@ impl Ratchet {
             MoveState::Fall => &self.tuning.fall,
             MoveState::Glide => &self.tuning.glide,
             MoveState::WallJump => &self.tuning.wall_jump,
+            MoveState::LedgeJump => &self.tuning.ledge_jump,
             _ if self.jump_aimed => &self.tuning.aim_single_jump,
             _ => &self.tuning.single_jump,
         }
@@ -739,6 +815,7 @@ impl Ratchet {
     fn jump_speeds(&self) -> &SpeedParams {
         match self.state {
             MoveState::WallJump => &self.tuning.wall_jump_speeds,
+            MoveState::LedgeJump => &self.tuning.ledge_jump_speeds,
             _ => &self.tuning.air_speeds,
         }
     }
@@ -759,7 +836,7 @@ impl Ratchet {
     /// from the tap height, so every jump of a kind peaks at `time_to_peak` when tapped
     /// (RiftApart.exe).
     fn start_jump(&mut self, dt: f32, kind: MoveState, position: Vec3) {
-        self.jump_buffer = 0.0;
+        self.jump_press_age = f32::INFINITY;
         self.jump_aimed = self.aim_mode;
         let params = self.params(kind).clone();
         let (mut h_min, mut h_max) = (params.height_min, params.height_max);
@@ -1007,7 +1084,7 @@ impl Ratchet {
     /// WallJumpUpMinHeightGain of the chain's MaxTotalJump left. Either way, nearby walls are
     /// blocked for WALL_BLOCK_TIME.
     fn jump_off_wall(&mut self, dt: f32, position: Vec3) {
-        self.jump_buffer = 0.0;
+        self.jump_press_age = f32::INFINITY;
         self.wall_block = Some((position, WALL_BLOCK_TIME));
         let into = self.stick.length() >= MOVE_STICK && self.stick.normalize().dot(self.wall_normal) <= WALL_UP_STICK;
         if self.wall_marked || !into || !self.wall_up_ok {
@@ -1104,6 +1181,10 @@ impl Ratchet {
         self.velocity.y = 0.0;
         self.wall_block = None;
         self.wall_sticks = 0;
+        self.left_ledge = None;
+        self.walk_off_time = 0.0;
+        self.hold = None;
+        self.ledge_move = None;
     }
 
     fn air_steer(&mut self, dt: f32, stick: Vec2) {
@@ -1133,7 +1214,8 @@ impl Ratchet {
     ///   let go after steering, it stops.
     fn jump_air(&mut self, dt: f32, stick: Vec2, params: &JumpParams) {
         let v_last = Vec2::new(self.velocity.x, self.velocity.z);
-        let steerable = self.air_time >= params.no_input_time;
+        // The ledge jump never takes the stick: its speed holds for the whole jump (RiftApart.exe).
+        let steerable = self.state != MoveState::LedgeJump && self.air_time >= params.no_input_time;
         let (push, dir) = if self.jump_first || !steerable {
             (self.jump_stick, self.jump_dir)
         } else {
@@ -1195,6 +1277,10 @@ impl Ratchet {
         // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
         // started, else where the dash goes (RiftApart.exe).
         // On a wall he faces it.
+        if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop) {
+            self.turn_omega = 0.0;
+            return;
+        }
         if self.state == MoveState::WallStick {
             self.facing_yaw = (-self.wall_normal.x).atan2(-self.wall_normal.y);
             self.turn_omega = 0.0;

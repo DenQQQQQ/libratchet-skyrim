@@ -14,7 +14,7 @@ const TICK: f32 = 1.0 / 120.0;
 #[derive(Clone)]
 enum Act {
     /// Hold this input for `secs`. Direction is world-space (x, z).
-    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool },
+    Hold { secs: f32, dir: Vec2, jump: bool, dash: bool, melee: bool, crouch: bool },
     /// Throw the wrench (straight ahead).
     Throw,
     /// Pick a weapon.
@@ -67,6 +67,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("throwswitch") => [vec![hold(1.5, Vec2::ZERO, false)], throw_switch()].concat(),
         Some("strafejump") => [vec![hold(1.5, Vec2::ZERO, false)], strafe_jumps()].concat(),
         Some("walljump") => [vec![hold(1.5, Vec2::ZERO, false)], wall_jumps()].concat(),
+        Some("ledges") => [vec![hold(1.5, Vec2::ZERO, false)], ledges()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -80,16 +81,16 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
 }
 
 fn hold(secs: f32, dir: Vec2, jump: bool) -> Act {
-    Act::Hold { secs, dir, jump, dash: false, melee: false }
+    Act::Hold { secs, dir, jump, dash: false, melee: false, crouch: false }
 }
 
 fn dash(dir: Vec2) -> Act {
-    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true, melee: false }
+    Act::Hold { secs: 2.0 * TICK, dir, jump: false, dash: true, melee: false, crouch: false }
 }
 
 /// A melee press (a swing on the ground, a Hyper-Strike in the air).
 fn swing() -> Act {
-    Act::Hold { secs: 2.0 * TICK, dir: Vec2::ZERO, jump: false, dash: false, melee: true }
+    Act::Hold { secs: 2.0 * TICK, dir: Vec2::ZERO, jump: false, dash: false, melee: true, crouch: false }
 }
 
 /// The OmniWrench in the arena: the 3-hit combo into the first dummies, a Hyper-Strike into the
@@ -665,6 +666,68 @@ fn strafe_jumps() -> Vec<Act> {
 /// Wall jumps up the shaft (two walls that take wall jumps, 3.4 m apart, 14 m tall): onto the
 /// first wall from a running jump, then back and forth up to the ledge on top; then a jump at an
 /// ordinary wall, which he only bumps into. Filmed from the shaft's open side.
+/// Ledges: falling short of a platform and catching its lip, then climbing up; grabbing a
+/// placed ledge on the way down, going up to the next one, and jumping up over it; letting go
+/// of one.
+fn ledges() -> Vec<Act> {
+    let l = spots::LEDGES;
+    let x = Vec2::X;
+    let side = Act::Follow { yaw: std::f32::consts::PI, pitch: 0.2, distance: 7.0 };
+    vec![
+        Act::ClearTrail,
+        // Off a 3 m block at a 5 m platform 3 m away: he falls short, catches the lip, hangs
+        // on, and a jump climbs up.
+        Act::Teleport(l + Vec3::new(-8.6, 3.0, 0.0)),
+        hold(0.12, x, false),
+        side.clone(),
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.45, x, false),
+        hold(0.2, x, true),
+        hold(0.3, x, false),
+        hold(0.25, Vec2::ZERO, false),
+        Act::Shot("80_ledge_catch"),
+        hold(0.8, Vec2::ZERO, false),
+        Act::Shot("81_ledge_hang"),
+        hold(0.05, Vec2::ZERO, true),
+        hold(0.3, Vec2::ZERO, false),
+        Act::Shot("82_ledge_climb"),
+        hold(1.2, Vec2::ZERO, false),
+        // The wall's placed ledges (yellow): up at the one at 3 m, grabbed on the way down; a
+        // jump to the one along the top, and the ledge jump up over it.
+        Act::Teleport(l + Vec3::new(5.0, 0.0, 0.0)),
+        hold(0.12, x, false),
+        side.clone(),
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.25, Vec2::ZERO, true),
+        hold(0.6, Vec2::ZERO, false),
+        Act::Shot("83_ledge_grab"),
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.05, Vec2::ZERO, true),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Shot("84_ledge_up"),
+        hold(0.8, Vec2::ZERO, false),
+        hold(0.05, Vec2::ZERO, true),
+        hold(0.3, Vec2::ZERO, false),
+        Act::Shot("85_ledge_jump"),
+        hold(1.2, Vec2::ZERO, false),
+        // Letting go of the lower one: the turn, then the fall.
+        Act::Teleport(l + Vec3::new(5.0, 0.0, 0.0)),
+        hold(0.12, x, false),
+        side,
+        hold(0.5, Vec2::ZERO, false),
+        hold(0.25, Vec2::ZERO, true),
+        hold(1.1, Vec2::ZERO, false),
+        crouch(0.05),
+        hold(0.25, Vec2::ZERO, false),
+        Act::Shot("86_ledge_drop"),
+        hold(1.2, Vec2::ZERO, false),
+    ]
+}
+
+fn crouch(secs: f32) -> Act {
+    Act::Hold { secs, dir: Vec2::ZERO, jump: false, dash: false, melee: false, crouch: true }
+}
+
 fn wall_jumps() -> Vec<Act> {
     let shaft = spots::WALL_SHAFT;
     // The walls face each other across Z.
@@ -931,8 +994,8 @@ fn run_script(
             Act::AimAt(at) => gun.target = at,
             Act::CloseUp(on) => rig.close_up = on,
             Act::Watch { focus, yaw, pitch, distance } => rig.fixed = Some((focus, yaw, pitch, distance)),
-            Act::Hold { secs, dir, jump, dash, melee } => {
-                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, ..Default::default() });
+            Act::Hold { secs, dir, jump, dash, melee, crouch } => {
+                scripted.0 = Some(MoveInput { move_dir: dir, jump, dash, melee, crouch, ..Default::default() });
                 demo.elapsed += dt;
                 if demo.elapsed >= secs - 1e-5 {
                     next(&mut demo);

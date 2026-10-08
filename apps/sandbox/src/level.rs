@@ -45,6 +45,21 @@ const ZONE_MARGIN: f32 = 0.5;
 pub struct Level {
     pub blocks: Vec<Block>,
     pub zones: Vec<WallJumpZone>,
+    /// Placed ledges he can grab and hang from (the game's ledge paths).
+    pub ledges: Vec<libratchet::Ledge>,
+}
+
+/// The level as the sim asks about it: its placed ledges, and rays against its blocks.
+pub struct LevelWorld<'a>(pub &'a Level);
+
+impl libratchet::World for LevelWorld<'_> {
+    fn ledges(&self, center: Vec3, radius: f32, out: &mut Vec<libratchet::Ledge>) {
+        out.extend(self.0.ledges.iter().filter(|l| l.closest(center).0.distance(center) <= radius).copied());
+    }
+
+    fn raycast(&self, from: Vec3, to: Vec3) -> Option<libratchet::RayHit> {
+        raycast(self.0, from, to).map(|(point, normal, _)| libratchet::RayHit { point, normal })
+    }
 }
 
 impl Level {
@@ -67,6 +82,9 @@ pub mod spots {
     pub const ARENA: Vec3 = Vec3::new(25.0, 0.0, 30.0);
     /// The middle of the wall-jump shaft's floor: its two walls face each other across Z.
     pub const WALL_SHAFT: Vec3 = Vec3::new(-20.0, 0.0, 20.0);
+    /// The ledge course: a gap to fall short of (the catch), and a wall with placed ledges,
+    /// along +X from here.
+    pub const LEDGES: Vec3 = Vec3::new(40.0, 0.0, -30.0);
 }
 
 const FLOOR: f32 = 300.0;
@@ -155,11 +173,41 @@ pub fn spawn_level(
     for x in [shaft.x - 10.0, shaft.x - 10.0 - GAP - 0.8] {
         add(&mut commands, Block::new(Vec2::new(x, shaft.z), 0.0, Vec3::new(0.8, 12.5, 6.0)), Color::srgb(0.55, 0.55, 0.6));
     }
+    // Ledge course (along +X): a 3 m block to jump from across a 3 m gap at a 5 m platform,
+    // whose lip he catches when he falls short; then a 5.5 m wall with a placed ledge at 3 m (a
+    // yellow shelf) and another along its top, also marked yellow.
+    let l = spots::LEDGES;
+    add(&mut commands, Block::new(Vec2::new(l.x - 7.5, l.z), 0.0, Vec3::new(3.0, 3.0, 4.0)), Color::srgb(0.6, 0.5, 0.4));
+    add(&mut commands, Block::new(Vec2::new(l.x - 1.0, l.z), 0.0, Vec3::new(4.0, 5.0, 4.0)), Color::srgb(0.7, 0.55, 0.4));
+    let face = l.x + 6.0;
+    add(&mut commands, Block::new(Vec2::new(face + 3.0, l.z), 0.0, Vec3::new(6.0, 5.5, 4.0)), Color::srgb(0.55, 0.45, 0.4));
+    add(&mut commands, Block::new(Vec2::new(face - 0.075, l.z), 2.85, Vec3::new(0.15, 0.15, 4.0)), Color::srgb(0.95, 0.8, 0.2));
     level.zones.push(WallJumpZone {
         min: Vec3::new(shaft.x - 3.0, 0.0, shaft.z - GAP * 0.5),
         max: Vec3::new(shaft.x + 3.0, 12.5, shaft.z + GAP * 0.5),
         look: Vec3::NEG_X,
     });
+    for (id, x, y) in [(1, face - 0.15, 3.0), (2, face, 5.5)] {
+        level.ledges.push(libratchet::Ledge {
+            a: Vec3::new(x, y, l.z - 2.0),
+            b: Vec3::new(x, y, l.z + 2.0),
+            normal: Vec2::NEG_X,
+            id,
+            flags: libratchet::LedgeFlags::default(),
+        });
+    }
+    // The placed ledges, marked (no collision).
+    let marker = materials.add(StandardMaterial { base_color: Color::srgb(0.95, 0.8, 0.2), emissive: LinearRgba::rgb(0.4, 0.3, 0.05), ..default() });
+    for ledge in &level.ledges {
+        let along = ledge.b - ledge.a;
+        let out = Vec3::new(ledge.normal.x, 0.0, ledge.normal.y);
+        let size = along.abs() + Vec3::new(0.06, 0.06, 0.06);
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::from_size(size))),
+            MeshMaterial3d(marker.clone()),
+            Transform::from_translation((ledge.a + ledge.b) * 0.5 + out * 0.03 + Vec3::Y * 0.03),
+        ));
+    }
 
     commands.insert_resource(level);
 }
@@ -321,4 +369,74 @@ fn overlaps_box(b: &Block, feet: Vec3, half_w: f32, height: f32) -> bool {
 
 fn blocked_above(level: &Level, feet: Vec3, half_w: f32, height: f32) -> bool {
     level.blocks.iter().any(|b| overlaps_box(b, feet, half_w, height))
+}
+
+/// The first block a ray from `from` to `to` hits: where, the face's normal, and how far along
+/// the ray (0..1). Rays starting inside a block don't hit that block.
+pub fn raycast(level: &Level, from: Vec3, to: Vec3) -> Option<(Vec3, Vec3, f32)> {
+    let d = to - from;
+    let mut best: Option<(Vec3, Vec3, f32)> = None;
+    'blocks: for b in &level.blocks {
+        let (mut near, mut far) = (0.0f32, best.map_or(1.0, |h| h.2));
+        let mut normal = Vec3::ZERO;
+        for axis in 0..3 {
+            let unit = Vec3::AXES[axis];
+            if d[axis].abs() < 1e-9 {
+                if from[axis] < b.min[axis] || from[axis] > b.max[axis] {
+                    continue 'blocks;
+                }
+                continue;
+            }
+            let inv = 1.0 / d[axis];
+            let (enter, exit, n) = if inv > 0.0 {
+                ((b.min[axis] - from[axis]) * inv, (b.max[axis] - from[axis]) * inv, -unit)
+            } else {
+                ((b.max[axis] - from[axis]) * inv, (b.min[axis] - from[axis]) * inv, unit)
+            };
+            if enter > near {
+                near = enter;
+                normal = n;
+            }
+            far = far.min(exit);
+            if near > far {
+                continue 'blocks;
+            }
+        }
+        if normal != Vec3::ZERO {
+            best = Some((from + d * near, normal, near));
+        }
+    }
+    best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn level() -> Level {
+        Level {
+            blocks: vec![
+                Block { min: Vec3::new(-10.0, -1.0, -10.0), max: Vec3::new(10.0, 0.0, 10.0), wall_jump: false },
+                Block { min: Vec3::new(2.0, 0.0, -1.0), max: Vec3::new(3.0, 2.0, 1.0), wall_jump: false },
+            ],
+            zones: Vec::new(),
+            ledges: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rays_hit_the_nearest_face() {
+        let level = level();
+        // Down onto the floor.
+        let (p, n, t) = raycast(&level, Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -5.0, 0.0)).unwrap();
+        assert!((p.y).abs() < 1e-5 && n == Vec3::Y && (t - 0.5).abs() < 1e-5);
+        // Along +X into the block's side, past the floor's top.
+        let (p, n, _) = raycast(&level, Vec3::new(0.0, 1.0, 0.0), Vec3::new(5.0, 1.0, 0.0)).unwrap();
+        assert!((p.x - 2.0).abs() < 1e-5 && n == Vec3::NEG_X);
+        // Down onto the block's top.
+        let (p, n, _) = raycast(&level, Vec3::new(2.5, 5.0, 0.0), Vec3::new(2.5, 0.5, 0.0)).unwrap();
+        assert!((p.y - 2.0).abs() < 1e-5 && n == Vec3::Y);
+        // Over it: nothing.
+        assert!(raycast(&level, Vec3::new(0.0, 3.0, 0.0), Vec3::new(5.0, 3.0, 0.0)).is_none());
+    }
 }

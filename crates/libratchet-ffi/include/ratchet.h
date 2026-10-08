@@ -29,6 +29,7 @@ typedef struct RatchetInput {
     float aim_x, aim_z;
     float view_right_x, view_right_z; /* the camera's right on the ground plane (zero without one):
                                          wall jumps take their side from it */
+    uint8_t crouch;       /* crouch (the ledge drop button) held */
 } RatchetInput;
 
 typedef struct RatchetContact {
@@ -58,6 +59,10 @@ enum {
     RATCHET_STATE_SMASH_LAND = 9, /* on the ground after the slam */
     RATCHET_STATE_WALL_STICK = 10, /* stuck to a wall-jump wall, then sliding down */
     RATCHET_STATE_WALL_JUMP = 11,  /* the jump off it */
+    RATCHET_STATE_LEDGE_HANG = 12,  /* hanging from a ledge, or moving onto one */
+    RATCHET_STATE_LEDGE_CLIMB = 13, /* climbing up a caught ledge */
+    RATCHET_STATE_LEDGE_DROP = 14,  /* letting go of a placed ledge with a turn */
+    RATCHET_STATE_LEDGE_JUMP = 15,  /* the jump up over a placed ledge */
 };
 
 enum {
@@ -75,6 +80,11 @@ enum {
     RATCHET_EVENT_SMASH_IMPACT = 1u << 11, /* the slam hit the ground: see ratchet_smash_info */
     RATCHET_EVENT_WALL_STUCK = 1u << 12,   /* stuck to a wall that takes wall jumps */
     RATCHET_EVENT_WALL_JUMPED = 1u << 13,  /* jumped off it */
+    RATCHET_EVENT_LEDGE_GRABBED = 1u << 14, /* grabbed a ledge (result.ledge_caught: one found on the way down) */
+    RATCHET_EVENT_LEDGE_CLIMBED = 1u << 15,
+    RATCHET_EVENT_LEDGE_DROPPED = 1u << 16,
+    RATCHET_EVENT_LEDGE_TRANSFERRED = 1u << 17, /* moving to another placed ledge */
+    RATCHET_EVENT_LEDGE_JUMPED = 1u << 18,
 };
 
 typedef struct RatchetStepResult {
@@ -86,7 +96,25 @@ typedef struct RatchetStepResult {
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
     float gravity;           /* his current jump's pull down, m/s^2, for RatchetContact.landing_ahead */
+    uint8_t ledge_caught;    /* with RATCHET_EVENT_LEDGE_GRABBED: 1 caught on the way down, 0 placed */
 } RatchetStepResult;
+
+/* A placed ledge (the game's ledge paths): a straight stretch of edge he can hang from. */
+typedef struct RatchetLedge {
+    RatchetVec3 a, b;         /* the edge, end to end */
+    float normal_x, normal_z; /* out of the wall below it, on the ground plane */
+    uint32_t id;
+    uint8_t grab, jump, drop, transfer; /* what it allows (0/1) */
+} RatchetLedge;
+
+/* The host's level, as the sim asks about it. Either callback may be null. */
+typedef struct RatchetWorld {
+    void *user;
+    /* Write up to max placed ledges near center (within radius) to out; return how many. */
+    uint32_t (*ledges)(void *user, RatchetVec3 center, float radius, RatchetLedge *out, uint32_t max);
+    /* The first surface the ray from..to hits: return 1 and fill point and normal, or 0. */
+    uint8_t (*raycast)(void *user, RatchetVec3 from, RatchetVec3 to, RatchetVec3 *point, RatchetVec3 *normal);
+} RatchetWorld;
 
 typedef struct RatchetSwingInfo {
     float duration;
@@ -109,6 +137,8 @@ void ratchet_set_scale(RatchetSim *sim, float scale);
 
 RatchetStepResult ratchet_step(RatchetSim *sim, float dt, RatchetInput input, RatchetContact contact, RatchetVec3 feet);
 void ratchet_set_velocity(RatchetSim *sim, RatchetVec3 velocity);
+/* Ledges need the host's level; the callbacks must stay valid while the sim steps. */
+void ratchet_set_world(RatchetSim *sim, RatchetWorld world);
 void ratchet_reset(RatchetSim *sim);
 
 /* Combo swing `index` into out; returns the number of swings, or 0 if index is out of range. */

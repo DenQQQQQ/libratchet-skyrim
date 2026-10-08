@@ -22,6 +22,12 @@ COMBO_CLIPS = ["weapon_wrench_hit_1_hero_ratchet", "weapon_wrench_hit_2_hero_rat
 SMASH_INTRO_CLIP = "weapon_wrench_hit_smash_intro_hero_ratchet"
 SMASH_LAND_CLIP = "weapon_wrench_hit_smash_hero_ratchet"
 THROW_CLIP = "weapon_wrench_throw_partial_hero_ratchet"
+# Ratchet's ledge clips whose root motion moves him (the game drives these moves by the clip),
+# analysed into hero_ledge_clips.json.
+LEDGE_CLIPS = {"Grab": "ledge_grab_hero_ratchet", "FromFall": "fall_to_ledge_fwd_hero_ratchet",
+               "ClimbUp": "ledge_jump_hero_ratchet", "Drop": "ledge_drop_to_fall_hero_ratchet",
+               "DropTurn": "ledge_drop_to_fall_turn_hero_ratchet", "UpToLedge": "ledge_uptoledge_hero_ratchet",
+               "DownToLedge": "ledge_droptoledge_hero_ratchet"}
 RATCHET_MODEL = "characters/hero/hero_ratchet/hero_ratchet.model"
 from riftapart_anim import root_motion  # noqa: E402  (tools/ is on the path when run as a script)
 
@@ -81,6 +87,32 @@ def analyse_clips(read, dat1lib):
     return out
 
 
+def analyse_ledge_clips(read, dat1lib):
+    """Length and root motion of the ledge clips: his root's path, one key per frame, relative to
+    where the clip starts (x to his left, y up, z ahead, in metres), and their events."""
+    import riftapart_anim
+
+    out = {"_note": "Derived from Ratchet's ledge clips by extract_riftapart_configs.py. Root is the clip's "
+                    "Motion Data keys relative to its first key: x his left, y up, z ahead."}
+    for key, name in LEDGE_CLIPS.items():
+        data = read(CLIP_DIR + name + ".animclip")
+        if data is None:
+            continue
+        sections = {s.TAG: s._raw for s in dat1lib.read(io.BytesIO(data)).dat1.sections}
+        clip = riftapart_anim.decode(name, sections)
+        if clip is None:
+            continue
+        keys = root_motion(sections)
+        root = [[round(c - k0, 4) for c, k0 in zip(k, keys[0])] for k in keys] if keys else []
+        events = {}
+        for t, kind in riftapart_anim.clip_events(sections, clip.duration):
+            name_of = riftapart_anim.EVENT_NAMES.get(kind, f"{kind:08x}")
+            if name_of not in ("Sound", "ConduitAnim"):
+                events.setdefault(name_of, []).append(round(t, 4))
+        out[key] = {"Clip": name, "Duration": round(clip.duration, 4), "Rate": round(clip.fps, 3), "Root": root, "Events": events}
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", required=True, help="Rift Apart install folder (has 'toc' and 'd')")
@@ -115,6 +147,11 @@ def main():
         with open(os.path.join(a.out, base + ".json"), "w") as f:
             json.dump({"_type": kind, "_asset": path.replace("/", "\\"), **content}, f, indent=2)
         print(f"{base}.json  ({kind})")
+
+    ledge = analyse_ledge_clips(read, dat1lib)
+    with open(os.path.join(a.out, "hero_ledge_clips.json"), "w") as f:
+        json.dump(ledge, f, indent=2)
+    print("hero_ledge_clips.json  (" + ", ".join(f"{k}: {v['Duration']} s" for k, v in ledge.items() if k != "_note") + ")")
 
     clips = analyse_clips(read, dat1lib)
     with open(os.path.join(a.out, "hero_melee_clips.json"), "w") as f:

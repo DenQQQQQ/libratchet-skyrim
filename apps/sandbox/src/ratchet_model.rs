@@ -12,7 +12,7 @@ use bevy::animation::AnimationTargetId;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
-use libratchet::MoveState;
+use libratchet::{Event, LedgeMove, MoveState};
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::PathBuf;
@@ -66,7 +66,8 @@ const CLIP_STATES: &[&str] = &[
     "wrench_strafe_double_jump_s", "wrench_strafe_double_jump_w", "strafe_land_n", "strafe_land_e", "strafe_land_s", "strafe_land_w",
     "strafe_land_idle", "wrench_strafe_land_n", "wrench_strafe_land_e", "wrench_strafe_land_s", "wrench_strafe_land_w",
     "wrench_strafe_land_idle", "wall_stick_left", "wall_stick_right", "wall_slide_left", "wall_slide_right", "wall_jump_left",
-    "wall_jump_right",
+    "wall_jump_right", "ledge_grab", "ledge_from_fall", "ledge_from_fall_l180", "ledge_from_fall_r180", "ledge_idle", "ledge_up",
+    "ledge_down_to", "ledge_jump", "ledge_drop", "ledge_drop_turn",
 ];
 /// Dashes by direction relative to where he faces (clockwise from ahead), on the ground and in
 /// the air: the game's Dash and Air_Dash drivers have one clip per direction.
@@ -163,6 +164,7 @@ const LOOPING: &[&str] = &[
     "wrench_strafe_se", "wrench_strafe_s", "wrench_strafe_sw", "wrench_strafe_w", "wrench_strafe_nw", "strafe_walk_n", "strafe_walk_ne", "strafe_walk_e", "strafe_walk_se", "strafe_walk_s", "strafe_walk_sw", "strafe_walk_w", "strafe_walk_nw",
     "wrench_strafe_walk_n", "wrench_strafe_walk_ne", "wrench_strafe_walk_e", "wrench_strafe_walk_se", "wrench_strafe_walk_s", "wrench_strafe_walk_sw", "wrench_strafe_walk_w", "wrench_strafe_walk_nw",
     "wrench_idle", "wrench_walk", "wrench_run", "wrench_glide", "glove_glide", "glide_pistol", "wall_slide_left", "wall_slide_right",
+    "ledge_idle",
 ];
 /// Played at the rate that keeps the feet planted.
 const SPEED_MATCHED: &[&str] = &["run", "walk", "pistol_run", "land_walk", "land_run", "wrench_run", "wrench_walk", "wrench_land_walk", "wrench_land_run"];
@@ -265,6 +267,10 @@ pub struct Rig {
     turn_rate: f32,
     /// On a wall: whether the stick clip is over (then the slide loop plays).
     wall_looping: bool,
+    /// Catching a ledge: the catch clip for how far he turns to face it; and the time left of
+    /// the let-go clip after dropping off a caught ledge.
+    ledge_catch: &'static str,
+    ledge_drop_time: f32,
     /// Joints outside the upper body, masked out of the catch.
     lower_body: Vec<Entity>,
     idle_time: f32,
@@ -423,6 +429,8 @@ fn on_ready(
         current_clip: None,
         prev_state: None,
         wall_looping: false,
+        ledge_catch: "ledge_from_fall",
+        ledge_drop_time: 0.0,
         land_timer: 0.0,
         throw_layer: None,
         throw_time: None,
@@ -759,15 +767,41 @@ fn play_clips(
     let speed = Vec2::new(v.x, v.z).length();
     let state = p.sim.state();
     let airborne = |s: Option<MoveState>| {
-        matches!(s, Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash | MoveState::WallJump))
+        matches!(
+            s,
+            Some(MoveState::Jump | MoveState::DoubleJump | MoveState::Fall | MoveState::Glide | MoveState::AirDash | MoveState::WallJump | MoveState::LedgeJump)
+        )
     };
     let landed = state == MoveState::Ground && airborne(rig.prev_state);
-    // The game puts the weapon away on the wall and draws it again after (not between the
-    // stick and its jump).
-    let on_wall = |s: Option<MoveState>| matches!(s, Some(MoveState::WallStick | MoveState::WallJump));
+    // The game puts the weapon away on walls and ledges and draws it again after (not between
+    // one of their moves and the next).
+    let on_wall = |s: Option<MoveState>| s.is_some_and(crate::weapons::holstered);
     if on_wall(rig.prev_state) && !on_wall(Some(state)) {
         rig.draw_pending = true;
     }
+    // Catching a ledge: the catch clip turning round to it when he faced away (more than 135°;
+    // the game blends these by the turn, ours picks one).
+    if state == MoveState::LedgeHang && rig.prev_state != Some(MoveState::LedgeHang) && p.sim.ledge_move() == Some(LedgeMove::FromFall) {
+        let turn = rig.prev_yaw.map_or(0.0, |prev| {
+            let d = (p.sim.facing_yaw() - prev).rem_euclid(std::f32::consts::TAU);
+            if d > std::f32::consts::PI { d - std::f32::consts::TAU } else { d }
+        });
+        rig.ledge_catch = if turn > 2.36 {
+            "ledge_from_fall_l180"
+        } else if turn < -2.36 {
+            "ledge_from_fall_r180"
+        } else {
+            "ledge_from_fall"
+        };
+    }
+    // Letting go of a caught ledge plays its let-go clip as he starts to fall.
+    rig.ledge_drop_time = if p.sim.events().contains(&Event::LedgeDropped) && state == MoveState::Fall {
+        0.5
+    } else if state == MoveState::Fall {
+        (rig.ledge_drop_time - time.delta_secs()).max(0.0)
+    } else {
+        0.0
+    };
     if landed {
         rig.land_timer = if speed > 0.6 { 0.35 } else { 0.3 };
     }
@@ -926,6 +960,7 @@ fn play_clips(
         MoveState::Jump if v.y < -5.0 => "fall",
         MoveState::Jump => "jump",
         MoveState::DoubleJump => "double_jump",
+        MoveState::Fall if rig.ledge_drop_time > 0.0 => "ledge_drop",
         MoveState::Fall => "fall",
         MoveState::Glide if heli_glide && rig.glide_looping => glide_loop,
         MoveState::Glide if heli_glide => glide_intro,
@@ -937,6 +972,18 @@ fn play_clips(
         MoveState::WallStick if rig.wall_looping => wall_slide,
         MoveState::WallStick => wall_stick,
         MoveState::WallJump => wall_jump,
+        MoveState::LedgeHang => match p.sim.ledge_move() {
+            Some(LedgeMove::Grab) => "ledge_grab",
+            Some(LedgeMove::FromFall) => rig.ledge_catch,
+            Some(LedgeMove::UpTo) => "ledge_up",
+            Some(LedgeMove::DownTo) => "ledge_down_to",
+            None => "ledge_idle",
+        },
+        // The climb up a caught ledge (Ledge_Jump_Up_InAir), the let-go with a turn, and the
+        // ledge jump, which the game animates with the double jump's flip (Jump_In_Air).
+        MoveState::LedgeClimb => "ledge_jump",
+        MoveState::LedgeDrop => "ledge_drop_turn",
+        MoveState::LedgeJump => "double_jump",
     };
     let want = match carried(want) {
         c if carrying && rig.clips.contains_key(c) => c,
@@ -1244,7 +1291,17 @@ fn target_pose(state: MoveState, speed: f32, vy: f32, run_max: f32, phase: f32, 
             tail_lift: -0.2,
             tail_sway: 0.15 * sway,
         },
-        MoveState::Dash | MoveState::AirDash | MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::WallStick | MoveState::WallJump => Pose {
+        MoveState::Dash
+        | MoveState::AirDash
+        | MoveState::Melee
+        | MoveState::Smash
+        | MoveState::SmashLand
+        | MoveState::WallStick
+        | MoveState::WallJump
+        | MoveState::LedgeHang
+        | MoveState::LedgeClimb
+        | MoveState::LedgeDrop
+        | MoveState::LedgeJump => Pose {
             hip: [-0.7, 0.8],
             knee: [0.9, 0.6],
             arm_drop: 1.1,

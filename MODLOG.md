@@ -35,6 +35,102 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (late morning): ledges
+
+The user was away and said to carry on; ledges were next. Two research agents read the game's
+ledge code in RiftApart.exe, and the clips' root motion comes from the user's install.
+
+### Read from RiftApart.exe
+- **Two separate systems:**
+  - **Ledge paths:** placed in the level by its designers, with per-path switches (grab, the jump
+    over it, drop, moving to and from it). Plain edges never become one.
+  - **Recovery ledges:** any lip of the collision. A chain of nine casts finds them:
+    - a walkable top (sloping at most 15°) with a lip, and a second point for the right hand;
+    - a wall below that doesn't stick out;
+    - room to hang, at least 3 m of drop below;
+    - room on top to climb onto (0.9 m).
+- **Hanging:** his root hangs 0.5 m out from the edge and 1.29 m below it, facing the wall, with
+  the weapon put away. In this build there's no shimmying, no corners and no climb-up clip
+  from a ledge path. That code exists but nothing enters it.
+- **Grabbing a ledge path:** automatic while coming down from a jump, a fall or a glide, inside
+  LedgeConfig's FromAir window:
+  - up to 0.25 m past its ends and up to 1 m out;
+  - −1 to +1.5 m from a point 1 m above him (his feet for double jumps and air dashes);
+  - facing him, with him facing it (not checked within 2.2 m of the ground);
+  - not the path he just left.
+- **From a ledge path:**
+  - **Jump:** goes to another path above when there is one, or below with the stick pointing
+    away or the drop button. It takes the nearest, but the smaller height change when the
+    heights differ by more than 0.5 m. Ledge_UpToLedge or Ledge_DownToLedge plays, bent onto the
+    new hang point.
+  - **Otherwise the ledge jump** (jump kind 7) up over the lip. LedgeJumpConfig gives it 2–2.5 m
+    in 0.35 s; it goes at LedgeJumpSpeeds' 2 m/s straight at the wall for the whole jump, never
+    steered. It plays the double jump's flip.
+  - **Letting go:** the drop button, or jump with the stick pointing away. Ledge_DropToFallTurn
+    plays (0.5 s), then a fall.
+- **Catching a recovery ledge:**
+  - It's automatic while coming down from a jump, ledges ahead only.
+  - For 0.5 s after walking or running off an edge, it looks all round, but a ledge behind him
+    needs a 10 m drop.
+  - During an air dash, only ledges 0.5–1 m above him count.
+  - The catch clip turns him round to the ledge when needed. From its early exit (0.33 s), jump
+    climbs up (Ledge_Jump_Up_InAir) and the drop button lets go. There's no automatic climb and
+    no time limit.
+- **Jump kinds pick their speed set:** this is how the wall jump's 5 m/s turned up (the entry
+  below).
+
+### Built
+- **libratchet:**
+  - **States and events:** `LedgeHang`, `LedgeClimb`, `LedgeDrop` and `LedgeJump`, with events
+    `LedgeGrabbed { caught }`, `LedgeClimbed`, `LedgeDropped`, `LedgeTransferred` and
+    `LedgeJumped`. `Input::crouch` is the drop button.
+  - **The host's level:** `Ratchet::step_in` asks a `World` for the placed ledges near him and for
+    rays against the level; `step` asks nothing.
+  - **The catch:** the recovery search runs as rays.
+  - **Clip-driven moves:** the grab, the catch, the climb, the drop and the ledge-to-ledge moves
+    follow `RootPath`s from the new `hero_ledge_clips.json` (the config extractor measures the
+    game's clips). Moves that must end on a hang point are bent onto it.
+  - **Tuning:** `LedgeParams` comes from LedgeConfig, and the ledge jump's own config and speeds
+    are loaded.
+  - **Tests:** 52 pass. Five new ledge tests cover the catch and climb, too little drop, letting
+    go, a placed ledge with the ledge jump, and the move up to another ledge with the drop and
+    turn.
+- **C API:**
+  - **States and events:** states 12–15 and event bits 14–18, plus the step result's
+    `ledge_caught` and the input's `crouch`.
+  - **The level:** `ratchet_set_world` takes a `RatchetWorld`, with callbacks for nearby ledges
+    and for ray casts.
+  - **A test:** catches a ledge through the callbacks.
+- **Sandbox:**
+  - The level answers the sim's queries.
+  - **A ledge course:** a 3 m block to jump from at a 5 m platform he falls short of, and a 5.5 m
+    wall with a placed ledge at 3 m (a yellow shelf) and one along its top.
+  - **The clips:** the grab, the catch (turning round when he faced away), the hang, the moves
+    to another ledge, the climb, the drop with a turn, and the ledge jump's flip.
+  - **The weapons:** put away on ledges and drawn again after.
+  - **Keys:** C lets go.
+- **Demo (`--demo-part ledges`):** the catch and climb, then the placed ledges (grab, up to the
+  next one, the ledge jump over the top), and letting go. Shots `80_ledge_catch` …
+  `86_ledge_drop`; video `recordings/ledges.mp4`.
+
+### Derived or assumed
+- **When he catches a lip:** this build no longer reads the asset's recovery search heights, and
+  its own defaults weren't found. We use the asset's upper bound (0.8 m over his feet). The lower
+  bound comes from the catch clip: it sinks him 0.97 m into a hang 1.29 m below the lip, so he
+  takes the lip once it's 0.32 m over his feet.
+- **The recovery search:** done with rays rather than sphere casts:
+  - three directions ahead after a jump, eight all round after walking off;
+  - the wall check 0.5 m down;
+  - the hands checked 0.24 m to either side, the hang clip's spacing.
+- **The press windows:** 0.2 s on a caught ledge and 0.3 s on a placed one (our reading of the
+  input checks).
+- **A grab brings back his air moves** (the double jump and air dash), as on the ground.
+- **Not built:**
+  - grabbing from the ground (FromGround; the code's path there wasn't settled);
+  - the drop from on top into a hang (crouch near a ledge path);
+  - the knocked-off catch (no knock-backs yet);
+  - moving ledge paths.
+
 ## 2026-10-08 (morning): the wall jump goes at 5 m/s after all
 
 The ledge research found how a jump picks its speeds. The jump state overrides the speed set by

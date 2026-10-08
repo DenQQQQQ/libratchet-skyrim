@@ -411,8 +411,9 @@ fn keyboard_input(keys: &ButtonInput<KeyCode>, yaw: f32) -> MoveInput {
         move_dir: dir * if walk { 0.45 } else { 1.0 },
         jump: keys.pressed(KeyCode::Space),
         dash: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        // Melee is F, as in the game.
+        // Melee is F, as in the game; crouch (letting go of a ledge) is C.
         melee: keys.pressed(KeyCode::KeyF),
+        crouch: keys.pressed(KeyCode::KeyC),
         ..Default::default()
     }
 }
@@ -459,7 +460,7 @@ pub fn simulate(
 
     let before = p.feet;
     let contact = p.contact;
-    let v = p.sim.step(dt, &input, &contact, before);
+    let v = p.sim.step_in(dt, &input, &contact, before, &level::LevelWorld(&level));
     // The game's sounds for what the moves do (the animation clips sound the rest: steps,
     // jumps, swings, efforts). The heli-pack unfolds, spins while gliding, and folds away.
     for e in p.sim.events() {
@@ -649,6 +650,8 @@ fn state_color(state: MoveState) -> Color {
         MoveState::Smash | MoveState::SmashLand => Color::srgb(1.0, 0.45, 0.6),
         MoveState::WallStick => Color::srgb(0.1, 0.75, 0.75),
         MoveState::WallJump => Color::srgb(0.6, 1.0, 0.85),
+        MoveState::LedgeHang | MoveState::LedgeDrop => Color::srgb(0.95, 0.8, 0.2),
+        MoveState::LedgeClimb | MoveState::LedgeJump => Color::srgb(1.0, 0.95, 0.6),
     }
 }
 

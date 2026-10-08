@@ -159,8 +159,9 @@ fn held_wrench(
     wrench.show = if in_melee { SHOW_AFTER } else { (wrench.show - time.delta_secs()).max(0.0) };
     wrench.throw_anim = (wrench.throw_anim - time.delta_secs()).max(0.0);
     let out = arsenal.is_none();
-    // A dash puts the weapon away for its length, and a wall until he's off it (as in the game).
-    let away = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash | MoveState::WallStick | MoveState::WallJump);
+    // A dash puts the weapon away for its length, and a wall or a ledge until he's off it (as in
+    // the game).
+    let away = matches!(p.sim.state(), MoveState::Dash | MoveState::AirDash) || crate::weapons::holstered(p.sim.state());
     let want = wrench.flight.is_none() && !away && (out || wrench.show > 0.0);
     if let Some(held) = wrench.held
         && let Ok(mut v) = visibility.get_mut(held)
@@ -235,7 +236,8 @@ fn start_throw(
     let busy = wrench.flight.is_some() || wrench.releasing.is_some();
     if !requested
         || busy
-        || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand | MoveState::WallStick | MoveState::WallJump)
+        || matches!(p.sim.state(), MoveState::Melee | MoveState::Smash | MoveState::SmashLand)
+        || crate::weapons::holstered(p.sim.state())
     {
         return;
     }

@@ -1,12 +1,14 @@
 //! Tuning values for the movement sim.
 //!
-//! `Tuning::default()` holds generic values written for this project. They're close to how a
-//! Ratchet & Clank game feels but aren't copied from one. `Tuning::from_riftapart_configs` fills
-//! the same struct from JSON that the user extracts from their own Rift Apart install (see
-//! `tools/extract_riftapart_configs.py`). No game data ships with this crate.
+//! `Tuning::default()` holds values written for this project: generic ones for the first moves,
+//! and for the later ones (wall jumps, ledges) the game's config numbers, as the best start.
+//! `Tuning::from_riftapart_configs` fills the same struct from JSON that the user extracts from
+//! their own Rift Apart install (see `tools/extract_riftapart_configs.py`). No game files ship
+//! with this crate.
 //!
 //! Units: metres, seconds, metres per second.
 
+use glam::Vec3;
 use serde_json::Value;
 use std::path::Path;
 
@@ -210,6 +212,258 @@ impl WallStickParams {
             up_min_height_gain: self.up_min_height_gain * s,
             ..self.clone()
         }
+    }
+}
+
+/// A move the game drives by its clip's root motion: where his root goes over the clip (x his
+/// left, y up, z ahead, from where it starts), sampled at `rate` keys a second.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RootPath {
+    pub keys: Vec<Vec3>,
+    pub rate: f32,
+    /// The clip's length, and when it lets other moves cut it short (AllowEarlyTransition).
+    pub duration: f32,
+    pub exit: f32,
+}
+
+impl RootPath {
+    /// Straight from zero to `to`, over `over` seconds of a clip `duration` long (for defaults).
+    fn straight(to: Vec3, over: f32, duration: f32, exit: f32) -> RootPath {
+        let rate = 30.0;
+        let n = (duration * rate).round() as usize + 1;
+        let keys = (0..n).map(|i| to * ((i as f32 / rate) / over.max(1e-3)).min(1.0)).collect();
+        RootPath { keys, rate, duration, exit }
+    }
+
+    /// Where the root is `t` seconds in.
+    pub fn at(&self, t: f32) -> Vec3 {
+        let Some(last) = self.keys.last() else { return Vec3::ZERO };
+        let f = (t * self.rate).max(0.0);
+        let i = f.floor() as usize;
+        if i + 1 >= self.keys.len() {
+            return *last;
+        }
+        self.keys[i].lerp(self.keys[i + 1], f - i as f32)
+    }
+
+    /// Where it ends up.
+    pub fn end(&self) -> Vec3 {
+        self.keys.last().copied().unwrap_or(Vec3::ZERO)
+    }
+
+    fn scaled(&self, s: f32) -> RootPath {
+        RootPath { keys: self.keys.iter().map(|k| *k * s).collect(), ..self.clone() }
+    }
+
+    fn from_clip(v: &Value, base: &RootPath) -> RootPath {
+        let duration = f(v, "Duration").unwrap_or(base.duration);
+        let rate = f(v, "Rate").unwrap_or(base.rate);
+        let keys: Vec<Vec3> = v["Root"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|k| Some(Vec3::new(k.get(0)?.as_f64()? as f32, k.get(1)?.as_f64()? as f32, k.get(2)?.as_f64()? as f32)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (early, _) = early_transitions(v);
+        RootPath {
+            keys: if keys.is_empty() && v.is_object() { vec![Vec3::ZERO] } else if keys.is_empty() { base.keys.clone() } else { keys },
+            rate,
+            duration,
+            exit: early.unwrap_or(if v.is_object() { duration } else { base.exit }),
+        }
+    }
+}
+
+/// Where a grab onto a placed ledge can reach (the game's LedgeConfig FromAir / FromGround /
+/// FromLedge): how far out from him, how far past the ledge's ends, the height window, and how
+/// far the stick may point off it (degrees).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LedgeWindow {
+    pub forward: f32,
+    pub side: f32,
+    pub height_min: f32,
+    pub height_max: f32,
+    pub input_angle: f32,
+}
+
+impl LedgeWindow {
+    fn scaled(&self, s: f32) -> LedgeWindow {
+        LedgeWindow { forward: self.forward * s, side: self.side * s, height_min: self.height_min * s, height_max: self.height_max * s, ..*self }
+    }
+
+    fn from(v: &Value, prefix: &str, base: &LedgeWindow) -> LedgeWindow {
+        LedgeWindow {
+            forward: f(v, &format!("{prefix}DistanceForward")).unwrap_or(base.forward),
+            side: f(v, &format!("{prefix}DistanceSide")).unwrap_or(base.side),
+            height_min: f(v, &format!("{prefix}HeightMin")).unwrap_or(base.height_min),
+            height_max: f(v, &format!("{prefix}HeightMax")).unwrap_or(base.height_max),
+            input_angle: f(v, &format!("{prefix}InputAngleTol")).unwrap_or(base.input_angle),
+        }
+    }
+}
+
+/// The automatic "recovery" grab onto any lip he falls just short of (the game's recovery ledge
+/// search, one set per way of getting there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecoveryParams {
+    /// Ledge heights it looks at, relative to his position (below is negative).
+    pub search_min: f32,
+    pub search_max: f32,
+    /// How far out it looks.
+    pub reach: f32,
+    /// Room to hang: the ground must be at least this far below the wall check, with the ledge in
+    /// front of him or behind him.
+    pub min_drop: f32,
+    pub min_drop_behind: f32,
+    /// The wall check sits this far below the ledge.
+    pub wall_check: f32,
+    /// Room to climb on top: this far in from the lip, this high.
+    pub upper_reach: f32,
+    pub upper_height: f32,
+    /// The steepest top it takes (degrees).
+    pub max_slope: f32,
+    /// The highest a ledge may be above the last ground he stood on.
+    pub max_above_last_ground: f32,
+}
+
+impl RecoveryParams {
+    fn scaled(&self, s: f32) -> RecoveryParams {
+        RecoveryParams {
+            search_min: self.search_min * s,
+            search_max: self.search_max * s,
+            reach: self.reach * s,
+            min_drop: self.min_drop * s,
+            min_drop_behind: self.min_drop_behind * s,
+            wall_check: self.wall_check * s,
+            upper_reach: self.upper_reach * s,
+            upper_height: self.upper_height * s,
+            max_above_last_ground: self.max_above_last_ground * s,
+            ..*self
+        }
+    }
+
+    /// The asset's per-way block; the values it leaves out are the old top-level ones of
+    /// LedgeConfig, which this build no longer reads (its own defaults weren't found).
+    fn from(ledge: &Value, block: &str, base: &RecoveryParams) -> RecoveryParams {
+        let b = &ledge[block];
+        let clearance = &b["GroundClearance"];
+        RecoveryParams {
+            search_min: f(ledge, "RecoveryMinLedgeSearchHeight").unwrap_or(base.search_min),
+            search_max: f(ledge, "RecoveryMaxLedgeSearchHeight").unwrap_or(base.search_max),
+            reach: f(ledge, "RecoveryQueryRadius").unwrap_or(base.reach),
+            min_drop: f(clearance, "MinHeight").unwrap_or(base.min_drop),
+            min_drop_behind: f(clearance, "MinRearHeight").unwrap_or(base.min_drop_behind),
+            wall_check: f(ledge, "RecoveryWallCheckVerticalOffset").unwrap_or(base.wall_check),
+            upper_reach: f(b, "UpperClearanceHorizDist").unwrap_or(base.upper_reach),
+            upper_height: f(b, "ClearanceQueryRadius").map(|r| 2.0 * r).unwrap_or(base.upper_height),
+            max_slope: f(b, "MaxUpperGroundSlope").unwrap_or(base.max_slope),
+            max_above_last_ground: f(ledge, "RecoveryMaxHeightAboveLastGround").unwrap_or(base.max_above_last_ground),
+        }
+    }
+}
+
+/// Ledges: hanging from them, grabbing them, and the clip-driven moves off them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LedgeParams {
+    /// Hanging, his root is this far out from the edge and this far below it (RiftApart.exe).
+    pub hang_out: f32,
+    pub hang_down: f32,
+    /// Grabbing placed ledges.
+    pub from_air: LedgeWindow,
+    pub from_ground: LedgeWindow,
+    pub from_ledge: LedgeWindow,
+    /// The automatic grab: after a jump (ledges in front only) and after walking or running off.
+    pub recovery_jump: RecoveryParams,
+    pub recovery_run_off: RecoveryParams,
+    /// The clips that move him: the grab onto a placed ledge, the catch from a fall, the climb up
+    /// from a caught ledge, letting go of a placed one (with a turn), and moving to a ledge above
+    /// or below.
+    pub grab: RootPath,
+    pub from_fall: RootPath,
+    pub climb_up: RootPath,
+    pub drop: RootPath,
+    pub drop_turn: RootPath,
+    pub up_to_ledge: RootPath,
+    pub down_to_ledge: RootPath,
+}
+
+impl LedgeParams {
+    fn scaled(&self, s: f32) -> LedgeParams {
+        LedgeParams {
+            hang_out: self.hang_out * s,
+            hang_down: self.hang_down * s,
+            from_air: self.from_air.scaled(s),
+            from_ground: self.from_ground.scaled(s),
+            from_ledge: self.from_ledge.scaled(s),
+            recovery_jump: self.recovery_jump.scaled(s),
+            recovery_run_off: self.recovery_run_off.scaled(s),
+            grab: self.grab.scaled(s),
+            from_fall: self.from_fall.scaled(s),
+            climb_up: self.climb_up.scaled(s),
+            drop: self.drop.scaled(s),
+            drop_turn: self.drop_turn.scaled(s),
+            up_to_ledge: self.up_to_ledge.scaled(s),
+            down_to_ledge: self.down_to_ledge.scaled(s),
+        }
+    }
+}
+
+impl Default for LedgeParams {
+    /// The game's LedgeConfig values, the hang offsets from the exe, and straight-line stand-ins
+    /// for the clips' root motion (the extractor's hero_ledge_clips.json has the real paths).
+    fn default() -> Self {
+        let recovery = RecoveryParams {
+            search_min: -1.5,
+            search_max: 0.8,
+            reach: 1.2,
+            min_drop: 3.0,
+            min_drop_behind: 3.0,
+            wall_check: 0.5,
+            upper_reach: 0.9,
+            upper_height: 0.7,
+            max_slope: 15.0,
+            max_above_last_ground: 3.5,
+        };
+        LedgeParams {
+            hang_out: 0.5,
+            hang_down: 1.29,
+            from_air: LedgeWindow { forward: 1.0, side: 0.25, height_min: -1.0, height_max: 1.5, input_angle: 45.0 },
+            from_ground: LedgeWindow { forward: 2.25, side: 1.0, height_min: 0.1, height_max: 2.5, input_angle: 45.0 },
+            from_ledge: LedgeWindow { forward: 2.0, side: 1.0, height_min: -1.0, height_max: 5.0, input_angle: 45.0 },
+            recovery_jump: recovery,
+            recovery_run_off: RecoveryParams { min_drop_behind: 10.0, ..recovery },
+            grab: RootPath::straight(Vec3::ZERO, 0.1, 0.6, 0.02),
+            from_fall: RootPath::straight(Vec3::new(0.0, -0.97, 0.0), 0.27, 0.87, 0.33),
+            climb_up: RootPath::straight(Vec3::new(0.0, 1.37, 0.75), 0.5, 1.0, 0.52),
+            drop: RootPath::straight(Vec3::ZERO, 0.1, 0.5, 0.5),
+            drop_turn: RootPath::straight(Vec3::new(0.0, -2.71, 0.39), 0.5, 0.5, 0.5),
+            up_to_ledge: RootPath::straight(Vec3::new(0.0, 2.0, 0.0), 0.2, 1.0, 0.41),
+            down_to_ledge: RootPath::straight(Vec3::new(0.0, -0.97, 0.0), 0.27, 0.93, 0.29),
+        }
+    }
+}
+
+/// LedgeConfig from hero_traversal, and the clips' root motion from hero_ledge_clips.json.
+fn ledge_from(dir: &Path, traversal: &Value, base: &LedgeParams) -> LedgeParams {
+    let v = &traversal["LedgeConfig"];
+    let clips = read_json(&dir.join("hero_ledge_clips.json")).unwrap_or(Value::Null);
+    let path = |key: &str, base: &RootPath| if clips.is_object() { RootPath::from_clip(&clips[key], base) } else { base.clone() };
+    LedgeParams {
+        from_air: LedgeWindow::from(v, "FromAir", &base.from_air),
+        from_ground: LedgeWindow::from(v, "FromGround", &base.from_ground),
+        from_ledge: LedgeWindow::from(v, "FromLedge", &base.from_ledge),
+        recovery_jump: RecoveryParams::from(v, "RecoveryFrontJumpParams", &base.recovery_jump),
+        recovery_run_off: RecoveryParams::from(v, "RecoveryRunOffParams", &base.recovery_run_off),
+        grab: path("Grab", &base.grab),
+        from_fall: path("FromFall", &base.from_fall),
+        climb_up: path("ClimbUp", &base.climb_up),
+        drop: path("Drop", &base.drop),
+        drop_turn: path("DropTurn", &base.drop_turn),
+        up_to_ledge: path("UpToLedge", &base.up_to_ledge),
+        down_to_ledge: path("DownToLedge", &base.down_to_ledge),
+        ..base.clone()
     }
 }
 
@@ -437,6 +691,8 @@ pub struct Tuning {
     pub air_dash: DashParams,
     /// OmniWrench combo, Hyper-Strike and throw.
     pub melee: MeleeParams,
+    /// Ledges: hanging, grabbing, and the moves off them.
+    pub ledge: LedgeParams,
     /// Aim mode: strafing speeds (forward run/walk, and backing up) and the lower,
     /// fixed-height jumps. Strafing while firing from the hip keeps the normal speeds.
     pub aim_speeds: SpeedParams,
@@ -513,6 +769,7 @@ impl Default for Tuning {
             ground_dash: DashParams { distance: 6.5, max_speed: 28.0, accel: 100.0, decel: 50.0 },
             air_dash: DashParams { distance: 6.5, max_speed: 12.0, accel: 0.0, decel: 0.0 },
             melee: MeleeParams::default(),
+            ledge: LedgeParams::default(),
             aim_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.5, run_min: 4.0, run_max: 5.0, walk_run_threshold: 0.6 },
             aim_back_speed: 4.0,
             aim_single_jump: JumpParams {
@@ -605,6 +862,7 @@ impl Tuning {
             ground_dash: dash_from(&traversal["DodgeConfig"], &base.ground_dash),
             air_dash: dash_from(&traversal["AirDashConfig"], &base.air_dash),
             melee: melee_from(dir, &traversal, &shared, &base.melee),
+            ledge: ledge_from(dir, &traversal, &base.ledge),
             // The game's motion config reads only StandardSpeeds (and MagBootSpeeds); the other
             // speed blocks in hero_shared, StandAimSpeedConfig among them, are never read
             // (RiftApart.exe). Aim mode takes its AimSpeedConfig (our reading of the name).
@@ -640,6 +898,7 @@ impl Tuning {
             ground_dash: self.ground_dash.scaled(s),
             air_dash: self.air_dash.scaled(s),
             melee: self.melee.scaled(s),
+            ledge: self.ledge.scaled(s),
             aim_speeds: self.aim_speeds.scaled(s),
             aim_back_speed: self.aim_back_speed * s,
             aim_single_jump: self.aim_single_jump.scaled(s),
