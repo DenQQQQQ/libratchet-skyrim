@@ -106,9 +106,11 @@ fn swings_on_a_target_never_above_it_and_jumps_off() {
     let (_, length) = s.r.swinging_on().unwrap();
     assert!((length - 5.0).abs() < 0.05, "cable {length:.2} m");
     assert!((s.pos.distance(top) - 5.0).abs() < 0.1, "{:.2} m from the target", s.pos.distance(top));
-    // Jump: off, 8 m/s up, at least the swing jump's speed ahead.
+    // Jump: off, 8 m/s up, at least the swing jump's speed ahead, from its first tick.
     s.tick(true, true, Vec2::ZERO);
     assert_eq!(s.r.state(), MoveState::SwingJump);
+    let v = s.r.velocity();
+    assert!(Vec2::new(v.x, v.z).length() >= t.swingshot.jump_min_speed - 0.01, "first tick ahead at {:.2} m/s", Vec2::new(v.x, v.z).length());
     s.tick(true, true, Vec2::ZERO);
     let v = s.r.velocity();
     let flat = Vec2::new(v.x, v.z).length();
@@ -121,6 +123,66 @@ fn swings_on_a_target_never_above_it_and_jumps_off() {
     }
     assert_eq!(s.r.state(), MoveState::Fall);
     assert!((s.time - start - t.swingshot.jump.time_to_peak).abs() < 0.05, "fell after {:.2} s", s.time - start);
+}
+
+fn wrap(a: f32) -> f32 {
+    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
+/// Hooking on to a target whose line runs across the way he's going, he turns to the swing at
+/// the air turn's pace (at most 1500°/s), never in one tick (RiftApart.exe: the swing sets no
+/// turn of its own; the mover turns him toward the way he moves).
+#[test]
+fn hooking_on_turns_him_instead_of_snapping() {
+    let top = Vec3::new(6.0, 6.0, 1.5);
+    let mut s = Swinger::new(vec![target(top, SwingKind::Swing, 5.0)]);
+    s.view = Vec3::new(1.0, 0.3, 0.0).normalize();
+    // Running along +X, a jump, and the stick let go as he hooks on.
+    for _ in 0..60 {
+        s.tick(false, false, Vec2::X);
+    }
+    s.tick(false, true, Vec2::X);
+    for _ in 0..10 {
+        s.tick(false, false, Vec2::X);
+    }
+    assert_eq!(s.r.state(), MoveState::Jump);
+    assert_eq!(s.r.swing_target(), Some(top), "the target ahead wasn't picked");
+    let mut last = s.r.facing_yaw();
+    let start = last;
+    let mut biggest = 0.0f32;
+    for i in 0..60 {
+        s.tick(true, false, Vec2::ZERO);
+        assert_eq!(s.r.state(), MoveState::Swing, "tick {i}");
+        let yaw = s.r.facing_yaw();
+        biggest = biggest.max(wrap(yaw - last).abs());
+        last = yaw;
+    }
+    assert!(biggest <= (1500.0f32 * DT).to_radians() + 1e-3, "turned {:.1}° in one tick", biggest.to_degrees());
+    // He came round toward the swing's line (+Z), from facing +X.
+    assert!(wrap(last - start).abs() > 30f32.to_radians(), "turned only {:.1}°", wrap(last - start).to_degrees());
+}
+
+/// The game's swing-loop animation values: Lean heads for 0 swinging ahead and 1 swinging back,
+/// and both values stay between 0 and 1.
+#[test]
+fn the_swing_leans_ahead_then_back() {
+    let top = Vec3::new(0.0, 7.0, 4.0);
+    let mut s = Swinger::new(vec![target(top, SwingKind::Swing, 5.0)]);
+    s.tick(false, false, Vec2::ZERO);
+    s.tick(true, false, Vec2::ZERO);
+    let (mut ahead, mut back) = (1.0f32, 0.0f32);
+    for _ in 0..480 {
+        s.tick(true, false, Vec2::new(0.0, 1.0));
+        let (lean, speed) = s.r.swing_lean_speed().expect("not swinging");
+        assert!((0.0..=1.0).contains(&lean) && (0.0..=1.0).contains(&speed), "lean {lean}, speed {speed}");
+        let v = s.r.velocity();
+        if v.z > 3.0 {
+            ahead = ahead.min(lean);
+        } else if v.z < -3.0 {
+            back = back.max(lean);
+        }
+    }
+    assert!(ahead < 0.2 && back > 0.8, "lean swinging ahead {ahead:.2}, back {back:.2}");
 }
 
 #[test]

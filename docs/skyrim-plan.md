@@ -31,9 +31,15 @@ mods work and need checking against CommonLibSSE-NG before relying on them.
 ## What the plugin tells the sim (added since this plan was written)
 - **Each tick**, besides the stick, buttons and ground: the camera's forward and right (wall
   jumps take their side from it; the Swingshot picks targets in its view and pumps along it),
-  the wall the last move ran into (its normal, and whether it takes wall jumps), and during wall
-  jumps whether a floor is ahead (`landing_ahead`). Buttons now include crouch (lets go of a
-  ledge) and the Swingshot.
+  the nearest wall (its normal, whether it takes wall jumps, and how far out it is), and during
+  wall jumps whether a floor is ahead (`landing_ahead`). Buttons now include crouch (lets go of
+  a ledge) and the Swingshot.
+  - **The wall's distance.** As in the game, he sticks to a wall from up to 0.775 m out and is
+    held 0.6 m off it (× scale), where his wall poses put his hands and feet on it. So the
+    plugin should probe for the nearest wall within about 1 m × scale (a few horizontal
+    sphere or ray casts around him at mid-body height) and pass `wall_distance`. Reporting
+    only walls the character controller touches still works, but he's then pressed to the
+    wall at the capsule's radius, and his hands go into it.
 - **The level, through `ratchet_set_world`:**
   - **Rays.** Catching a ledge needs them, and they're all Skyrim can offer for ledges: it has no
     placed ledge paths, so only lips he catches on the way down.

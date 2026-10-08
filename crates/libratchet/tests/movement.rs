@@ -17,6 +17,9 @@ struct Flat {
     wall_x: Option<f32>,
     wall_facing: f32,
     wall_sticky: bool,
+    /// Report the wall from a metre out with how far it is, as the game's probe finds walls;
+    /// else only on touching it.
+    measured: bool,
     /// In a wall-jump zone, and whether his flight path meets a floor before a wall.
     zone: bool,
     landing_ahead: bool,
@@ -26,7 +29,7 @@ struct Flat {
 
 impl Flat {
     fn new(tuning: Tuning) -> Self {
-        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, wall_facing: -1.0, wall_sticky: true, zone: false, landing_ahead: false, time: 0.0, events: vec![] }
+        Flat { r: Ratchet::new(tuning), pos: Vec3::ZERO, contact: Contact::default(), floor: true, wall_x: None, wall_facing: -1.0, wall_sticky: true, measured: false, zone: false, landing_ahead: false, time: 0.0, events: vec![] }
     }
 
     /// No floor: the character starts in the air and falls.
@@ -56,6 +59,14 @@ impl Flat {
         {
             self.pos.x = x;
             wall = Some(WallContact { normal: Vec2::new(self.wall_facing, 0.0), sticky: self.wall_sticky, distance: None });
+        }
+        if self.measured
+            && let Some(x) = self.wall_x
+        {
+            let out = (self.pos.x - x) * self.wall_facing;
+            if out <= 1.0 {
+                wall = Some(WallContact { normal: Vec2::new(self.wall_facing, 0.0), sticky: self.wall_sticky, distance: Some(out.max(0.0)) });
+            }
         }
         self.contact = Contact {
             grounded,
@@ -846,6 +857,58 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     }
     assert!(close(peak - take_off.y, t.wall_jump.height_min, 0.08), "peaked {:.2} m up", peak - take_off.y);
     assert!(h.pos.x < take_off.x - 3.0, "only {:.2} m from the wall", take_off.x - h.pos.x);
+}
+
+/// A host that measures walls, as the game's probe does: he sticks to one from as far as 0.775 m
+/// out, and the stick holds him 0.6 m off it (BodySizeSlide.BodyRadius) instead of pressing him
+/// against it. Pulled past the probe's 0.92 m reach, he lets go.
+#[test]
+fn a_measured_wall_takes_him_from_the_probes_reach_and_holds_him_off_it() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.measured = true;
+    h.wall_x = Some(2.0);
+    h.pos = Vec3::new(0.0, 3.0, 0.0);
+    h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
+    let mut stuck_from = None;
+    while stuck_from.is_none() && h.time < 1.5 {
+        let out = 2.0 - h.pos.x;
+        h.tick(false, Vec2::new(1.0, 0.0));
+        if h.r.state() == MoveState::WallStick {
+            stuck_from = Some(out);
+        }
+    }
+    let from = stuck_from.expect("never stuck");
+    assert!(from <= 0.775 + 1e-3 && from > t.wall_stick.standoff, "stuck {from:.3} m out");
+    for _ in 0..12 {
+        h.tick(false, Vec2::ZERO);
+        assert_eq!(h.r.state(), MoveState::WallStick);
+    }
+    assert!(close(2.0 - h.pos.x, t.wall_stick.standoff, 1e-3), "held {:.3} m out", 2.0 - h.pos.x);
+    // The wall moves off past the probe's reach: he lets go.
+    h.wall_x = Some(h.pos.x + 0.95);
+    h.tick(false, Vec2::ZERO);
+    h.tick(false, Vec2::ZERO);
+    assert_eq!(h.r.state(), MoveState::Fall);
+}
+
+/// A measured wall further out than the game's probe reaches (0.775 m) isn't stuck to, falling
+/// past it; one just inside is.
+#[test]
+fn a_measured_wall_beyond_the_probes_reach_isnt_stuck_to() {
+    let t = Tuning::default();
+    for (out, sticks) in [(0.8, false), (0.75, true)] {
+        let mut h = Flat::new(t.clone());
+        h.measured = true;
+        h.wall_x = Some(out);
+        h.pos = Vec3::new(0.0, 3.0, 0.0);
+        let wall = Some(WallContact { normal: Vec2::new(-1.0, 0.0), sticky: true, distance: Some(out) });
+        h.contact = Contact { grounded: false, ground_distance: Some(3.0), hit_ceiling: false, wall, wall_jump_zone: false, landing_ahead: false };
+        for _ in 0..30 {
+            h.tick(false, Vec2::ZERO);
+        }
+        assert_eq!(h.r.state() == MoveState::WallStick, sticks, "{out} m out: {:?}", h.r.state());
+    }
 }
 
 #[test]

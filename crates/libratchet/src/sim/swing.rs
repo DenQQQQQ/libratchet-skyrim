@@ -549,3 +549,36 @@ fn swing_anim(sw: &mut Swing, r: Vec3, velocity: Vec3, scale: f32, dt: f32) {
     sw.lean = trapezoid(sw.lean, lean, &mut sw.lean_rate, accel, 7.0, 10.0, dt, 0.0);
     sw.anim_speed = trapezoid(sw.anim_speed, speed_goal, &mut sw.anim_speed_rate, 4.0, 10.0, 10.0, dt, 0.0);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::trapezoid;
+
+    /// From any start, rate and direction, it gets to the target and stops there, never past
+    /// it, never above its top speed once under it, and the same both ways.
+    #[test]
+    fn the_trapezoid_arrives_at_rest_without_overshooting() {
+        let dt = 1.0 / 120.0;
+        for (start, target, rate) in [(0.0, 1.0, 0.0), (0.0, 1.0, 4.0), (0.0, 1.0, -4.0), (0.0, 0.05, 9.0), (3.0, -2.0, 0.0), (0.0, 20.0, 15.0)] {
+            let run = |start: f32, target: f32, rate: f32| {
+                let (mut value, mut rate) = (start, rate);
+                let mut path = vec![];
+                for _ in 0..1200 {
+                    value = trapezoid(value, target, &mut rate, 20.0, 7.0, 10.0, dt, 0.0);
+                    path.push((value, rate));
+                }
+                path
+            };
+            let path = run(start, target, rate);
+            let (end, end_rate) = *path.last().unwrap();
+            assert!((end - target).abs() < 1e-4 && end_rate.abs() < 1e-4, "{start} -> {target} from {rate}: ended at {end} moving {end_rate}");
+            let beyond = |v: f32| (v - target) * (target - start).signum() > 1e-4;
+            assert!(!path.iter().any(|(v, _)| beyond(*v)), "{start} -> {target} from {rate}: overshot");
+            if rate.abs() <= 10.0 {
+                assert!(path.iter().all(|(_, r)| r.abs() <= 10.0 + 1e-3), "{start} -> {target} from {rate}: too fast");
+            }
+            let mirrored = run(-start, -target, -rate);
+            assert!(path.iter().zip(&mirrored).all(|(a, b)| (a.0 + b.0).abs() < 1e-4), "{start} -> {target} isn't symmetric");
+        }
+    }
+}
