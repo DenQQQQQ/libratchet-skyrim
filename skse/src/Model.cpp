@@ -311,13 +311,25 @@ namespace Model
 		const float scale = Settings::Get().scale;
 		const float speed = std::sqrt(v.x * v.x + v.y * v.y) / scale;  // Ratchet-sized m/s
 		const float heading = a_player->GetAngleZ();
-		const float lx = v.x * std::cos(heading) - v.y * std::sin(heading);
-		const float ly = v.x * std::sin(heading) + v.y * std::cos(heading);
-		if (speed > kMoving) {
+		// The world direction he faces: the sim's facing (sim (sin f, cos f) on x, z is east
+		// sin f, north -cos f), else where he's going.
+		RE::NiPoint2 face{ v.x, v.y };
+		bool         turn = speed > kMoving;
+		if (a_drive.hasFacing) {
+			face = { std::sin(a_drive.facingYaw), -std::cos(a_drive.facingYaw) };
+			turn = true;
+		}
+		const float lx = face.x * std::cos(heading) - face.y * std::sin(heading);
+		const float ly = face.x * std::sin(heading) + face.y * std::cos(heading);
+		if (turn) {
 			const float target = std::atan2(-lx, ly);
-			const float d = WrapAngle(target - s.yaw);
-			const float step = kTurnRate * a_dt;
-			s.yaw = WrapAngle(s.yaw + std::clamp(d, -step, step));
+			if (a_drive.hasFacing) {
+				s.yaw = target;  // the sim already turns him at Rift Apart's rates
+			} else {
+				const float d = WrapAngle(target - s.yaw);
+				const float step = kTurnRate * a_dt;
+				s.yaw = WrapAngle(s.yaw + std::clamp(d, -step, step));
+			}
 		}
 
 		PickClip(a_drive, speed, v.z / scale, a_dt);

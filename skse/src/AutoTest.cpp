@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Input.h"
 #include "Model.h"
+#include "Physics.h"
 #include "RatchetDll.h"
 #include "TestWindow.h"
 
@@ -12,19 +14,25 @@ namespace AutoTest
 		struct Case
 		{
 			const char* name;
-			float       hold;  // seconds the button is held; 0: one frame
+			float       hold;           // seconds the button is held; 0: one frame
+			float       run = 0.0f;     // seconds of stick forward before the press (a run-up)
+			bool        airStick = false;  // the stick forward in the air too
 		};
 		constexpr Case kCases[] = {
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
 			{ "medium hold", 0.15f },
 			{ "full hold", 0.5f },
+			{ "standing jump steered forward", 0.5f, 0.0f, true },
+			{ "running jump", 0.5f, 0.8f, true },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
 		// Skyrim moving him (its collision, a frame of lag in reading his height).
 		constexpr float kApexTolerance = 0.03f;      // metres
 		constexpr float kApexTimeTolerance = 0.025f; // seconds
+		// Across the ground: a frame of his speed either way at the landing.
+		constexpr float kDistanceTolerance = 0.2f;   // metres
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
 		constexpr float kTimeout = 90.0f;            // seconds in game for the whole run
@@ -32,9 +40,9 @@ namespace AutoTest
 		struct State
 		{
 			bool        active = false;
-			std::string start = "coc qasmoke";  // where to test: "load" (the most recent save) or a coc command
-			std::string then;                   // the coc to run once the save has loaded
-			bool        flatGround = true;      // the landing must come back to the takeoff height
+			std::string start = "coc Whiterun";  // where to test: "load" (the most recent save) or a coc command
+			std::string then;                    // the coc to run once the save has loaded
+			bool        flatGround = false;      // the landing must come back to the takeoff height
 			bool        quit = true;
 			float       holdEnd = 0.0f;         // seconds stood still after the last jump (for screenshots)
 			float       held = 0.0f;
@@ -53,6 +61,12 @@ namespace AutoTest
 			int   index = 0;
 			float settle = 0.0f;
 			float pressed = -1.0f;  // how long this case's press has been held; < 0 not pressed yet
+			float running = 0.0f;   // this case's run-up so far
+			// Every case starts where the first one did, facing the same way (runs and steered
+			// jumps would otherwise carry him into the room's furniture).
+			std::optional<RE::NiPoint3> startPos;
+			float                       startHeading = 0.0f;
+			bool                        returnPending = false;
 			float elapsed = 0.0f;
 			bool  launched = false;
 			bool  landed = false;
@@ -116,6 +130,43 @@ namespace AutoTest
 				tps->freeRotation.x = s.cameraYaw;
 				tps->freeRotationEnabled = s.cameraYaw != 0.0f;
 			}
+		}
+
+		// The heading with the most room for the running and steered jumps: clear ahead at chest
+		// height and with headroom along the way (a full jump peaks 2.3 m up at his size).
+		float ClearHeading(const RE::NiPoint3& a_feet, float a_current)
+		{
+			const float units = RE::bhkWorld::GetWorldScaleInverse();
+			constexpr float kAhead = 12.0f;  // metres
+			float best = a_current;
+			float bestRoom = -1.0f;
+			for (int i = 0; i < 16; ++i) {
+				const float h = a_current + static_cast<float>(i) * (2.0f * 3.14159265f / 16.0f);
+				const RE::NiPoint3 dir{ std::sin(h), std::cos(h), 0.0f };
+				const RE::NiPoint3 chest = a_feet + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * units };
+				const auto wall = Physics::Ray(chest, chest + dir * (kAhead * units));
+				float room = wall ? wall->fraction * kAhead : kAhead;
+				for (float d = 1.0f; d < room; d += 1.0f) {
+					const RE::NiPoint3 p = a_feet + dir * (d * units);
+					if (Physics::Ray(p + RE::NiPoint3{ 0.0f, 0.0f, 0.3f * units }, p + RE::NiPoint3{ 0.0f, 0.0f, 4.3f * units })) {
+						room = d;  // a ceiling under 4.3 m
+						break;
+					}
+					// No low wall, step up or drop on the way (the sandbox replays the jump onto a
+					// floor at the landing's height, so a gentle slope is fine).
+					const auto ground = Physics::GroundDistance(p + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * units }, 3.0f);
+					if (!ground || *ground - 1.0f < -0.5f || *ground - 1.0f > 1.5f) {
+						room = d;
+						break;
+					}
+				}
+				if (room > bestRoom + 0.5f) {
+					bestRoom = room;
+					best = h;
+				}
+			}
+			SKSE::log::info("autotest: running room {:.1f} m that way", bestRoom);
+			return best;
 		}
 
 		void Phase(int a_next, std::string_view a_what)
@@ -198,6 +249,9 @@ namespace AutoTest
 
 		void NextCase()
 		{
+			Input::SetTestStick(std::nullopt);
+			s.returnPending = true;
+			s.running = 0.0f;
 			s.pressed = -1.0f;
 			s.settle = 0.0f;
 			s.launched = false;
@@ -289,13 +343,13 @@ namespace AutoTest
 			return;
 		}
 		wchar_t buf[256]{};
-		GetPrivateProfileStringW(L"AutoTest", L"sStart", L"coc qasmoke", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
+		GetPrivateProfileStringW(L"AutoTest", L"sStart", L"coc Whiterun", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
 		s.start.clear();
 		for (const wchar_t* c = buf; *c; ++c) {
 			s.start.push_back(static_cast<char>(*c));  // console commands are ASCII
 		}
 		s.then = s.start == "load" ? "" : s.start;
-		s.flatGround = GetPrivateProfileIntW(L"AutoTest", L"bFlatGround", 1, trigger.c_str()) != 0;
+		s.flatGround = GetPrivateProfileIntW(L"AutoTest", L"bFlatGround", 0, trigger.c_str()) != 0;
 		s.quit = GetPrivateProfileIntW(L"AutoTest", L"bQuit", 1, trigger.c_str()) != 0;
 		GetPrivateProfileStringW(L"AutoTest", L"fHoldEnd", L"0", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
 		s.holdEnd = std::max(0.0f, std::wcstof(buf, nullptr));
@@ -388,7 +442,21 @@ namespace AutoTest
 		const Case& c = kCases[s.index];
 
 		if (s.pressed < 0.0f) {
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (s.returnPending && s.startPos && player && a_grounded && !a_inJump) {
+				s.returnPending = false;
+				player->SetPosition(*s.startPos, true);
+				player->SetHeading(s.startHeading);
+				s.settle = 0.0f;
+				return false;
+			}
 			s.settle = a_grounded && !a_inJump ? s.settle + a_dt : 0.0f;
+			if (!s.startPos && player && s.settle > 1.0f) {
+				s.startPos = player->GetPosition();
+				s.startHeading = ClearHeading(player->GetPosition(), player->GetAngleZ());
+				player->SetHeading(s.startHeading);
+				s.settle = 0.0f;
+			}
 			// The camera behind him (coc starts in first person, where his model isn't drawn).
 			if (!s.thirdPerson && s.settle > 0.0f) {
 				s.thirdPerson = true;
@@ -403,13 +471,23 @@ namespace AutoTest
 			if (s.index == 1) {
 				TestWindow::Shot("idle");
 			}
+			// The run-up: the stick forward (Skyrim's own locomotion runs him) before the press.
+			if (s.running < c.run) {
+				if (s.running == 0.0f) {
+					SKSE::log::info("autotest: {}: running up for {:.1f} s", c.name, c.run);
+				}
+				Input::SetTestStick(RE::NiPoint2{ 0.0f, 1.0f });
+				s.running += a_dt;
+				return false;
+			}
 			if (s.index > 0) {
 				CheckHealthAfter(s.index - 1);
 			}
+			Input::SetTestStick(c.airStick ? std::optional(RE::NiPoint2{ 0.0f, 1.0f }) : std::nullopt);
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
-			SKSE::log::info("autotest: {} (the button held {:.2f} s)", c.name, c.hold);
+			SKSE::log::info("autotest: {} (the button held {:.2f} s{})", c.name, c.hold, c.airStick ? ", the stick forward" : "");
 		}
 
 		s.elapsed += a_dt;
@@ -452,7 +530,8 @@ namespace AutoTest
 			return;
 		}
 		s.landed = true;
-		// The sandbox replayed the same frames (time steps and button) on a flat floor.
+		// The sandbox replayed the same frames (time steps, button and stick) on a flat floor, down
+		// to where he landed.
 		std::string bad;
 		if (std::abs(a_jump.apex - a_jump.sandboxApex) > kApexTolerance) {
 			bad += " apex";
@@ -463,14 +542,19 @@ namespace AutoTest
 		if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {
 			bad += " landing-height";
 		}
+		if (std::abs(a_jump.distance - a_jump.sandboxDistance) > kDistanceTolerance) {
+			bad += " distance";
+		}
 		if (bad.empty()) {
 			++s.passed;
 		} else {
 			++s.failed;
 		}
-		SKSE::log::info("autotest: {} {}: apex {:.3f} m (sandbox {:.3f}) at {:.3f} s ({:.3f}) for a {:.3f} s hold, landed {:+.3f} m after {:.3f} s (sandbox {:.3f}){}",
+		SKSE::log::info(
+			"autotest: {} {}: apex {:.3f} m (sandbox {:.3f}) at {:.3f} s ({:.3f}) for a {:.3f} s hold, {:.2f} m across ({:.2f}), landed {:+.3f} m after {:.3f} s ({:.3f}){}",
 			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
-			a_jump.hold, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime, bad.empty() ? "" : " - off:" + bad);
+			a_jump.hold, a_jump.distance, a_jump.sandboxDistance, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime,
+			bad.empty() ? "" : " - off:" + bad);
 	}
 
 	void OnHandedBack(const char* a_why)

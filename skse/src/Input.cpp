@@ -36,6 +36,41 @@ namespace Input
 			MappedKey(RE::INPUT_DEVICE::kKeyboard), MappedKey(RE::INPUT_DEVICE::kMouse), MappedKey(RE::INPUT_DEVICE::kGamepad));
 	}
 
+	namespace
+	{
+		std::optional<RE::NiPoint2> g_testStick;
+		bool                        g_testStickWritten = false;
+	}
+
+	RE::NiPoint2 MoveStick()
+	{
+		auto* controls = RE::PlayerControls::GetSingleton();
+		const auto* map = RE::ControlMap::GetSingleton();
+		if (!controls) {
+			return {};
+		}
+		if (g_testStick) {
+			// Written where Skyrim keeps it, so its own locomotion moves him as if keys were held.
+			controls->data.moveInputVec = *g_testStick;
+			g_testStickWritten = true;
+		} else if (g_testStickWritten) {
+			controls->data.moveInputVec = {};
+			g_testStickWritten = false;
+		}
+		if (map && !map->IsMovementControlsEnabled()) {
+			return {};
+		}
+		RE::NiPoint2 v = controls->data.moveInputVec;
+		const float len = std::sqrt(v.x * v.x + v.y * v.y);
+		if (len > 1.0f) {
+			v.x /= len;
+			v.y /= len;
+		}
+		return v;
+	}
+
+	void SetTestStick(std::optional<RE::NiPoint2> a_stick) { g_testStick = a_stick; }
+
 	bool JumpHeld()
 	{
 		const auto* map = RE::ControlMap::GetSingleton();

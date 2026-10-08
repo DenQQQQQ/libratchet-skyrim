@@ -13,6 +13,9 @@ namespace Model
 		std::uint32_t simState = 0;     // RATCHET_STATE_*
 		std::uint32_t events = 0;       // this frame's RATCHET_EVENT_*
 		bool          grounded = true;  // Skyrim's controller is on the ground
+		// The sim's facing (radians, atan2(x, z) in its axes): he turns the way Rift Apart turns him.
+		bool          hasFacing = false;
+		float         facingYaw = 0.0f;
 	};
 
 	// Reads the clips (at plugin load). False: no model (the files aren't installed).

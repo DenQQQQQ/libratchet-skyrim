@@ -27,10 +27,12 @@ namespace AutoTest
 		float hold;        // seconds the button was held (or until the jump turned down)
 		float landDz;      // landing height - takeoff height, metres
 		float airTime;
+		float distance;    // metres across the ground, takeoff to landing
 		// The sandbox's jump for the same frames on a flat floor.
 		float sandboxApex;
 		float sandboxApexTime;
 		float sandboxAirTime;
+		float sandboxDistance;
 	};
 	void OnTakeoff();
 	// The jump turned down (a screenshot of the pose at its top).

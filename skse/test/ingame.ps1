@@ -5,15 +5,16 @@
 #   powershell -ExecutionPolicy Bypass -File skse\test\ingame.ps1 -NoBuild   # test what's installed
 #
 # Drops a one-shot RatchetMovement\autotest.ini into the MO2 mod, starts SKSE through MO2 (the
-# profile MO2 has selected), and follows RatchetMovement.log. From the main menu the plugin runs
-# `coc qasmoke` (the flat test room: no save is loaded or written; autosaves are off for the run),
-# makes its jumps, logs PASS/FAIL for each against the sandbox's numbers, and quits the game.
-# Exit code 0 when everything passed.
+# profile MO2 has selected), and follows RatchetMovement.log. From the main menu the plugin loads
+# the most recent save and runs `coc Whiterun` (no save is written; autosaves are off for the
+# run), makes its jumps, logs PASS/FAIL for each against the sandbox replaying the same frames,
+# and quits the game. Exit code 0 when everything passed.
 param(
     [switch]$NoBuild,
     # Where to test: the most recent save is loaded first (a new game asks AE's survival-mode
-    # question), then this coc runs; "load" stays where the save is.
-    [string]$Start = "coc qasmoke",
+    # question), then this coc runs; "load" stays where the save is. qasmoke is flat (the landing
+    # height is checked there) but too small for the running jump.
+    [string]$Start = "coc Whiterun",
     [int]$TimeoutSec = 300,
     # Seconds he stands still after the last jump before the game quits (time for screenshots).
     [int]$HoldEnd = 0,

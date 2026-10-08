@@ -34,7 +34,8 @@ The plugin's own log, kept in `skse/` while it's built on the `skse` branch (the
 
 ### Confirmed in game (owner's playtest, Skyrim 1.6.1170, Spire profile)
 - The plugin loads, logs, loads `ratchet.dll` (C API 1) and the owner's Rift Apart configs.
-- Jump is bound to keyboard 0x39 (Space) and gamepad 0x8000 (A).
+- Jump is bound to keyboard 0x39 (Space) and gamepad 0x8000 (Y in XInput's numbering, Skyrim's
+  default jump button; first written down here as A).
 - **The jump matches the sandbox.** 25 jumps at scale 1.55, the game running at about 100 fps:
   - every full hold peaked at **2.325 m** (sandbox: 2.325 m) at 0.368-0.374 s (sandbox 0.367 s);
   - shorter holds land within about 0.03 m of the sandbox's apex for the same hold (e.g.
@@ -97,3 +98,91 @@ The plugin's own log, kept in `skse/` while it's built on the `skse` branch (the
   the same height would. (The plan said to switch fall damage off during Ratchet moves; for the
   plain jump this keeps Skyrim's rules.)
 - Sideways movement in the air is still Skyrim's.
+
+## 2026-10-08: Ratchet on the player
+
+### His model, textures and clips
+- `skse/tools/ratchet_to_skyrim.py` converts the owner's `ratchet.glb` (riftapart-assets) into
+  `meshes/RatchetMovement/ratchet.nif` (205 bones, 22 skinned shapes), 30 DDS textures and
+  `ratchet.anim` (99 move clips, the plugin's own RANM format). These are game data: they're built
+  into `target/skse/ratchet` and installed into the MO2 mod only. `build.ps1 -Install` converts
+  again when the glb or the tools are newer.
+- `skse/tools/nif.py` reads and writes Skyrim SE NIFs. Checked byte for byte against CBBE's body,
+  hands and feet, which settled the conventions:
+  - rotations are stored row-major and applied as R·v + t;
+  - vertex positions are always full floats;
+  - a skinned BSTriShape has no vertices of its own (they're in NiSkinPartition's global vertex
+    data), and the partitions' triangles index those global vertices;
+  - bone indices in the vertex data count over the whole skin, each partition's bone list only
+    over that partition.
+- The plugin hangs him under the player's third-person 3D (`BSModelDB::Demand`), hides the
+  Dragonborn's own meshes every frame, samples his clips onto his joints and turns him to face
+  where he goes. Clips are picked by the sandbox's rules (`apps/sandbox/src/ratchet_model.rs`,
+  ported to C++): idle, walk and run matched to his speed, jump, fall, landings, with the
+  sandbox's fade times.
+
+### The freeze
+- With his model shown the game froze in the renderer. A test-only hook on d3d11 `Map` counted
+  13 million 3840-byte constant-buffer maps in one frame. The converter had shared one
+  `BSLightingShaderProperty` between shapes with the same material. A shader property holds its
+  shape's render passes, so shapes that shared one looped forever. Every shape now has its own
+  shader property, texture set and alpha property.
+- Texture names that differed only in case (`pants_c` / `Pants_c`) were one file on Windows, so
+  his gloves and pants showed the wrong textures (the owner saw it). Each image's name now starts
+  with its index.
+
+### Tests load a save, and replay each jump's frames
+- Starting a new game from the main menu asks AE's survival-mode question, which stopped the
+  tests. They now load the most recent save, then run the `coc`. `LoadMostRecentSaveGame` finds
+  nothing until `PopulateSaveList` has run.
+- Each jump records its frames (time step, button, stick), and a fresh sim replays exactly those
+  frames on a flat floor. Against the replay every hold lands within 0.008 m (full hold 2.325 m
+  in both). The old comparison, against a fixed 1/240 s run, was up to 0.03 m off on short holds,
+  and all of that was frame timing.
+- Runs show a small window in the corner behind the owner's windows (`-Fullscreen` for Skyrim's
+  own). Screenshots (idle, each jump's top, the end) go to `target/skse/shots/<run>/`, read back
+  without waiting on the GPU. A hang is caught by the runner: main-thread stack through cdb, then
+  kill.
+
+## 2026-10-08: air control
+
+### What changed
+- **The stick goes to the sim, turned by the camera** (Rift Apart's controls are
+  camera-relative). The move input from `PlayerControls` is turned by the camera's flat forward
+  and right into the world, and the camera's forward goes in as the sim's view.
+- **In the air the whole velocity is the sim's**, across as well as up. Skyrim's in-air state
+  pulls the speed across the ground toward its own locomotion (the controller's `acrobatics`, 1
+  in vanilla); that's 0 while the jump is the sim's, like `gravity`.
+- **On the ground Skyrim still moves him**, and the sim starts from his real speed across the
+  ground, so a running jump keeps it. Not up and down: standing, Skyrim's vertical speed can sit
+  a hair above zero. The sim lands only when it isn't rising, so after a teleport it stayed in
+  its fall and refused every jump.
+- **Ground distance:** a ray down from his feet (a Havok pick on the character-controller layer,
+  in his own collision group). The sim's double jump, glide and falls ask for it.
+- His model faces the sim's facing.
+
+### Tests
+- Two new cases: a standing jump steered forward (stick forward from the takeoff) and a running
+  jump (0.8 s run-up).
+- Before each case he's moved back to the start, facing the heading with the most room. 16
+  headings are checked for a wall at chest height, a ceiling under 4.3 m, and a low wall, step or
+  drop on the way.
+- qasmoke's open floor is about 7 m long, and the running jump hit its ceiling there. Whiterun
+  has room (`-Start "coc Whiterun"`, now the default) but isn't flat, so the replay comes down
+  onto a floor at the height the game landed him at.
+- **6/6 pass in Whiterun:**
+
+  | case | apex, m (replay) | across, m (replay) | landed, m | air time, s (replay) |
+  |---|---|---|---|---|
+  | tap | 1.558 (1.550) | 0 | +0.008 | 0.555 (0.546) |
+  | 0.1 s hold | 1.884 (1.884) | 0 | +0.008 | 0.613 (0.603) |
+  | 0.15 s hold | 2.109 (2.109) | 0 | +0.008 | 0.663 (0.653) |
+  | full hold | 2.325 (2.325) | 0 | -0.025 | 0.715 (0.705) |
+  | standing, steered forward | 2.325 (2.325) | 6.73 (6.62) | -0.497 | 0.741 (0.731) |
+  | running | 2.325 (2.325) | 7.09 (6.98) | -0.949 | 0.767 (0.758) |
+
+- The game lands every jump one frame after the replay (0.01 s). At the moving jumps' speed
+  that frame is the extra 0.11 m. The apex also comes a frame late.
+
+### Choices
+- Presses in the air are still masked: no double jump or glide yet.
