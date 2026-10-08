@@ -82,6 +82,12 @@ enum Recovery {
     WalkOff,
 }
 
+/// A ledge a host gave that can be used: its ends somewhere, its normal of unit length (a zero
+/// one is a host's mistake).
+fn usable(ledge: &Ledge) -> bool {
+    ledge.a.is_finite() && ledge.b.is_finite() && (ledge.normal.length_squared() - 1.0).abs() < 0.01
+}
+
 fn facing_from(normal: Vec2) -> f32 {
     (-normal.x).atan2(-normal.y)
 }
@@ -152,7 +158,7 @@ impl Ratchet {
         let check_facing = ground_distance.is_none_or(|d| d > FROM_AIR_FACING_SKIP * s);
         let mut best: Option<(f32, Hold)> = None;
         for ledge in ledges {
-            if !ledge.flags.grab || self.left_ledge == Some(ledge.id) {
+            if !ledge.flags.grab || self.left_ledge == Some(ledge.id) || !usable(&ledge) {
                 continue;
             }
             let along = ledge.b - ledge.a;
@@ -383,7 +389,7 @@ impl Ratchet {
         let mut best: Option<(f32, f32, Hold)> = None;
         for ledge in ledges {
             // The candidate must take grabs, and face him (RiftApart.exe).
-            if ledge.id == current.id || !ledge.flags.grab || ledge.normal.dot(-hold.normal) >= IN_FRONT {
+            if ledge.id == current.id || !ledge.flags.grab || !usable(&ledge) || ledge.normal.dot(-hold.normal) >= IN_FRONT {
                 continue;
             }
             let (point, _) = ledge.closest(hold.point);

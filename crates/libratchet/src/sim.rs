@@ -1247,9 +1247,19 @@ impl Ratchet {
         self.events.push(Event::WallJumped);
     }
 
-    /// How fast his current jump pulls him down (m/s²), for the host's `Contact::landing_ahead`.
+    /// How fast he's pulled down right now (m/s²), e.g. for the host's `Contact::landing_ahead`:
+    /// his jump's pull in a jump or the Hyper-Strike's hop, the slam's on the way down, the
+    /// fall's, the glide's or the swing's in those, and none on the ground or holding on.
     pub fn gravity(&self) -> f32 {
-        self.jump_gravity
+        match self.state {
+            MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump | MoveState::LedgeJump | MoveState::SwingJump => self.jump_gravity,
+            MoveState::Smash if self.smash_descending => self.tuning.melee.smash_gravity,
+            MoveState::Smash => self.jump_gravity,
+            MoveState::Fall => self.tuning.fall.gravity(),
+            MoveState::Glide => self.tuning.glide.gravity(),
+            MoveState::Swing => self.tuning.swingshot.gravity,
+            _ => 0.0,
+        }
     }
 
     /// The wall he's stuck to, or last jumped off: the way it faces (out of it, x/z).

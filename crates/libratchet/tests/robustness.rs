@@ -51,6 +51,8 @@ impl World for Course {
             id: 1,
             flags: LedgeFlags { grab: true, jump: true, drop: true, transfer: true },
         });
+        // A host's mistake: a ledge with no normal.
+        out.push(Ledge { a: Vec3::new(-3.0, 2.0, -3.0), b: Vec3::new(-3.0, 2.0, 3.0), normal: Vec2::ZERO, id: 2, flags: LedgeFlags::default() });
     }
 
     fn raycast(&self, from: Vec3, to: Vec3) -> Option<RayHit> {
@@ -95,6 +97,9 @@ impl World for Course {
         // One right above the block's ledge, and one he can stand under.
         out.push(target(Vec3::new(1.0, 9.0, 0.0), SwingKind::Swing, 3.0, 3));
         out.push(target(Vec3::new(-4.0, 3.0, -6.0), SwingKind::Swing, 4.0, 4));
+        // A host's mistakes: a swing with no cable, and one nowhere.
+        out.push(target(Vec3::new(3.0, 7.0, -4.0), SwingKind::Swing, 0.0, 5));
+        out.push(target(Vec3::new(f32::NAN, 7.0, 4.0), SwingKind::Swing, 5.0, 6));
     }
 }
 

@@ -43,7 +43,8 @@ typedef struct RatchetContact {
     uint8_t has_ground_distance;
     float ground_distance; /* feet to ground, metres */
     uint8_t has_wall;      /* the last move ran into a wall */
-    uint8_t wall_sticky;   /* that wall takes wall jumps */
+    uint8_t wall_sticky;   /* a wall-jump wall (marked in the level): any number of wall jumps;
+                              plain walls take one per jump */
     float wall_normal_x;   /* out of the wall, on the ground plane */
     float wall_normal_z;
     uint8_t wall_jump_zone; /* inside a level's wall-jump zone: wall jumps keep their line there */
@@ -62,7 +63,7 @@ enum {
     RATCHET_STATE_MELEE = 7,      /* a combo swing; see melee_swing */
     RATCHET_STATE_SMASH = 8,      /* Hyper-Strike: hop, then slam down */
     RATCHET_STATE_SMASH_LAND = 9, /* on the ground after the slam */
-    RATCHET_STATE_WALL_STICK = 10, /* stuck to a wall-jump wall, then sliding down */
+    RATCHET_STATE_WALL_STICK = 10, /* stuck to a wall, then sliding down */
     RATCHET_STATE_WALL_JUMP = 11,  /* the jump off it */
     RATCHET_STATE_LEDGE_HANG = 12,  /* hanging from a ledge, or moving onto one */
     RATCHET_STATE_LEDGE_CLIMB = 13, /* climbing up a caught ledge */
@@ -86,7 +87,7 @@ enum {
     RATCHET_EVENT_MELEE_HIT = 1u << 9,     /* the swing connects now: check for hits */
     RATCHET_EVENT_SMASH_STARTED = 1u << 10,
     RATCHET_EVENT_SMASH_IMPACT = 1u << 11, /* the slam hit the ground: see ratchet_smash_info */
-    RATCHET_EVENT_WALL_STUCK = 1u << 12,   /* stuck to a wall that takes wall jumps */
+    RATCHET_EVENT_WALL_STUCK = 1u << 12,   /* stuck to a wall */
     RATCHET_EVENT_WALL_JUMPED = 1u << 13,  /* jumped off it */
     RATCHET_EVENT_LEDGE_GRABBED = 1u << 14, /* grabbed a ledge (result.ledge_caught: one found on the way down) */
     RATCHET_EVENT_LEDGE_CLIMBED = 1u << 15,
@@ -107,12 +108,23 @@ typedef struct RatchetStepResult {
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
-    float gravity;           /* his current jump's pull down, m/s^2, for RatchetContact.landing_ahead */
+    float gravity;           /* how fast he's pulled down now, m/s^2, e.g. for RatchetContact.landing_ahead */
     uint8_t ledge_caught;    /* with RATCHET_EVENT_LEDGE_GRABBED: 1 caught on the way down, 0 placed */
     uint8_t swing_hook;      /* with RATCHET_EVENT_SWING_ATTACHED: 1 if it was a Hookshot target */
     uint8_t has_swing_target; /* swing_target is set: the target he'd fire at now, or the one he's on
                                  (states 16 and 17), for a reticle and the cable */
     RatchetVec3 swing_target;
+    uint8_t ledge_move;      /* the move onto a ledge (state 12): 0 none (hanging), 1 grabbing a placed
+                                ledge, 2 onto a caught one, 3 up to another ledge, 4 down to one */
+    uint8_t has_ledge;       /* on a ledge or moving to one: the point he holds on its edge, and the
+                                way the wall below it faces (x, z) */
+    RatchetVec3 ledge_point;
+    float ledge_normal_x, ledge_normal_z;
+    uint8_t swing_phase;     /* on a target (16, 17): 0 swinging in, 1 past it (Hookshot: reeled in),
+                                2 from the first swing back */
+    float swing_axis_x, swing_axis_z; /* on a swing: its line, the way he came in; the game's camera
+                                         turns to look along it */
+    float dash_dir_x, dash_dir_z;     /* the dash's direction in states 5 and 6 (after them, the last) */
 } RatchetStepResult;
 
 /* A placed ledge (the game's ledge paths): a straight stretch of edge he can hang from. */
@@ -136,11 +148,14 @@ typedef struct RatchetSwingTarget {
 /* The host's level, as the sim asks about it. Any callback may be null. */
 typedef struct RatchetWorld {
     void *user;
-    /* Write up to max placed ledges near center (within radius) to out; return how many. */
+    /* Write up to max (32) placed ledges with any part within radius of center to out, nearest
+       first; return how many. */
     uint32_t (*ledges)(void *user, RatchetVec3 center, float radius, RatchetLedge *out, uint32_t max);
     /* The first surface the ray from..to hits: return 1 and fill point and normal, or 0. */
+    /* Null means no ledges to catch, and the Swingshot sees every target. */
     uint8_t (*raycast)(void *user, RatchetVec3 from, RatchetVec3 to, RatchetVec3 *point, RatchetVec3 *normal);
-    /* Write up to max Swingshot targets near center (within radius) to out; return how many. */
+    /* Write up to max (32) Swingshot targets within radius of center to out, nearest first; return
+       how many. Ids must be unique per target. */
     uint32_t (*swing_targets)(void *user, RatchetVec3 center, float radius, RatchetSwingTarget *out, uint32_t max);
 } RatchetWorld;
 
@@ -156,7 +171,7 @@ typedef struct RatchetSwingInfo {
 typedef struct RatchetWrench RatchetWrench;
 
 /* Generic default tuning, scaled (1 = Ratchet-sized). Free with ratchet_free. */
-RatchetSim *ratchet_new(float scale);
+RatchetSim *ratchet_new(float scale); /* scale <= 0 or not a number: 1 */
 void ratchet_free(RatchetSim *sim);
 
 /* Load extracted Rift Apart config JSON from dir (UTF-8). 0 = ok; on error the old tuning stays. */

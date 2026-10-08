@@ -102,6 +102,10 @@ impl Ratchet {
         // The best one qualifying now; the score has to beat zero.
         let mut best = (0.0, None);
         for t in targets {
+            // A host's mistakes: a target nowhere, or a swing without a cable to swing on.
+            if !t.position.is_finite() || (t.kind == SwingKind::Swing && !(t.length > 0.0)) {
+                continue;
+            }
             let known = self.swing_seen.iter().position(|(k, _)| k.id == t.id && k.kind == t.kind);
             if world.raycast(apex, t.position).is_some_and(|h| h.point.distance(t.position) > SIGHT_SLACK * s) {
                 // Out of sight: dropped at once, grace or not.

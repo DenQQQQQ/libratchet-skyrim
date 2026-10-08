@@ -110,6 +110,25 @@ fixing.
   - **Facing:** a Hookshot cable straight up no longer snaps his facing to 0.
   - **The grace list** matches targets by the host's id. Targets need unique ids.
 
+### Fixed: the C API and what hosts get wrong
+- **New result fields** for the Skyrim plugin to pick clips and point the camera, as the
+  sandbox does: the ledge move he's in, the ledge he holds (point and facing), the swing's
+  phase and line, and the dash's direction.
+- **`gravity`** gave the last jump's pull even in falls and glides; it now gives the pull of
+  the state he's in, and none on the ground.
+- **Host mistakes** are skipped by the sim itself, for Rust hosts too:
+  - ledges without a unit normal;
+  - Swingshot targets at a non-finite position, and swing targets with no cable length (he
+    was pinned to them).
+- **A scale** of zero, below zero or not a number means Ratchet-sized.
+- **The header's docs:**
+  - walls and the wall stick predated plain walls;
+  - the level callbacks: any part within the radius, 32 at most, nearest first;
+  - target ids are unique per target;
+  - a null `raycast` also means the Swingshot sees every target.
+- **Checked:** the C++ smoke test builds and passes with the new header. The fuzz test's world
+  now includes those host mistakes.
+
 ### Tests
 - **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
   out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.

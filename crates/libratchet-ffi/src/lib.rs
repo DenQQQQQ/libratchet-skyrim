@@ -6,7 +6,8 @@
 
 use libratchet::glam::{Vec2, Vec3};
 use libratchet::{
-    Contact, Event, Input, Ledge, LedgeFlags, MoveState, RayHit, Ratchet, SwingKind, SwingTarget, ThrowStatus, Tuning, WallContact, World, WrenchThrow,
+    Contact, Event, Input, Ledge, LedgeFlags, LedgeMove, MoveState, RayHit, Ratchet, SwingKind, SwingTarget, ThrowStatus, Tuning, WallContact, World,
+    WrenchThrow,
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::path::Path;
@@ -61,8 +62,9 @@ pub struct RatchetContact {
     /// 1 if `ground_distance` is valid.
     pub has_ground_distance: u8,
     pub ground_distance: f32,
-    /// 1 if the last move ran into a wall; its normal (out of the wall, x/z) and whether it
-    /// takes wall jumps.
+    /// 1 if the last move ran into a wall; its normal (out of the wall, x/z), and whether it's
+    /// a wall-jump wall (marked in the level: any number of wall jumps; plain walls take one per
+    /// jump).
     pub has_wall: u8,
     pub wall_sticky: u8,
     pub wall_normal_x: f32,
@@ -147,15 +149,20 @@ pub struct RatchetSwingTarget {
 #[derive(Clone, Copy)]
 pub struct RatchetWorld {
     pub user: *mut c_void,
-    /// Writes up to `max` placed ledges near `center` (within `radius`) to `out`; returns how
-    /// many. May be null (no placed ledges).
+    /// Writes up to `max` (32) placed ledges with any part within `radius` of `center` to `out`,
+    /// nearest first; returns how many. May be null (no placed ledges).
     pub ledges: Option<unsafe extern "C" fn(user: *mut c_void, center: RatchetVec3, radius: f32, out: *mut RatchetLedge, max: u32) -> u32>,
     /// The first surface the ray from `from` to `to` hits: returns 1 and fills `point` and
-    /// `normal`, or 0. May be null (no ledges to catch).
+    /// `normal`, or 0. May be null (no ledges to catch, and the Swingshot sees every target).
     pub raycast: Option<unsafe extern "C" fn(user: *mut c_void, from: RatchetVec3, to: RatchetVec3, point: *mut RatchetVec3, normal: *mut RatchetVec3) -> u8>,
-    /// Writes up to `max` Swingshot targets near `center` (within `radius`) to `out`; returns
-    /// how many. May be null (no Swingshot targets).
+    /// Writes up to `max` (32) Swingshot targets within `radius` of `center` to `out`, nearest
+    /// first; returns how many. May be null (no Swingshot targets).
     pub swing_targets: Option<unsafe extern "C" fn(user: *mut c_void, center: RatchetVec3, radius: f32, out: *mut RatchetSwingTarget, max: u32) -> u32>,
+}
+
+/// A size multiplier to use: zero, negative or not a number means Ratchet-sized.
+fn sane_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
 }
 
 fn v3(v: RatchetVec3) -> Vec3 {
@@ -225,7 +232,7 @@ pub struct RatchetStepResult {
     pub melee_swing: u32,
     /// On a wall or in a wall jump: 1 if the game's right wall clips fit, 0 for the left.
     pub wall_right: u8,
-    /// His current jump's pull down (m/s²), for `RatchetContact::landing_ahead`.
+    /// How fast he's pulled down right now (m/s²), e.g. for `RatchetContact::landing_ahead`.
     pub gravity: f32,
     /// With RATCHET_EVENT_LEDGE_GRABBED: 1 if the ledge was caught on the way down, 0 if placed.
     pub ledge_caught: u8,
@@ -235,6 +242,24 @@ pub struct RatchetStepResult {
     /// states 16 and 17 (for the host's reticle and cable).
     pub has_swing_target: u8,
     pub swing_target: RatchetVec3,
+    /// The clip-driven move onto a ledge he's in (state 12): 0 none (hanging), 1 grabbing a
+    /// placed ledge, 2 onto a ledge he caught, 3 up to another ledge, 4 down to one.
+    pub ledge_move: u8,
+    /// 1 if he's on a ledge or moving to one: the point on its edge he holds, and the way the
+    /// wall below it faces (x, z).
+    pub has_ledge: u8,
+    pub ledge_point: RatchetVec3,
+    pub ledge_normal_x: f32,
+    pub ledge_normal_z: f32,
+    /// On a Swingshot target (states 16, 17): the swing's phase (0 swinging in, 1 past the
+    /// target or, on a Hookshot target, reeled in, 2 from the first swing back), and on a swing
+    /// its line (x, z, the way he came in), which the game's camera turns to look along.
+    pub swing_phase: u8,
+    pub swing_axis_x: f32,
+    pub swing_axis_z: f32,
+    /// The dash's direction (x, z) in states 5 and 6 (and after them, the last one's).
+    pub dash_dir_x: f32,
+    pub dash_dir_z: f32,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -287,6 +312,7 @@ fn state_code(s: MoveState) -> u32 {
 /// Creates a sim with generic default tuning, scaled by `scale` (1 = Ratchet-sized).
 #[unsafe(no_mangle)]
 pub extern "C" fn ratchet_new(scale: f32) -> *mut RatchetSim {
+    let scale = sane_scale(scale);
     let base = Tuning::default();
     Box::into_raw(Box::new(RatchetSim { sim: Ratchet::new(base.scaled(scale)), base, world: None }))
 }
@@ -309,6 +335,7 @@ pub unsafe extern "C" fn ratchet_free(sim: *mut RatchetSim) {
 /// `sim` must be valid; `dir` must be a null-terminated string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ratchet_load_configs(sim: *mut RatchetSim, dir: *const c_char, scale: f32) -> i32 {
+    let scale = sane_scale(scale);
     let (Some(sim), false) = (unsafe { sim.as_mut() }, dir.is_null()) else { return -1 };
     let Ok(dir) = unsafe { CStr::from_ptr(dir) }.to_str() else { return -2 };
     match Tuning::from_riftapart_configs(Path::new(dir)) {
@@ -327,6 +354,7 @@ pub unsafe extern "C" fn ratchet_load_configs(sim: *mut RatchetSim, dir: *const 
 /// `sim` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ratchet_set_scale(sim: *mut RatchetSim, scale: f32) {
+    let scale = sane_scale(scale);
     if let Some(sim) = unsafe { sim.as_mut() } {
         let t = sim.base.scaled(scale);
         sim.sim.set_tuning(t);
@@ -422,6 +450,9 @@ pub unsafe extern "C" fn ratchet_step(
         };
     }
     let swing_target = sim.sim.swinging_on().map(|(t, _)| t).or(sim.sim.swing_target());
+    let ledge = sim.sim.ledge();
+    let swing_axis = sim.sim.swing_axis().unwrap_or(Vec3::ZERO);
+    let dash_dir = sim.sim.dash_dir();
     RatchetStepResult {
         velocity: RatchetVec3 { x: v.x, y: v.y, z: v.z },
         state: state_code(sim.sim.state()),
@@ -435,6 +466,22 @@ pub unsafe extern "C" fn ratchet_step(
         swing_hook,
         has_swing_target: swing_target.is_some() as u8,
         swing_target: rv3(swing_target.unwrap_or_default()),
+        ledge_move: match sim.sim.ledge_move() {
+            None => 0,
+            Some(LedgeMove::Grab) => 1,
+            Some(LedgeMove::FromFall) => 2,
+            Some(LedgeMove::UpTo) => 3,
+            Some(LedgeMove::DownTo) => 4,
+        },
+        has_ledge: ledge.is_some() as u8,
+        ledge_point: rv3(ledge.map_or(Vec3::ZERO, |l| l.0)),
+        ledge_normal_x: ledge.map_or(0.0, |l| l.1.x),
+        ledge_normal_z: ledge.map_or(0.0, |l| l.1.y),
+        swing_phase: sim.sim.swing_phase().unwrap_or(0),
+        swing_axis_x: swing_axis.x,
+        swing_axis_z: swing_axis.z,
+        dash_dir_x: dash_dir.x,
+        dash_dir_z: dash_dir.y,
     }
 }
 
@@ -675,12 +722,14 @@ mod tests {
         let face = RatchetInput { move_x: 1.0, ..Default::default() };
         let mut seen = 0;
         let mut state = 0;
+        let mut last = RatchetStepResult::default();
         for i in 0..240 {
             let contact = RatchetContact { grounded: (i == 0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
             let input = if i < 2 { face } else { RatchetInput::default() };
             let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
             seen |= r.events;
             state = r.state;
+            last = r;
             if i > 0 {
                 pos.y += r.velocity.y / 120.0;
             }
@@ -688,6 +737,7 @@ mod tests {
         unsafe { ratchet_free(sim) };
         assert!(seen & RATCHET_EVENT_LEDGE_GRABBED != 0, "no grab");
         assert_eq!(state, 12);
+        assert!(last.has_ledge != 0 && (last.ledge_point.y - 5.0).abs() < 0.01 && last.ledge_normal_x < -0.99, "ledge {:?}", last.ledge_point);
         assert!((pos.y - (5.0 - Tuning::default().ledge.hang_down)).abs() < 0.05, "hangs at {}", pos.y);
     }
 
@@ -708,7 +758,7 @@ mod tests {
         // The camera behind him, looking ahead (+Z) and a little up.
         let view = Vec3::new(0.0, 0.3, 1.0).normalize();
         let mut pos = RatchetVec3::default();
-        let (mut seen, mut state, mut target) = (0, 0, None);
+        let (mut seen, mut state, mut target, mut last) = (0, 0, None, RatchetStepResult::default());
         for i in 0..120 {
             let contact = RatchetContact { grounded: (pos.y <= 0.0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
             let input = RatchetInput {
@@ -722,6 +772,7 @@ mod tests {
             let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
             seen |= r.events;
             state = r.state;
+            last = r;
             if r.has_swing_target != 0 {
                 target = Some(r.swing_target);
             }
@@ -731,6 +782,7 @@ mod tests {
         unsafe { ratchet_free(sim) };
         assert!(seen & RATCHET_EVENT_SWING_ATTACHED != 0, "never fired");
         assert_eq!(state, 16);
+        assert!((last.swing_axis_z - 1.0).abs() < 1e-4 && last.swing_axis_x.abs() < 1e-4, "swing line ({}, {})", last.swing_axis_x, last.swing_axis_z);
         assert_eq!(target, Some(RatchetVec3 { x: 0.0, y: 7.0, z: 4.0 }));
     }
 
@@ -741,6 +793,13 @@ mod tests {
             let r = ratchet_step(std::ptr::null_mut(), 0.01, RatchetInput::default(), RatchetContact::default(), RatchetVec3::default());
             assert_eq!(r.state, 0);
             assert_eq!(ratchet_load_configs(std::ptr::null_mut(), std::ptr::null(), 1.0), -1);
+            // A scale that makes no sense is Ratchet-sized.
+            for scale in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+                let sim = ratchet_new(scale);
+                let r = ratchet_step(sim, 0.01, RatchetInput { jump: 1, ..Default::default() }, RatchetContact { grounded: 1, has_ground_distance: 1, ..Default::default() }, RatchetVec3::default());
+                assert!(r.velocity.y.is_finite() && r.velocity.y > 1.0, "scale {scale}: jumped at {}", r.velocity.y);
+                ratchet_free(sim);
+            }
         }
     }
 }
