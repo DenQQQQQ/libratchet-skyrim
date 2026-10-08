@@ -20,6 +20,9 @@ pub struct Shot {
     pub velocity: Vec3,
 }
 
+/// The gun counts as ready this close to the end of its wait (float rounding).
+const READY: f32 = 1e-5;
+
 #[derive(Clone, Debug)]
 pub struct Weapon {
     params: WeaponParams,
@@ -29,7 +32,6 @@ pub struct Weapon {
     /// Current spread cone half-angle (degrees) and shots fired in a row.
     spread: f32,
     streak: u32,
-    since_shot: f32,
     prev_trigger: bool,
     rng: u32,
 }
@@ -38,7 +40,7 @@ impl Weapon {
     pub fn new(params: WeaponParams) -> Self {
         let ammo = params.ammo;
         let spread = params.spread.initial;
-        Weapon { params, ammo, cooldown: 0.0, spread, streak: 0, since_shot: f32::MAX, prev_trigger: false, rng: 0x9E37_79B9 }
+        Weapon { params, ammo, cooldown: 0.0, spread, streak: 0, prev_trigger: false, rng: 0x9E37_79B9 }
     }
 
     pub fn params(&self) -> &WeaponParams {
@@ -59,9 +61,10 @@ impl Weapon {
         self.ammo = self.params.ammo;
     }
 
-    /// A cooked shot is winding up: the trigger is held and there's ammo for it.
+    /// A cooked shot is winding up: the trigger is held, there's ammo for it and the last one's
+    /// wait is over (letting go before then throws nothing).
     pub fn cooking(&self) -> bool {
-        self.params.trigger == Trigger::Cooked && self.prev_trigger && self.ammo >= self.params.ammo_cost
+        self.params.trigger == Trigger::Cooked && self.prev_trigger && self.ammo >= self.params.ammo_cost && self.cooldown <= READY
     }
 
     /// Current spread cone half-angle, degrees.
@@ -74,8 +77,8 @@ impl Weapon {
         let pressed = trigger && !self.prev_trigger;
         let released = !trigger && self.prev_trigger;
         self.prev_trigger = trigger;
-        self.cooldown = (self.cooldown - dt).max(0.0);
-        self.since_shot += dt;
+        let was_ready = self.cooldown <= READY;
+        self.cooldown -= dt;
         let spread = self.spread_params(aim.aimed).clone();
         // Letting go ends the streak and narrows the cone back.
         if !trigger {
@@ -88,13 +91,17 @@ impl Weapon {
             Trigger::Single => pressed,
             Trigger::Cooked => released,
         };
-        if !wants || self.cooldown > 0.0 || self.ammo < self.params.ammo_cost {
+        if !wants || self.cooldown > READY || self.ammo < self.params.ammo_cost {
+            // Ready and not firing, the wait doesn't bank up into a burst later.
+            self.cooldown = self.cooldown.max(0.0);
             return vec![];
         }
         self.ammo -= self.params.ammo_cost;
         let rate = if aim.aimed { self.params.rate } else { self.params.rapid_rate };
-        self.cooldown = 1.0 / rate.max(0.01);
-        self.since_shot = 0.0;
+        // A shot that came due part-way through the tick passes the rest of the tick on to the
+        // next wait, so the rate of fire doesn't depend on the tick rate; one fired from ready
+        // starts its wait now.
+        self.cooldown = if was_ready { 0.0 } else { self.cooldown } + 1.0 / rate.max(0.01);
         self.streak += 1;
         if self.streak > spread.free_shots {
             self.spread = (self.spread + spread.per_shot).min(spread.max.max(spread.initial));

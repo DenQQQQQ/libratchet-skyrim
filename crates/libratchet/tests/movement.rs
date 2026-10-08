@@ -754,8 +754,11 @@ fn a_jump_out_of_a_dash_keeps_its_speed_for_one_tick_only() {
     assert_eq!(h.r.state(), MoveState::Jump);
     h.tick(false, fwd);
     assert!(close(h.r.velocity().z, dash_speed, 0.5), "first tick {} (dash {dash_speed})", h.r.velocity().z);
+    // Then the jump's momentum blend: a 60 fps frame (two ticks here) later he's about at the
+    // jump's speed.
     h.tick(false, fwd);
-    assert!(h.r.velocity().z < t.air_speeds.run_max + 0.5, "second tick {}", h.r.velocity().z);
+    h.tick(false, fwd);
+    assert!(h.r.velocity().z < t.air_speeds.run_max + 1.0, "a frame later {}", h.r.velocity().z);
     while h.r.state() != MoveState::Ground {
         h.tick(false, fwd);
     }
@@ -1215,4 +1218,17 @@ fn a_jump_pressed_as_the_hyper_strike_landing_lets_go_is_not_lost() {
         jumped |= h.r.state() == MoveState::Jump;
     }
     assert!(jumped, "the press on the tick the landing ended was lost");
+}
+
+#[test]
+fn the_jump_momentum_blend_does_not_depend_on_the_tick_rate() {
+    // Kept over a 30 Hz tick = kept over four 120 Hz ticks, for every jump kind.
+    let t = Tuning::default();
+    for (name, p) in [("single", &t.single_jump), ("double", &t.double_jump), ("fall", &t.fall), ("wall", &t.wall_jump)] {
+        for at in [0.0, 0.2, 0.6] {
+            let one = p.momentum_keep(at, 1.0 / 30.0);
+            let four = p.momentum_keep(at, 1.0 / 120.0).powi(4);
+            assert!(close(one, four, 1e-4), "{name} jump at {at} s: {one} vs {four}");
+        }
+    }
 }

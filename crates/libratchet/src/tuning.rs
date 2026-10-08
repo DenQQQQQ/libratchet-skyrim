@@ -14,6 +14,10 @@ use std::path::Path;
 
 /// One jump "kind" (single, double, fall, glide...), mirroring how Rift Apart's
 /// `HeroTraversalConfig.JumpConfigs` entries are shaped.
+/// The frame the game's per-frame rules are taken at, as at 60 fps (ours: the game itself
+/// runs them every frame, whatever its rate).
+pub(crate) const GAME_FRAME: f32 = 1.0 / 60.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct JumpParams {
     /// Apex height for a tap, in metres above the take-off point.
@@ -112,9 +116,13 @@ impl JumpParams {
     }
 
     /// The share of the old horizontal speed a jump keeps over a tick of `dt`, `t` seconds after
-    /// take-off (RiftApart.exe): the momentum weight raised to half the tick over the time to
+    /// take-off (RiftApart.exe): the momentum weight raised to half a frame over the time to
     /// peak, mapped back onto the weights' range. A single jump (1 to 1.2) keeps about 0.03 a
-    /// tick at 60 Hz, so the stick decides almost at once; a double jump (0 to 1.4) about 0.72.
+    /// frame, so the stick decides almost at once; a double jump (0 to 1.4) about 0.72.
+    ///
+    /// The game works this out once a frame, so its result changes with the frame rate. We take
+    /// its result for a 60 fps frame and spread it over the tick (ours), so the feel doesn't
+    /// depend on how often the host steps.
     pub fn momentum_keep(&self, t: f32, dt: f32) -> f32 {
         let (lo, hi) = (self.momentum_weight_min, self.momentum_weight_max);
         // (Over MinTime + TransitionTime, as the game divides.)
@@ -126,12 +134,14 @@ impl JumpParams {
         } else {
             self.time_to_peak
         };
-        let f = w.max(0.0).powf(0.5 * dt / if peak_time > 0.0 { peak_time } else { 1.0 });
-        if (hi - lo).abs() < 1e-6 {
+        let f = w.max(0.0).powf(0.5 * GAME_FRAME / if peak_time > 0.0 { peak_time } else { 1.0 });
+        let per_frame = if (hi - lo).abs() < 1e-6 {
             // The game divides by zero here; IEEE rules then clamp to 0 or 1.
-            return if f > lo { 1.0 } else { 0.0 };
-        }
-        ((f - lo) / (hi - lo)).clamp(0.0, 1.0)
+            if f > lo { 1.0 } else { 0.0 }
+        } else {
+            ((f - lo) / (hi - lo)).clamp(0.0, 1.0)
+        };
+        per_frame.powf(dt / GAME_FRAME)
     }
 
     /// Apex height for a button held `held` seconds.
@@ -294,6 +304,7 @@ impl SwingshotParams {
             entry_push: self.entry_push * s,
             entry_speed: self.entry_speed * s,
             pump: self.pump * s,
+            pump_follow: self.pump_follow * s,
             reel: (self.reel.0, self.reel.1, self.reel.2 * s),
             top_gain: self.top_gain * s,
             top_ease: self.top_ease * s,

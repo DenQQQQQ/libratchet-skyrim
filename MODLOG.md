@@ -63,9 +63,33 @@ fixing.
 - **The wall jump-up's height cap** followed the previous jump's aim mode; it's always
   DoubleJumpConfig's.
 
+### Fixed: tick rate and scale
+- **The jump momentum blend depended on the tick rate.**
+  - It's the game's per-frame formula, worked out once per tick. A double jump kept 38% of
+    its speed 0.1 s after the stick was let go at 30 Hz, but 1.9% at 120 Hz (the sandbox's
+    rate).
+  - We now take the formula's result for a 60 fps frame and spread it over the tick (ours).
+    The game itself runs it every frame, so its own feel changes with frame rate.
+  - In the sandbox, jumps now keep their speed a little longer before the stick takes over,
+    as the game does at 60 fps.
+- **The Hookshot's arrival depended on the tick rate.** The sag moved the measured distance off
+  the cable's length each tick, so he could hang at the end for anywhere from 0.02 s to 0.5 s.
+  He now arrives when the reel does.
+- **Scale:**
+  - The swing pump's follow rate didn't scale, so at Dragonborn size the pump built 1.55×
+    slower.
+  - The air dash's ledge-catch window (0.5–1 m above him) didn't scale either.
+- **libarsenal:**
+  - The rate of fire lost the rest of each tick: 6/s fired 5/s at 30 Hz and 5.5/s at 60 Hz.
+    A shot due part-way through a tick now passes the rest of the tick on to the next wait.
+  - A cooked throw no longer shows its wind-up while the last throw's wait is still on,
+    since letting go then threw nothing.
+
 ### Tests
 - **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
   out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.
+- **Four more tests** cover the momentum blend, the Hookshot's arrival and the rate of fire,
+  each across tick rates, and no wind-up during a cooked shot's wait.
 
 ## 2026-10-08 (afternoon): a tick that takes no time; a fuzz test
 

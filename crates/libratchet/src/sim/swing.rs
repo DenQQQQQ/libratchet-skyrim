@@ -37,7 +37,8 @@ const PUMP_RATE: f32 = 60.0 / 30.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Swing {
     pub target: SwingTarget,
-    /// 0 swinging in, 1 past the target, 2 from the first swing back on.
+    /// 0 swinging in, 1 past the target, 2 from the first swing back on. On a Hookshot target:
+    /// 1 once the reel is in.
     pub phase: u8,
     /// The cable's length and how fast it's reeling.
     pub length: f32,
@@ -285,7 +286,7 @@ impl Ratchet {
 
     /// One tick of the Hookshot: reeled along the cable to the target's length (its hand ahead
     /// of him on the cable), speeding up and slowing to stop there; sideways speed drags off and
-    /// sags. Arrived, or with the button let go, he drops.
+    /// sags. Arrived (the tick after the reel gets there), or with the button let go, he drops.
     pub(crate) fn hook_tick(&mut self, dt: f32, input: &Input, position: Vec3) {
         let Some(mut sw) = self.swingshot else {
             self.enter_fall();
@@ -296,7 +297,9 @@ impl Ratchet {
         let dir = (t - position).normalize_or_zero();
         let d = (t - (position + dir * p.hook_hand)).length();
         let goal = if sw.target.length > 0.0 { sw.target.length } else { p.hook_length };
-        let arrived = d - goal <= 1e-3;
+        // Arrival goes by the reel rather than the measured distance, which the sag moves off
+        // the length again each tick by an amount that depends on the tick rate.
+        let arrived = sw.phase == 1;
         if !input.swingshot || arrived {
             self.swingshot = None;
             if arrived {
@@ -314,6 +317,9 @@ impl Ratchet {
         let speed = (speed + p.hook_accel * dt).min(p.hook_max_speed).min(brake);
         let new_d = if speed * dt >= left { goal } else { d - speed * dt };
         sw.reel_rate = -speed;
+        if new_d <= goal {
+            sw.phase = 1;
+        }
         // Across it: drag, and the pull down across the cable.
         let mut side = self.velocity - dir * self.velocity.dot(dir);
         let drag = (p.hook_drag * side.length_squared() * dt).min(side.length());

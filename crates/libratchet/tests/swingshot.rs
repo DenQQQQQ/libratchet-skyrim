@@ -227,3 +227,33 @@ fn letting_go_of_the_hookshot_mid_reel_keeps_his_upward_speed() {
     assert_eq!(s.r.state(), MoveState::Fall);
     assert!(s.r.velocity().y > rising * 0.8, "dropped to {} m/s on letting go", s.r.velocity().y);
 }
+
+#[test]
+fn the_hookshot_arrives_at_the_same_time_at_any_tick_rate() {
+    let hook = Vec3::new(0.0, 6.0, 9.0);
+    let arrival = |hz: f32| {
+        let dt = 1.0 / hz;
+        let world = Targets(vec![target(hook, SwingKind::Hook, 0.0)], None);
+        let mut r = Ratchet::new(Tuning::default());
+        let (mut pos, mut contact, mut time) = (Vec3::ZERO, Contact::default(), 0.0);
+        let view = Vec3::new(0.0, 0.3, 1.0).normalize();
+        for tick in 0..(4.0 * hz) as usize {
+            let input = Input { swingshot: tick > 0, view_forward: view, view_right: Vec2::new(-1.0, 0.0), ..Default::default() };
+            let v = r.step_in(dt, &input, &contact, pos, &world);
+            if r.events().contains(&Event::HookArrived) {
+                return time;
+            }
+            pos += v * dt;
+            time += dt;
+            let grounded = pos.y <= 0.0;
+            if grounded {
+                pos.y = 0.0;
+            }
+            contact = Contact { grounded, ground_distance: Some(pos.y.max(0.0)), ..Contact::default() };
+        }
+        f32::INFINITY
+    };
+    let at = [30.0, 60.0, 120.0].map(arrival);
+    assert!(at.iter().all(|a| a.is_finite()), "never arrived: {at:?}");
+    assert!(at.iter().all(|a| (a - at[2]).abs() <= 2.0 / 30.0), "arrived at {at:?} s (30, 60, 120 Hz)");
+}

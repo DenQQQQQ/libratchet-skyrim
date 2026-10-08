@@ -101,7 +101,8 @@ impl Ratchet {
             return true;
         }
         let mode = if self.walk_off_time > 0.0 { Recovery::WalkOff } else { Recovery::Jump };
-        let window = if self.state == MoveState::AirDash { AIR_DASH_RECOVERY } else { (f32::NEG_INFINITY, f32::INFINITY) };
+        let s = self.tuning.scale;
+        let window = if self.state == MoveState::AirDash { (AIR_DASH_RECOVERY.0 * s, AIR_DASH_RECOVERY.1 * s) } else { (f32::NEG_INFINITY, f32::INFINITY) };
         if let Some(hold) = self.find_recovery_ledge(world, position, mode, window) {
             self.grab(hold, position, LedgeMove::FromFall);
             return true;

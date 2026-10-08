@@ -221,3 +221,32 @@ fn loads_riftapart_weapon_configs_when_present() {
     let half = sb.scaled(0.5);
     assert_eq!(half.blast_shake.as_ref().unwrap().inner, blast.inner * 0.5);
 }
+
+#[test]
+fn the_rate_of_fire_does_not_depend_on_the_tick_rate() {
+    // A shot due part-way through a tick passes the rest on to the next wait.
+    let p = WeaponParams::pistol();
+    for hz in [30.0f32, 60.0, 120.0, 144.0] {
+        let dt = 1.0 / hz;
+        let mut w = Weapon::new(p.clone());
+        let shots: usize = (0..(4.0 * hz) as usize).map(|_| w.step(dt, true, &aim(true)).len()).sum();
+        assert!(close(shots as f32, p.rate * 4.0, 1.0), "{shots} shots in 4 s at {hz} Hz (rate {})", p.rate);
+    }
+}
+
+#[test]
+fn a_cooked_shot_does_not_wind_up_until_the_last_ones_wait_is_over() {
+    let mut p = WeaponParams::grenade();
+    p.trigger = libarsenal::Trigger::Cooked;
+    let mut w = Weapon::new(p.clone());
+    let a = aim(false);
+    w.step(DT, true, &a);
+    assert_eq!(w.step(DT, false, &a).len(), 1, "the first throw");
+    w.step(DT, true, &a);
+    assert!(!w.cooking(), "winding up during the wait");
+    for _ in 0..((1.0 / p.rate / DT) as usize + 2) {
+        w.step(DT, true, &a);
+    }
+    assert!(w.cooking());
+    assert_eq!(w.step(DT, false, &a).len(), 1, "the second throw");
+}
