@@ -261,11 +261,10 @@ def convert_model(gl, out_dir, manifest):
         written[key] = "textures\\" + TEXTURE_DIR + "\\" + file
         return written[key]
 
-    material_blocks = {}
-
+    # Every shape gets its own shader, texture set and alpha blocks: a shader property holds its
+    # shape's render passes, and one shared by two shapes makes Skyrim's renderer loop forever
+    # (found in game: 13 million bone-buffer maps in one frame with both gloves drawn).
     def material(mi):
-        if mi in material_blocks:
-            return material_blocks[mi]
         m = g["materials"][mi]
         pbr = m.get("pbrMetallicRoughness", {})
         diffuse = texture(pbr["baseColorTexture"]["index"], "color") if "baseColorTexture" in pbr else ""
@@ -287,8 +286,7 @@ def convert_model(gl, out_dir, manifest):
         if masked:
             alpha = nf.add({"type": "NiAlphaProperty", "name": -1, "extra_data": [], "controller": -1,
                             "flags": 0x12EC, "threshold": int(255 * m.get("alphaCutoff", 0.4))})
-        material_blocks[mi] = (shader, alpha)
-        return material_blocks[mi]
+        return shader, alpha
 
     attrs = N.VF_VERTEX | N.VF_UV | N.VF_NORMAL | N.VF_TANGENT | N.VF_SKINNED
     desc = N.make_vertex_desc(attrs)

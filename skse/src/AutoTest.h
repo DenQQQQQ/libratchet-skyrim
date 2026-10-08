@@ -12,6 +12,8 @@ namespace AutoTest
 	// At plugin load: reads the trigger file (and deletes it).
 	void Load(const std::filesystem::path& a_pluginDir);
 	bool Active();
+	// A save has loaded (the run goes on to its test place).
+	void OnGameLoaded();
 	// After the game's data loaded: autosaves off (in memory only), and the main menu starts the test.
 	void Install();
 
@@ -25,6 +27,10 @@ namespace AutoTest
 		float hold;        // seconds the button was held (or until the jump turned down)
 		float landDz;      // landing height - takeoff height, metres
 		float airTime;
+		// The sandbox's jump for the same frames on a flat floor.
+		float sandboxApex;
+		float sandboxApexTime;
+		float sandboxAirTime;
 	};
 	void OnTakeoff();
 	// The jump turned down (a screenshot of the pose at its top).

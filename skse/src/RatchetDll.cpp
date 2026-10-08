@@ -112,10 +112,46 @@ namespace Ratchet
 		return { tap.height, tap.time, full.height, full.time, full.airTime };
 	}
 
+	Replayed ReplayFlat(const std::vector<Tick>& a_ticks)
+	{
+		static RatchetSim* sim = NewSim();
+		ratchet_reset(sim);
+		RatchetVec3 feet{ 0.0f, 0.0f, 0.0f };
+		RatchetContact contact{};
+		contact.grounded = 1;
+		contact.has_ground_distance = 1;
+		Replayed out;
+		bool airborne = false;
+		float t = 0.0f;
+		const float lastDt = a_ticks.empty() ? 1.0f / 60.0f : a_ticks.back().dt;
+		for (std::size_t i = 0; i < a_ticks.size() + 2000; ++i) {
+			const bool recorded = i < a_ticks.size();
+			const float dt = recorded ? a_ticks[i].dt : lastDt;
+			RatchetInput in{};
+			in.jump = recorded && a_ticks[i].jump ? 1 : 0;
+			const RatchetStepResult r = ratchet_step(sim, dt, in, contact, feet);
+			// The game's frame moves him by this frame's speed (the controller integrates it).
+			feet.y = std::max(0.0f, feet.y + r.velocity.y * dt);
+			t += dt;
+			if (feet.y > out.apex) {
+				out.apex = feet.y;
+				out.apexTime = t;
+			}
+			airborne = airborne || feet.y > 0.0f;
+			contact.grounded = feet.y <= 0.0f ? 1 : 0;
+			contact.ground_distance = feet.y;
+			if (airborne && contact.grounded) {
+				out.airTime = t;
+				break;
+			}
+		}
+		return out;
+	}
+
 	const JumpNumbers& Expected()
 	{
 		if (!g_expected) {
-			g_expected = MeasureFlatJump(1.0f / 60.0f);
+			g_expected = MeasureFlatJump(1.0f / 240.0f);
 		}
 		return *g_expected;
 	}

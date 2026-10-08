@@ -19,6 +19,8 @@ namespace TestWindow
 		std::filesystem::path g_folder;
 		std::mutex            g_lock;
 		std::string           g_pending;  // a shot asked for, not yet copied
+		std::uint64_t         g_frame = 0;       // frames presented
+		std::uint64_t         g_frameCalls = 0;  // watched Map calls this frame
 
 		// A copy of a finished frame on its way back from the GPU (read once it's done, never
 		// waited for: the frame goes on meanwhile).
@@ -145,6 +147,8 @@ namespace TestWindow
 
 		HRESULT STDMETHODCALLTYPE MyPresent(IDXGISwapChain* a_this, UINT a_sync, UINT a_flags)
 		{
+			++g_frame;
+			g_frameCalls = 0;
 			auto* ctx = Context();
 			if (ctx && g_readback) {
 				TryReadback(ctx);
@@ -180,6 +184,54 @@ namespace TestWindow
 			return g_present(a_this, a_sync, a_flags);
 		}
 
+		// Diagnosis of the renderer hang: every Map from the engine call site in the hung stacks
+		// (SkyrimSE+0xe4ad24, which returns from d3d11 Map) is logged before it runs, so the last
+		// line before a hang names the resource.
+		using Map_t = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE*);
+		Map_t                      g_map = nullptr;
+		std::uintptr_t             g_watchSite = 0;
+		std::atomic<std::uint64_t> g_siteCalls{ 0 };
+
+		HRESULT STDMETHODCALLTYPE MyMap(ID3D11DeviceContext* a_this, ID3D11Resource* a_res, UINT a_sub, D3D11_MAP a_type, UINT a_flags,
+			D3D11_MAPPED_SUBRESOURCE* a_out)
+		{
+			const auto ret = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+			if (ret == g_watchSite && a_res) {
+				const std::uint64_t n = ++g_siteCalls;
+				++g_frameCalls;
+				// A few lines, not a line per call: a runaway frame is millions of them.
+				if (n <= 40 || n % 2000 == 0 || (g_frameCalls > 2000 && g_frameCalls % 1000000 == 1)) {
+					D3D11_RESOURCE_DIMENSION dim{};
+					a_res->GetType(&dim);
+					std::string what = std::format("dimension {}", static_cast<int>(dim));
+					if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
+						D3D11_BUFFER_DESC d{};
+						static_cast<ID3D11Buffer*>(a_res)->GetDesc(&d);
+						what = std::format("buffer {} bytes usage {} bind {:#x} cpu {:#x}", d.ByteWidth, static_cast<int>(d.Usage), d.BindFlags, d.CPUAccessFlags);
+					}
+					SKSE::log::info("map#{} frame {} (#{} this frame): {} {:p} type {} flags {:#x}", n, g_frame, g_frameCalls, what,
+						static_cast<void*>(a_res), static_cast<int>(a_type), a_flags);
+				}
+			}
+			return g_map(a_this, a_res, a_sub, a_type, a_flags, a_out);
+		}
+
+		void HookMap(ID3D11DeviceContext* a_ctx)
+		{
+			if (g_map || !a_ctx) {
+				return;
+			}
+			g_watchSite = REL::Module::get().base() + 0xe4ad24;
+			auto** vtbl = *reinterpret_cast<void***>(a_ctx);
+			DWORD old = 0;
+			if (VirtualProtect(&vtbl[14], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+				g_map = reinterpret_cast<Map_t>(vtbl[14]);
+				vtbl[14] = reinterpret_cast<void*>(&MyMap);
+				VirtualProtect(&vtbl[14], sizeof(void*), old, &old);
+				SKSE::log::info("autotest: watching Map from SkyrimSE+0xe4ad24");
+			}
+		}
+
 		void HookPresent()
 		{
 			auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -210,7 +262,7 @@ namespace TestWindow
 		}
 	}
 
-	void OnDataLoaded(bool a_shots)
+	void OnDataLoaded(bool a_shots, bool a_watchMap)
 	{
 		if (g_corner) {
 			if (!g_haveRect) {
@@ -219,8 +271,11 @@ namespace TestWindow
 			}
 			Keep();
 		}
-		if (a_shots) {
+		if (a_shots || a_watchMap) {
 			HookPresent();
+		}
+		if (a_watchMap) {
+			HookMap(Context());
 		}
 	}
 

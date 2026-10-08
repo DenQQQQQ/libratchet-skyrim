@@ -8,8 +8,9 @@ namespace TestWindow
 {
 	// At plugin load, before Skyrim makes its window.
 	void Install(bool a_corner);
-	// Once the renderer exists: puts the window in its corner, hooks Present for screenshots.
-	void OnDataLoaded(bool a_shots);
+	// Once the renderer exists: puts the window in its corner, hooks Present for screenshots, and
+	// (a_watchMap) logs the engine's Map calls from the site the renderer hang sits in.
+	void OnDataLoaded(bool a_shots, bool a_watchMap);
 	// Each frame: keeps the window where it was put (Skyrim and display mods move it).
 	void Keep();
 	// Saves a coming finished frame as <folder>\<name>.png.

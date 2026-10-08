@@ -24,9 +24,12 @@ namespace
 			AutoTest::Install();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:
-		case SKSE::MessagingInterface::kPostLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
 			Jump::Reset();
+			break;
+		case SKSE::MessagingInterface::kPostLoadGame:
+			Jump::Reset();
+			AutoTest::OnGameLoaded();
 			break;
 		default:
 			break;

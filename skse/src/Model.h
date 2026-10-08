@@ -26,6 +26,7 @@ namespace Model
 	// Tests: hold off attaching him, and show some of his shapes only (-1 all, -2 none, else that
 	// one).
 	void SetAttachAllowed(bool a_allowed);
+	void SetCastShadows(bool a_cast);
 	void ShowShapes(int a_only);
 	std::vector<std::string> ShapeNames();
 }

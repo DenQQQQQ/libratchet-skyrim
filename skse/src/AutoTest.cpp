@@ -21,10 +21,10 @@ namespace AutoTest
 			{ "full hold", 0.5f },
 		};
 
-		// How close the game has to come to the sandbox. The hold is counted in frames (about
-		// 100 fps here, 60 in the reference), which moves the apex by up to about 0.035 m.
-		constexpr float kApexTolerance = 0.05f;      // metres
-		constexpr float kApexTimeTolerance = 0.03f;  // seconds
+		// How close the game has to come to the sandbox replaying the same frames: what differs is
+		// Skyrim moving him (its collision, a frame of lag in reading his height).
+		constexpr float kApexTolerance = 0.03f;      // metres
+		constexpr float kApexTimeTolerance = 0.025f; // seconds
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
 		constexpr float kTimeout = 90.0f;            // seconds in game for the whole run
@@ -32,13 +32,16 @@ namespace AutoTest
 		struct State
 		{
 			bool        active = false;
-			std::string start = "coc qasmoke";  // console command from the main menu, or "load"
+			std::string start = "coc qasmoke";  // where to test: "load" (the most recent save) or a coc command
+			std::string then;                   // the coc to run once the save has loaded
 			bool        flatGround = true;      // the landing must come back to the takeoff height
 			bool        quit = true;
 			float       holdEnd = 0.0f;         // seconds stood still after the last jump (for screenshots)
 			float       held = 0.0f;
 			bool        thirdPerson = false;    // the camera was put behind him
 			bool        shots = true;           // screenshots (bShots)
+			bool        watchMap = false;       // log the engine's Map calls (bWatchMap)
+			float       cameraYaw = 0.0f;       // the camera's turn round him from behind (fCameraYaw)
 
 			// bDiagnose: steps before the jumps that find what hangs the renderer, each logged
 			// as it starts (the last one logged is the one that hung).
@@ -96,6 +99,25 @@ namespace AutoTest
 			}
 		}
 
+		// The camera behind him, not right at his head: forced third person starts at the closest
+		// zoom.
+		void ThirdPerson()
+		{
+			auto* camera = RE::PlayerCamera::GetSingleton();
+			if (!camera) {
+				return;
+			}
+			camera->ForceThirdPerson();
+			auto& state = camera->GetRuntimeData().cameraStates[RE::CameraStates::kThirdPerson];
+			if (auto* tps = static_cast<RE::ThirdPersonState*>(state.get())) {
+				tps->targetZoomOffset = 0.5f;
+				tps->currentZoomOffset = 0.5f;
+				// Round in front of him at three quarters (sCameraYaw radians from behind), to see him.
+				tps->freeRotation.x = s.cameraYaw;
+				tps->freeRotationEnabled = s.cameraYaw != 0.0f;
+			}
+		}
+
 		void Phase(int a_next, std::string_view a_what)
 		{
 			s.phase = a_next;
@@ -115,9 +137,7 @@ namespace AutoTest
 			switch (s.phase) {
 			case 0:
 				if (a_grounded && s.phaseTime > 1.5f) {
-					if (camera) {
-						camera->ForceThirdPerson();
-					}
+					ThirdPerson();
 					Phase(1, "third person, no Ratchet yet");
 				}
 				return true;
@@ -150,9 +170,7 @@ namespace AutoTest
 				return true;
 			case 51:
 				if (s.phaseTime > 1.0f) {
-					if (camera) {
-						camera->ForceThirdPerson();
-					}
+					ThirdPerson();
 					Phase(52, "back to third person");
 				}
 				return true;
@@ -226,6 +244,15 @@ namespace AutoTest
 		{
 			RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
 			{
+				// A new game asks questions (AE's survival mode, other mods' setup): closed
+				// unanswered, so the test plays on.
+				if (a_event && a_event->opening && a_event->menuName == RE::MessageBoxMenu::MENU_NAME && !s.done) {
+					SKSE::log::info("autotest: closing a message box");
+					SKSE::GetTaskInterface()->AddTask([] {
+						RE::UIMessageQueue::GetSingleton()->AddMessage(RE::MessageBoxMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+					});
+					return RE::BSEventNotifyControl::kContinue;
+				}
 				if (!a_event || !a_event->opening || a_event->menuName != RE::MainMenu::MENU_NAME || started) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
@@ -234,12 +261,17 @@ namespace AutoTest
 				std::thread([] {
 					std::this_thread::sleep_for(2s);
 					SKSE::GetTaskInterface()->AddTask([] {
-						if (s.start == "load") {
-							SKSE::log::info("autotest: loading the most recent save");
-							RE::BGSSaveLoadManager::GetSingleton()->LoadMostRecentSaveGame();
-						} else {
-							SKSE::log::info("autotest: {}", s.start);
-							RunConsole(s.start);
+						// A save, not a new game: a new game (coc from the main menu) asks AE's
+						// survival-mode question, which blocks the run. Then, if asked, coc to the
+						// test place from the loaded game.
+						auto* saves = RE::BGSSaveLoadManager::GetSingleton();
+						saves->PopulateSaveList();
+						const bool loaded = saves->LoadMostRecentSaveGame();
+						SKSE::log::info("autotest: loading the most recent save: {}", loaded ? "ok" : "FAILED");
+						if (!loaded && !s.then.empty()) {
+							SKSE::log::info("autotest: {} from the main menu instead", s.then);
+							RunConsole(s.then);
+							s.then.clear();
 						}
 					});
 				}).detach();
@@ -262,11 +294,16 @@ namespace AutoTest
 		for (const wchar_t* c = buf; *c; ++c) {
 			s.start.push_back(static_cast<char>(*c));  // console commands are ASCII
 		}
+		s.then = s.start == "load" ? "" : s.start;
 		s.flatGround = GetPrivateProfileIntW(L"AutoTest", L"bFlatGround", 1, trigger.c_str()) != 0;
 		s.quit = GetPrivateProfileIntW(L"AutoTest", L"bQuit", 1, trigger.c_str()) != 0;
 		GetPrivateProfileStringW(L"AutoTest", L"fHoldEnd", L"0", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
 		s.holdEnd = std::max(0.0f, std::wcstof(buf, nullptr));
 		s.diagnose = GetPrivateProfileIntW(L"AutoTest", L"bDiagnose", 0, trigger.c_str()) != 0;
+		if (GetPrivateProfileIntW(L"AutoTest", L"bNoShadows", 0, trigger.c_str()) != 0) {
+			Model::SetCastShadows(false);
+			SKSE::log::info("autotest: Ratchet casts no shadows");
+		}
 		if (s.diagnose) {
 			Model::SetAttachAllowed(false);
 		}
@@ -278,6 +315,9 @@ namespace AutoTest
 		}
 		TestWindow::SetFolder(shots);
 		s.shots = GetPrivateProfileIntW(L"AutoTest", L"bShots", 1, trigger.c_str()) != 0;
+		s.watchMap = GetPrivateProfileIntW(L"AutoTest", L"bWatchMap", 0, trigger.c_str()) != 0;
+		GetPrivateProfileStringW(L"AutoTest", L"fCameraYaw", L"0", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
+		s.cameraYaw = std::wcstof(buf, nullptr);
 		TestWindow::Install(GetPrivateProfileIntW(L"AutoTest", L"bCorner", 1, trigger.c_str()) != 0);
 		// One run per trigger: the next start is a normal game.
 		std::filesystem::remove(trigger, ec);
@@ -288,6 +328,18 @@ namespace AutoTest
 
 	bool Active() { return s.active; }
 
+	void OnGameLoaded()
+	{
+		if (!s.active || s.then.empty()) {
+			return;
+		}
+		// From the loaded game to the test place (no new-game questions on the way).
+		std::string cmd = std::move(s.then);
+		s.then.clear();
+		SKSE::log::info("autotest: {}", cmd);
+		SKSE::GetTaskInterface()->AddTask([cmd] { RunConsole(cmd); });
+	}
+
 	void Install()
 	{
 		if (!s.active) {
@@ -297,7 +349,7 @@ namespace AutoTest
 		// The bSaveOn* switches aren't in either INI collection; `coc` from the main menu saves
 		// nothing anyway (checked: no new save after a run).
 		SetPref("fAutosaveEveryXMins:SaveGame", false, 1.0e6f, true);
-		TestWindow::OnDataLoaded(s.shots);
+		TestWindow::OnDataLoaded(s.shots, s.watchMap);
 		static MainMenuSink sink;
 		RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
 	}
@@ -340,15 +392,15 @@ namespace AutoTest
 			// The camera behind him (coc starts in first person, where his model isn't drawn).
 			if (!s.thirdPerson && s.settle > 0.0f) {
 				s.thirdPerson = true;
-				if (auto* camera = RE::PlayerCamera::GetSingleton()) {
-					camera->ForceThirdPerson();
-					SKSE::log::info("autotest: third person");
-				}
+				ThirdPerson();
+				SKSE::log::info("autotest: third person");
 			}
 			if (s.settle < kSettle) {
 				return false;
 			}
-			if (s.index == 0) {
+			// Standing still (before the second jump: right after a load the screen is still
+			// fading in).
+			if (s.index == 1) {
 				TestWindow::Shot("idle");
 			}
 			if (s.index > 0) {
@@ -400,12 +452,12 @@ namespace AutoTest
 			return;
 		}
 		s.landed = true;
-		const auto expected = Ratchet::MeasureFlatJump(1.0f / 60.0f, a_jump.hold);
+		// The sandbox replayed the same frames (time steps and button) on a flat floor.
 		std::string bad;
-		if (std::abs(a_jump.apex - expected.fullApex) > kApexTolerance) {
+		if (std::abs(a_jump.apex - a_jump.sandboxApex) > kApexTolerance) {
 			bad += " apex";
 		}
-		if (std::abs(a_jump.apexTime - expected.fullTime) > kApexTimeTolerance) {
+		if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance) {
 			bad += " apex-time";
 		}
 		if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {
@@ -417,8 +469,8 @@ namespace AutoTest
 			++s.failed;
 		}
 		SKSE::log::info("autotest: {} {}: apex {:.3f} m (sandbox {:.3f}) at {:.3f} s ({:.3f}) for a {:.3f} s hold, landed {:+.3f} m after {:.3f} s (sandbox {:.3f}){}",
-			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, expected.fullApex, a_jump.apexTime, expected.fullTime,
-			a_jump.hold, a_jump.landDz, a_jump.airTime, expected.fullAirTime, bad.empty() ? "" : " - off:" + bad);
+			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
+			a_jump.hold, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime, bad.empty() ? "" : " - off:" + bad);
 	}
 
 	void OnHandedBack(const char* a_why)

@@ -11,7 +11,8 @@
 # Exit code 0 when everything passed.
 param(
     [switch]$NoBuild,
-    # Console command run from the main menu, or "load" for the most recent save.
+    # Where to test: the most recent save is loaded first (a new game asks AE's survival-mode
+    # question), then this coc runs; "load" stays where the save is.
     [string]$Start = "coc qasmoke",
     [int]$TimeoutSec = 300,
     # Seconds he stands still after the last jump before the game quits (time for screenshots).
@@ -23,6 +24,12 @@ param(
     # corner behind the other windows.
     [switch]$Fullscreen,
     [switch]$NoShots,
+    # Ratchet casts no shadows (bisecting the renderer hang).
+    [switch]$NoShadows,
+    # Log the engine's Map calls from the site the renderer hang sits in.
+    [switch]$WatchMap,
+    # The third-person camera's turn round him from behind, radians (2.5: in front, three quarters).
+    [double]$CameraYaw = 0,
     [string]$Mo2 = "G:\Modding\MO2",
     [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
     [string]$Executable = "SKSE"
@@ -39,11 +46,12 @@ $docs = [Environment]::GetFolderPath("MyDocuments")
 $sksedir = Join-Path $docs "My Games\Skyrim Special Edition\SKSE"
 $log = Join-Path $sksedir "RatchetMovement.log"
 $trigger = Join-Path $ModDir "SKSE\Plugins\RatchetMovement\autotest.ini"
-$flat = if ($Start -eq "load") { 0 } else { 1 }
+# Only the test room's floor is flat enough to check the landing height on.
+$flat = if ($Start -match "qasmoke") { 1 } else { 0 }
 # The plugin's screenshots of this run (idle, each jump's top, the end).
 $shots = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path ("target\skse\shots\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force $shots | Out-Null
-[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`nfHoldEnd=$HoldEnd`r`nsShots=$shots`r`nbDiagnose=$([int][bool]$Diagnose)`r`nbCorner=$([int](-not $Fullscreen))`r`nbShots=$([int](-not $NoShots))`r`n")
+[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`nfHoldEnd=$HoldEnd`r`nsShots=$shots`r`nbDiagnose=$([int][bool]$Diagnose)`r`nbCorner=$([int](-not $Fullscreen))`r`nbShots=$([int](-not $NoShots))`r`nbNoShadows=$([int][bool]$NoShadows)`r`nbWatchMap=$([int][bool]$WatchMap)`r`nfCameraYaw=$($CameraYaw.ToString([Globalization.CultureInfo]::InvariantCulture))`r`n")
 $TimeoutSec += $HoldEnd
 $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
 

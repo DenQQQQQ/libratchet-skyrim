@@ -22,5 +22,21 @@ namespace Ratchet
 		float fullAirTime = 0.0f;   // takeoff to landing back on the floor
 	};
 	JumpNumbers MeasureFlatJump(float a_dt, float a_hold = 1.0f);
-	const JumpNumbers& Expected();  // at 1/60 s, measured once at load
+	const JumpNumbers& Expected();  // measured once at load
+
+	// One frame of a jump as the game ran it: its time step and whether the sim saw the button.
+	struct Tick
+	{
+		float dt;
+		bool  jump;
+	};
+	struct Replayed
+	{
+		float apex = 0.0f;      // metres above the takeoff
+		float apexTime = 0.0f;  // seconds after the takeoff frame
+		float airTime = 0.0f;   // back on the floor
+	};
+	// The same frames, from the takeoff frame on, through a fresh sim on a flat floor: what the
+	// sandbox does with exactly this input (after the recorded frames, the button stays up).
+	Replayed ReplayFlat(const std::vector<Tick>& a_ticks);
 }

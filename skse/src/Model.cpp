@@ -47,6 +47,21 @@ namespace Model
 		};
 		State s;
 
+		bool g_castShadows = true;
+
+		void ApplyShadows()
+		{
+			for (auto* shape : s.shapes) {
+				if (auto* shader = shape->GetGeometryRuntimeData().shaderProperty.get()) {
+					if (g_castShadows) {
+						shader->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kCastShadows);
+					} else {
+						shader->flags.reset(RE::BSShaderProperty::EShaderPropertyFlag::kCastShadows);
+					}
+				}
+			}
+		}
+
 		void ApplyShapeVisibility()
 		{
 			for (int i = 0; i < static_cast<int>(s.shapes.size()); ++i) {
@@ -141,6 +156,7 @@ namespace Model
 					return RE::BSVisit::BSVisitControl::kContinue;
 				});
 				ApplyShapeVisibility();
+				ApplyShadows();
 			}
 			if (s.model->parent != rootNode) {
 				if (s.model->parent) {
@@ -256,6 +272,12 @@ namespace Model
 	std::string_view CurrentClip() { return s.clipName; }
 
 	void SetAttachAllowed(bool a_allowed) { s.attachAllowed = a_allowed; }
+
+	void SetCastShadows(bool a_cast)
+	{
+		g_castShadows = a_cast;
+		ApplyShadows();
+	}
 
 	void ShowShapes(int a_only)
 	{

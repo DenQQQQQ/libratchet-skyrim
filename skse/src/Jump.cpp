@@ -47,6 +47,7 @@ namespace Jump
 			bool              falling = false;        // past the apex (JumpFall sent)
 			float             savedGravity = 1.0f;    // the controller's own gravity, set to 0 while ours
 			Measure           m;
+			std::vector<Ratchet::Tick> ticks;         // this jump's frames, for the sandbox replay
 		};
 		Host g;
 
@@ -158,6 +159,7 @@ namespace Jump
 			Animate(a_player, moving ? "JumpDirectionalStart" : "JumpStandingStart");
 
 			g.m = {};
+			g.ticks.clear();
 			g.m.takeoffZ = a_player->GetPositionZ();
 			g.m.apexZ = g.m.takeoffZ;
 		}
@@ -171,19 +173,22 @@ namespace Jump
 		void ReportLanding(float a_landZ)
 		{
 			const float k = 1.0f / UnitsPerMetre();
+			// The sandbox's jump for exactly these frames (time steps and button) on a flat floor.
+			const auto sandbox = Ratchet::ReplayFlat(g.ticks);
 			const AutoTest::Jump jump{
 				.apex = (g.m.apexZ - g.m.takeoffZ) * k,
 				.apexTime = g.m.apexTime,
 				.hold = g.m.released ? g.m.held : 1.0f,
 				.landDz = (a_landZ - g.m.takeoffZ) * k,
 				.airTime = g.m.time,
+				.sandboxApex = sandbox.apex,
+				.sandboxApexTime = sandbox.apexTime,
+				.sandboxAirTime = sandbox.airTime,
 			};
 			AutoTest::OnLanded(jump);
 			if (Settings::Get().logJumps && !AutoTest::Active()) {
-				// The sandbox's apex for this hold.
-				const auto expected = Ratchet::MeasureFlatJump(1.0f / 60.0f, jump.hold);
-				SKSE::log::info("jump: apex {:.3f} m at {:.3f} s (sandbox {:.3f} m at {:.3f} s for a {:.3f} s hold), landed {:+.3f} m after {:.3f} s",
-					jump.apex, jump.apexTime, expected.fullApex, expected.fullTime, jump.hold, jump.landDz, jump.airTime);
+				SKSE::log::info("jump: apex {:.3f} m at {:.3f} s (sandbox {:.3f} m at {:.3f} s for these frames), held {:.3f} s, landed {:+.3f} m after {:.3f} s",
+					jump.apex, jump.apexTime, sandbox.apex, sandbox.apexTime, jump.hold, jump.landDz, jump.airTime);
 			}
 		}
 
@@ -251,6 +256,7 @@ namespace Jump
 			}
 
 			if (g.ours) {
+				g.ticks.push_back({ a_dt, in.jump != 0 });
 				g.m.time += a_dt;
 				if (!g.m.released) {
 					if (in.jump) {
