@@ -169,6 +169,47 @@ fn cooked_shots_wind_up_while_held_and_leave_on_release() {
     assert!(w.step(DT, false, &a).is_empty());
 }
 
+/// Put away part-way through a wind-up, the weapon follows the button: let go meanwhile and
+/// nothing is thrown when it's back; held all through, it winds up again and throws on
+/// release.
+#[test]
+fn a_cooked_throw_put_away_isnt_thrown_when_it_comes_back() {
+    let mut p = WeaponParams::grenade();
+    p.trigger = libarsenal::Trigger::Cooked;
+    let a = Aim { muzzle: Vec3::ZERO, target: Vec3::new(0.0, 0.0, 10.0), aimed: false };
+    let mut w = Weapon::new(p.clone());
+    for _ in 0..30 {
+        w.step(DT, true, &a);
+    }
+    w.stow(DT, true);
+    w.stow(DT, false);
+    assert!(w.step(DT, false, &a).is_empty(), "thrown on coming back");
+    assert!(!w.cooking());
+    let mut w = Weapon::new(p);
+    for _ in 0..30 {
+        w.step(DT, true, &a);
+    }
+    for _ in 0..30 {
+        w.stow(DT, true);
+    }
+    assert!(w.step(DT, true, &a).is_empty());
+    assert!(w.cooking());
+    assert_eq!(w.step(DT, false, &a).len(), 1);
+}
+
+/// Put away, a weapon's wait after a shot still runs down.
+#[test]
+fn a_weapon_put_away_waits_out_its_rate() {
+    let mut w = Weapon::new(WeaponParams::pistol());
+    assert_eq!(w.step(DT, true, &aim(true)).len(), 1);
+    assert!(w.step(DT, false, &aim(true)).is_empty());
+    let wait = 1.0 / w.params().rate;
+    for _ in 0..(wait / DT).ceil() as usize {
+        w.stow(DT, false);
+    }
+    assert_eq!(w.step(DT, true, &aim(true)).len(), 1, "still waiting after {wait:.2} s put away");
+}
+
 #[test]
 fn explosions_fall_off_with_distance() {
     let e = WeaponParams::grenade().explosion.unwrap();

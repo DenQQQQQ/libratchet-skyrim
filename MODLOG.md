@@ -35,6 +35,45 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (night): Shatterbomb bugs: the sound after its blast, a throw kept through a switch
+
+Two bugs from the user's playtest, each root cause found by an agent and re-checked by another.
+
+### The noise after the blast (5-10 s)
+- **Cause:** the grenade's flight sounds, not the explosion. The game's throw event starts four
+  of them 0.1 s after the throw (two loop forever, a 7.25 s drone loops at 0.39x speed, a 6.5 s
+  hiss plays once), and its explosion event has Stop actions for exactly those four
+  (RiftApart.exe, the wpn_protogrenade sound bank). Our extractor keeps only Play actions, and
+  the sandbox cued the throw as a one-shot: the loops played once each at full length and nothing
+  stopped them, so a hiss ran on about 6.5 s past the blast and a drone up to 18 s.
+- **Fix:** sounds can belong to an entity (`SoundCue::on`): its loop layers loop, everything it
+  plays (sounds still waiting on their delay too) stops when the entity is gone. The throw is
+  played on the grenade, so its blast (the grenade despawning) stops its flight, and two grenades
+  in flight each have their own. The throw's short whoosh goes with it too (ours; the game stops
+  only the four).
+- **Measured** (the recorded mix): silent about 1.5 s after the blast; before, about -34 dB for
+  6.5 s, then -37 dB to 18 s.
+- The recording's sound log has one-shots that a stop cuts (an owned sound), and the mixer trims
+  a cut sound in its own time (it was off for pitched ones).
+- **Not changed:** the blast itself peaks at about 1.45x full scale for a moment (the layers add up
+  with no limiter); a stacked layer's random 0-300 ms extra delay isn't read.
+
+### A throw wound up, a switch to the pistol and back: thrown at once
+- **Cause:** only the weapon that's out was stepped, so the Shatterbomb kept its memory of the
+  button: switching back with it up read as a release, which throws. Its wind-up flag also stayed
+  on with the pistol out, so the wind-up arm pose stacked on the pistol's aim (the "weird" hold).
+- **The game** (RiftApart.exe): putting the grenade away drops a throw wound up (its unequip
+  removes the callback that fires it and resets the triggers), and the weapon keeps no memory of
+  the button: presses and releases are read from the controller each frame.
+- **Fix:** `Weapon::stow` (libarsenal): the weapon that's put away, or can't fire while he's busy,
+  follows the button without firing, and its wait after a shot runs down. The wind-up is the
+  Shatterbomb's alone, and a switch clears it. A switch asked for while a grenade is leaving the
+  hand (a tenth of a second) waits for it (ours).
+- **As the game reads, unchanged:** with fire held through a switch, the pistol starts firing at
+  once (worth a look in the game).
+- **Demo:** `--demo-part grenadeswitch`: the wind-up, the switch with fire held, the pistol aimed,
+  back with nothing thrown, then a throw whose flight is heard until its blast.
+
 ## 2026-10-08 (evening): the Swingshot's feel; walls hold him off
 
 The user found the Swingshot "a bit janky, too rough", with "a slight delay" in the game, and

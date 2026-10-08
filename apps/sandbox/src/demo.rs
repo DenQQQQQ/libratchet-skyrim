@@ -78,6 +78,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("ledges") => [vec![hold(1.5, Vec2::ZERO, false)], ledges()].concat(),
         Some("swingshot") => [vec![hold(1.5, Vec2::ZERO, false)], swingshot()].concat(),
         Some("turns") => [vec![hold(1.5, Vec2::ZERO, false)], turns()].concat(),
+        Some("grenadeswitch") => [vec![hold(1.5, Vec2::ZERO, false)], grenade_switch()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -658,6 +659,51 @@ fn throw_switch() -> Vec<Act> {
         hold(1.4, Vec2::ZERO, false),
         Act::Slot(Slot::BurstPistol),
         hold(1.0, Vec2::ZERO, false),
+    ]
+}
+
+/// The Shatterbomb and a weapon switch: a throw wound up while aiming is dropped when he switches
+/// to the pistol (held through the switch, the pistol fires), which he then aims as usual, and
+/// switching back throws nothing; then a throw that goes, its flight heard until its blast.
+fn grenade_switch() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let spot = spots::ARENA + Vec3::new(8.55, 0.0, -7.5);
+    let z = Vec2::Y;
+    let far_dummy = spots::ARENA + Vec3::new(8.0, 0.3, 1.6);
+    vec![
+        Act::ClearTrail,
+        Act::Teleport(spot),
+        hold(0.12, z, false),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Slot(Slot::Shatterbomb),
+        Act::Follow { yaw: std::f32::consts::PI, pitch: 0.12, distance: 4.5 },
+        Act::AimAt(Some(far_dummy)),
+        Act::Gun { trigger: false, aim: true },
+        hold(0.6, Vec2::ZERO, false),
+        Act::Caption("Shatterbomb, aiming: fire held winds the throw up..."),
+        Act::Gun { trigger: true, aim: true },
+        hold(0.7, Vec2::ZERO, false),
+        Act::Shot("6e_grenade_wound_up"),
+        Act::Caption("...switched to the pistol, fire still held: the throw is dropped"),
+        Act::Slot(Slot::BurstPistol),
+        hold(0.5, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: true },
+        Act::Caption("Fire let go: the pistol aimed as usual"),
+        hold(1.0, Vec2::ZERO, false),
+        Act::Shot("6f_pistol_after_switch"),
+        Act::Caption("Back to the Shatterbomb: nothing is thrown"),
+        Act::Slot(Slot::Shatterbomb),
+        hold(1.3, Vec2::ZERO, false),
+        Act::Shot("6g_back_nothing_thrown"),
+        Act::Caption("A throw: its flight sounds stop at the blast"),
+        Act::Gun { trigger: true, aim: true },
+        hold(0.5, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: true },
+        hold(3.0, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        Act::AimAt(None),
+        Act::Caption(""),
+        hold(0.5, Vec2::ZERO, false),
     ]
 }
 

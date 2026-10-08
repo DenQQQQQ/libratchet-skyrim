@@ -352,13 +352,17 @@ fn controls(
         }
     }
     // While the wrench is out of the hand there's no switching: the game ignores it until the
-    // throw is over (the user's check in the game).
-    if let Some(slot) = arsenal.requested.take()
+    // throw is over (the user's check in the game). A grenade leaving the hand (a tenth of a
+    // second) goes first, and the switch after it (ours).
+    if arsenal.pending.is_none()
+        && let Some(slot) = arsenal.requested.take()
         && slot != arsenal.slot
         && !wrench.as_ref().is_some_and(|w| w.throwing())
     {
         arsenal.slot = slot;
         arsenal.equips += 1;
+        // A throw being wound up is dropped (RiftApart.exe: putting the weapon away drops it).
+        arsenal.cooking = false;
     }
     if scripted.active {
         arsenal.aiming = scripted.aim;
@@ -470,7 +474,8 @@ fn fire(
     let muzzle = muzzle_position(&arsenal, &globals, p, settings.scale);
     let aim = Aim { muzzle, target, aimed: arsenal.aiming };
     arsenal.aim_target = target;
-    let trigger = arsenal.trigger && !busy;
+    let held = arsenal.trigger;
+    let trigger = held && !busy;
 
     // A thrown grenade leaves the hand a moment into the throw.
     if let Some(t) = arsenal.pending.as_mut() {
@@ -478,17 +483,20 @@ fn fire(
         if *t <= 0.0 {
             arsenal.pending = None;
             arsenal.stance = STRAFE_AFTER_SHOT;
-            cues.write(crate::sound::SoundCue::play("grenade_throw"));
             if let Some(shot) = last_grenade_shot(&arsenal, &aim) {
                 let proj = Projectile::new(&shot, &arsenal.grenade.params().projectile);
                 let light = art.available.then(|| art.grenade_light(settings.scale));
-                spawn_grenade(&mut commands, &models, &mut meshes, &mut materials, proj, light, settings.scale);
+                let grenade = spawn_grenade(&mut commands, &models, &mut meshes, &mut materials, proj, light, settings.scale);
+                // Its flight sounds go with it, and stop at its blast.
+                cues.write(crate::sound::SoundCue::on("grenade_throw", grenade));
             }
         }
     }
 
     match arsenal.slot {
         Slot::BurstPistol => {
+            // The weapon that's put away follows the button too (see `Weapon::stow`).
+            arsenal.grenade.stow(dt, held);
             let shots = arsenal.pistol.step(dt, trigger, &aim);
             let w = arsenal.pistol.params().clone();
             let s = settings.scale;
@@ -549,9 +557,15 @@ fn fire(
         Slot::Shatterbomb => {
             // Holding the fire button winds the throw up (and shows the arc); it goes on release.
             // The weapon decides (rate, ammo); the grenade itself is spawned at release.
-            // Busy, a throw being wound up waits (it would go on release otherwise).
-            let shots = if busy { Vec::new() } else { arsenal.grenade.step(dt, trigger, &aim) };
-            arsenal.cooking = arsenal.grenade.cooking();
+            // Busy, it only follows the button: a throw wound up goes on if it's still held,
+            // and a release meanwhile throws nothing.
+            arsenal.pistol.stow(dt, held);
+            let shots = if busy {
+                arsenal.grenade.stow(dt, held);
+                Vec::new()
+            } else {
+                arsenal.grenade.step(dt, trigger, &aim)
+            };
             if !shots.is_empty() && arsenal.pending.is_none() {
                 // The whole-body throw standing still, the upper-body one on the move or in the
                 // air (ratchet_model picks the same).
@@ -562,6 +576,9 @@ fn fire(
             }
         }
     }
+    // Winding a throw up is the Shatterbomb's alone (with the pistol out, the grenade's own
+    // state is only following the button).
+    arsenal.cooking = arsenal.slot == Slot::Shatterbomb && arsenal.grenade.cooking();
     // Refill an empty weapon after a moment.
     let empty = match arsenal.slot {
         Slot::BurstPistol => arsenal.pistol.ammo() == 0,
@@ -629,7 +646,7 @@ fn spawn_grenade(
     proj: Projectile,
     light: Option<PointLight>,
     scale: f32,
-) {
+) -> Entity {
     let at = Transform::from_translation(proj.position()).with_scale(Vec3::splat(scale));
     let mut e = commands.spawn((Grenade { proj }, at, Visibility::default()));
     if let Some(light) = light {
@@ -648,6 +665,7 @@ fn spawn_grenade(
             ));
         }
     }
+    e.id()
 }
 
 /// Bolts: a hit on a dummy damages and nudges it; a wall or the floor stops them (with the
