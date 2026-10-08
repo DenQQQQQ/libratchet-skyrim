@@ -1,7 +1,7 @@
 # libratchet: Ratchet & Clank movement for other games
 
-Ratchet & Clank: Rift Apart's movement (jump, double jump, glide; dash, hover boots, grind,
-swingshot and rift tether later), rebuilt as a small engine-independent Rust library. Like
+Ratchet & Clank: Rift Apart's movement (jumps, glide, dashes, wall jumps, ledges, the Swingshot;
+hover boots, grind and rift tether later), rebuilt as a small engine-independent Rust library. Like
 libsm64 does for Mario: a host game passes in input and what the character touches, and gets
 back how to move.
 
@@ -13,10 +13,18 @@ back how to move.
 - **Planned**: a Skyrim SE host (SKSE plugin) so the Dragonborn moves like Ratchet. See
   [docs/skyrim-plan.md](docs/skyrim-plan.md).
 
-Moves so far: run/walk, variable-height jump, double jump, glide, ground dash (Phantom Dash),
-air dash, wall jumps (on the teal walls of the wall-jump shaft, a wall-jump zone whose camera
-swings round to look along it, as in the game), and the OmniWrench: 3-hit
-combo, Hyper-Strike (melee in the air) and the wrench throw. Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
+Moves so far:
+
+- run/walk, variable-height jump, double jump, glide, ground dash (Phantom Dash) and air dash;
+- wall jumps: any number on the teal walls of the wall-jump shaft (a wall-jump zone whose
+  camera swings round to look along it, as in the game), one per jump on plain walls;
+- ledges: catching a lip he falls short of and climbing up; the placed ledges he hangs from,
+  moves between, jumps up over and lets go of;
+- the Swingshot (swinging from target to target, with the game's swing camera) and the
+  Hookshot;
+- the OmniWrench: 3-hit combo, Hyper-Strike (melee in the air) and the wrench throw.
+
+Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
 over-the-shoulder camera).
 
 Unofficial fan project, not affiliated with Insomniac Games, Sony, or Bethesda. Built with an AI
@@ -36,10 +44,10 @@ python tools/extract_riftapart_configs.py --game "<your Rift Apart folder>" --al
 
 That writes JSON into `riftapart-configs/` (gitignored): the movement configs, the wrench's
 melee and throw configs, the Burst Pistol's and Shatterbomb's weapon configs, the camera's
-placement and shakes, and
-`hero_melee_clips.json` (each swing's length, lunge and events, read from Ratchet's wrench
-animations: the hit, the two combo windows, the throw's release). Without it, the sandbox uses generic default values and
-says so on screen.
+placement and shakes (the Swingshot's camera too), `hero_melee_clips.json` (each swing's
+length, lunge and events, read from Ratchet's wrench animations: the hit, the two combo
+windows, the throw's release) and `hero_ledge_clips.json` (how the ledge moves carry him, from
+their clips). Without it, the sandbox uses generic default values and says so on screen.
 
 ### Ratchet's model, textures and animations (optional)
 
@@ -55,7 +63,8 @@ That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatter
 `shatterbomb_glove.glb` and `testdummy.glb` (the game's test-dummy robot, which the combat dummies
 wear). The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
 double jump, fall, glide (the heli-pack's intro, swaying loop and lean), land, dash (in eight
-directions), air-dash, strafe-jump, wrench and gun clips, per weapon grip. Clank rides on his
+directions), air-dash, strafe-jump, wall, ledge, Swingshot, wrench and gun clips, per weapon
+grip. Clank rides on his
 back (backpack idle, heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
 hand, and the Shatterbomb's glove on it. Without them, you get a capsule with Lombax ears. Never
 share the `.glb` files: they're game data.
