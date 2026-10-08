@@ -100,6 +100,12 @@ namespace Input
 		return map && map->IsJumpingControlsEnabled() && Held("Jump");
 	}
 
+	bool SneakHeld()
+	{
+		const auto* map = RE::ControlMap::GetSingleton();
+		return map && map->IsSneakingControlsEnabled() && Held("Sneak");
+	}
+
 	bool DashHeld()
 	{
 		const auto* map = RE::ControlMap::GetSingleton();

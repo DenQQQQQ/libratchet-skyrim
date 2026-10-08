@@ -40,8 +40,10 @@ namespace AutoTest
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
 		// Skyrim moving him (its collision, a frame of lag in reading his height).
 		constexpr float kApexTolerance = 0.03f;      // metres
-		constexpr float kApexTimeTolerance = 0.025f; // seconds
-		constexpr float kAirTimeTolerance = 0.03f;   // seconds
+		// Times: this much, plus the frame they were seen in (a slow frame, 50 ms at times in
+		// Whiterun, shows the apex that much later).
+		constexpr float kApexTimeTolerance = 0.015f; // seconds
+		constexpr float kAirTimeTolerance = 0.02f;   // seconds
 		// Across the ground: a frame of his speed either way at the landing.
 		constexpr float kDistanceTolerance = 0.2f;   // metres
 		// A ground dash ends on the sim's own clock, so only the ground (slopes, bumps) can
@@ -568,16 +570,23 @@ namespace AutoTest
 			return;
 		}
 		s.landed = true;
+		if (!a_jump.replayed) {
+			// A wall or ledge took part (or it started out of Skyrim's fall): nothing to compare.
+			++s.failed;
+			SKSE::log::info("autotest: FAIL {}: the flight met a wall or ledge ({:.2f} m across, landed {:+.3f} m after {:.3f} s)",
+				kCases[s.index].name, a_jump.distance, a_jump.landDz, a_jump.airTime);
+			return;
+		}
 		// The sandbox replayed the same frames (time steps, button and stick) on a flat floor, down
 		// to where he landed.
 		std::string bad;
 		if (std::abs(a_jump.apex - a_jump.sandboxApex) > kApexTolerance) {
 			bad += " apex";
 		}
-		if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance) {
+		if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance + a_jump.apexFrame) {
 			bad += " apex-time";
 		}
-		if (std::abs(a_jump.airTime - a_jump.sandboxAirTime) > kAirTimeTolerance) {
+		if (std::abs(a_jump.airTime - a_jump.sandboxAirTime) > kAirTimeTolerance + a_jump.landFrame) {
 			bad += " air-time";
 		}
 		if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {

@@ -20,6 +20,13 @@ namespace Jump
 		// onto it, but a slope going down falls away a little each frame.
 		constexpr float kDashGroundReach = 0.3f;
 
+		// The sandbox's body at scale 1 (apps/sandbox/src/main.rs BODY_HEIGHT, BODY_HALF_WIDTH,
+		// WALL_PROBE_REACH): the wall probe looks from his middle, 1 m out, with side probes
+		// 0.25 m to either side (Rift Apart's, at 0.35 m half width).
+		constexpr float kBodyHeight = 1.2f;
+		constexpr float kWallReach = 1.0f;
+		constexpr float kWallProbeSide = 0.25f;
+
 		// libratchet is Y-up metres (right-handed, like Bevy); Skyrim is Z-up (x east, y north).
 		// East stays +x, up is +y, and north is -z (Bevy's forward), which keeps the handedness,
 		// so turns don't come out mirrored.
@@ -37,6 +44,7 @@ namespace Jump
 			float apexZ = 0.0f;
 			float time = 0.0f;      // since takeoff
 			float apexTime = 0.0f;
+			float apexFrame = 0.0f; // the frame's length when the apex was seen (it can only be seen a frame late)
 			float held = 0.0f;      // how long the button was held from the takeoff
 			bool  released = false;
 			bool  fromGround = true;  // a jump from the ground (not a double jump or glide out of Skyrim's fall)
@@ -259,6 +267,42 @@ namespace Jump
 			return Moving(a_ctrl) ? "JumpDirectionalStart" : "JumpStandingStart";
 		}
 
+		// The sim's rays into Skyrim's world (it catches ledges with them): sim axes, metres.
+		std::uint8_t WorldRay(void*, RatchetVec3 a_from, RatchetVec3 a_to, RatchetVec3* a_point, RatchetVec3* a_normal)
+		{
+			const float u = UnitsPerMetre();
+			const auto game = [u](const RatchetVec3& a_v) { return RE::NiPoint3{ a_v.x * u, -a_v.z * u, a_v.y * u }; };
+			const auto hit = Physics::Ray(game(a_from), game(a_to));
+			if (!hit) {
+				return 0;
+			}
+			*a_point = ToSim(hit->point);
+			*a_normal = { hit->normal.x, hit->normal.z, -hit->normal.y };
+			return 1;
+		}
+
+		// His flight path from here (velocity in sim axes, pulled down at a_gravity) for up to 4 s
+		// in 32 steps, as Rift Apart predicts it to end a wall jump: true if the first thing it
+		// meets is a floor (the sandbox's level::landing_ahead, with a point for his body).
+		bool LandingAhead(const RE::NiPoint3& a_feet, const RatchetVec3& a_velocity, float a_gravity)
+		{
+			const float units = UnitsPerMetre();
+			constexpr int   kSteps = 32;
+			constexpr float kDt = 4.0f / kSteps;
+			RE::NiPoint3 p = a_feet + RE::NiPoint3{ 0.0f, 0.0f, 0.1f * units };
+			RE::NiPoint3 v{ a_velocity.x, -a_velocity.z, a_velocity.y };  // Skyrim's axes, m/s
+			for (int i = 0; i < kSteps; ++i) {
+				const RE::NiPoint3 next = v - RE::NiPoint3{ 0.0f, 0.0f, a_gravity * kDt };
+				const RE::NiPoint3 to = p + (v + next) * (0.5f * kDt * units);
+				if (const auto hit = Physics::Ray(p, to)) {
+					return hit->normal.z > 0.7f;
+				}
+				p = to;
+				v = next;
+			}
+			return false;
+		}
+
 		// The sim's ground dash starts. Skyrim's on-ground state moves him by its own locomotion,
 		// whatever velocity it's given; its in-air state keeps the one it's given. So for the
 		// dash he's put in the air state every frame, with the sim's velocity, which presses him
@@ -297,16 +341,19 @@ namespace Jump
 			EndOurs(a_ctrl);
 		}
 
-		void ReportLanding(const RE::NiPoint3& a_land)
+		void ReportLanding(const RE::NiPoint3& a_land, float a_dt)
 		{
 			const float k = 1.0f / UnitsPerMetre();
 			const float landDz = (a_land.z - g.m.takeoffZ) * k;
 			const float dx = a_land.x - g.m.takeoff.x, dy = a_land.y - g.m.takeoff.y;
 			const float distance = std::sqrt(dx * dx + dy * dy) * k;
 			if (!g.m.fromGround) {
-				// Out of Skyrim's fall: a replay would start it on the ground, so there's none.
-				if (Settings::Get().logJumps) {
-					SKSE::log::info("jump: out of a fall, {:.2f} m across, landed {:+.3f} m after {:.3f} s", distance, landDz, g.m.time);
+				// Out of Skyrim's fall, or a wall or ledge took part: a flat-floor replay can't
+				// follow it, so there's none.
+				AutoTest::OnLanded({ .apex = (g.m.apexZ - g.m.takeoffZ) * k, .apexTime = g.m.apexTime, .hold = g.m.released ? g.m.held : 1.0f,
+					.landDz = landDz, .airTime = g.m.time, .distance = distance, .replayed = false });
+				if (Settings::Get().logJumps && !AutoTest::Active()) {
+					SKSE::log::info("jump: {:.2f} m across, landed {:+.3f} m after {:.3f} s (no replay: out of a fall, or a wall or ledge)", distance, landDz, g.m.time);
 				}
 				return;
 			}
@@ -320,6 +367,8 @@ namespace Jump
 				.landDz = landDz,
 				.airTime = g.m.time,
 				.distance = distance,
+				.apexFrame = g.m.apexFrame,
+				.landFrame = a_dt,
 				.sandboxApex = sandbox.apex,
 				.sandboxApexTime = sandbox.apexTime,
 				.sandboxAirTime = sandbox.airTime,
@@ -361,6 +410,8 @@ namespace Jump
 			RatchetInput in{};
 			in.jump = test.jump || Input::JumpHeld() ? 1 : 0;
 			in.dash = test.dash || Input::DashHeld() ? 1 : 0;
+			// Crouch lets go of a ledge: Skyrim's Sneak.
+			in.crouch = Input::SneakHeld() ? 1 : 0;
 			// The stick, turned by the camera: Rift Apart's controls are camera-relative.
 			const View view = CameraView();
 			const RE::NiPoint2 stick = Input::MoveStick();
@@ -378,6 +429,26 @@ namespace Jump
 			if (ground) {
 				contact.has_ground_distance = 1;
 				contact.ground_distance = std::max(0.0f, *ground);
+			}
+			// The wall beside him: the sim sticks to walls in the air. Skyrim marks none for wall
+			// jumps, so every wall is a plain one (one wall jump per jump) and there are no
+			// wall-jump zones.
+			if (!grounded || (g.ours && !g.groundDash)) {
+				const float s = Settings::Get().scale;
+				std::optional<RE::NiPoint2> prefer;
+				if (g.last.state == RATCHET_STATE_WALL_STICK) {
+					prefer = RE::NiPoint2{ g.last.wall_normal_x, -g.last.wall_normal_z };
+				}
+				if (const auto wall = Physics::WallProbe(feet, 0.5f * kBodyHeight * s, kWallReach * s, kWallProbeSide * s, prefer)) {
+					contact.has_wall = 1;
+					contact.wall_normal_x = wall->normal.x;
+					contact.wall_normal_z = -wall->normal.y;
+					contact.has_wall_distance = 1;
+					contact.wall_distance = wall->distance;
+				}
+				if (g.last.state == RATCHET_STATE_WALL_JUMP) {
+					contact.landing_ahead = LandingAhead(feet, g.last.velocity, g.last.gravity) ? 1 : 0;
+				}
 			}
 			if (!g.ours) {
 				// On the ground Skyrim moves him: the sim starts from what he really does across the
@@ -404,7 +475,7 @@ namespace Jump
 
 			// A flight ended (a new jump can start in the same step).
 			if (g.ours && !g.groundDash && (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND)) {
-				ReportLanding(feet);
+				ReportLanding(feet, a_dt);
 				Land(a_player, ctrl);
 			}
 			// The ground dash ended: back on his feet, off a ledge, or jumping out of it.
@@ -431,7 +502,8 @@ namespace Jump
 				AutoTest::OnTakeoff();
 				AutoTest::OnMove("dash");
 			} else if (!g.ours && r.state != RATCHET_STATE_GROUND &&
-					   r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED | RATCHET_EVENT_AIR_DASHED)) {
+					   r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED | RATCHET_EVENT_AIR_DASHED | RATCHET_EVENT_WALL_STUCK |
+								   RATCHET_EVENT_LEDGE_GRABBED)) {
 				// Out of a fall Skyrim started (off a ledge): the sim's from here.
 				g.startVelocity = ControllerVelocity(ctrl);
 				Launch(a_player, ctrl, r.velocity, false, r.events & RATCHET_EVENT_DOUBLE_JUMPED ? TakeoffEvent(ctrl) : "JumpFall");
@@ -461,10 +533,28 @@ namespace Jump
 				if (r.events & RATCHET_EVENT_GLIDE_STARTED) {
 					AutoTest::OnMove("glide");
 				}
+				if (r.events & (RATCHET_EVENT_WALL_STUCK | RATCHET_EVENT_LEDGE_GRABBED)) {
+					// The level took part: a flat-floor replay can't follow this flight.
+					g.m.fromGround = false;
+					AutoTest::OnMove(r.events & RATCHET_EVENT_WALL_STUCK ? "wall_stick" : "ledge");
+				}
+				if (r.events & RATCHET_EVENT_LEDGE_CLIMBED) {
+					AutoTest::OnMove("ledge_climb");
+				}
+				if (r.events & RATCHET_EVENT_WALL_JUMPED) {
+					// A jump again, off the wall: falls count from it.
+					g.falling = false;
+					Animate(a_player, "JumpDirectionalStart");
+					ctrl->fallStartHeight = z;
+					ctrl->fallTime = 0.0f;
+					AutoTest::OnMove("wall_jump");
+				}
 				// The whole velocity is the sim's in the air: up and across.
 				SetVelocity(ctrl, r.velocity);
-				if (r.state == RATCHET_STATE_GLIDE) {
-					// A glide comes down softly: the height it sinks doesn't count as a fall.
+				if (r.state == RATCHET_STATE_GLIDE || r.state == RATCHET_STATE_WALL_STICK || r.state == RATCHET_STATE_LEDGE_HANG ||
+					r.state == RATCHET_STATE_LEDGE_CLIMB) {
+					// A glide comes down softly, and so does a slide down a wall; hanging from a
+					// ledge he's held. The height they sink doesn't count as a fall.
 					ctrl->fallStartHeight = z;
 					ctrl->fallTime = 0.0f;
 				}
@@ -511,6 +601,7 @@ namespace Jump
 			if (z > g.m.apexZ) {
 				g.m.apexZ = z;
 				g.m.apexTime = g.m.time;
+				g.m.apexFrame = g.lastDt;
 			}
 		}
 
@@ -571,7 +662,9 @@ namespace Jump
 					// Ratchet's pose follows the move Skyrim has just made.
 					const auto* ctrl = a_this->GetCharController();
 					Model::Update(a_this, dt, { .simJump = g.ours, .simState = g.last.state, .events = g.last.events,
-												  .grounded = !ctrl || Grounded(ctrl), .hasFacing = true, .facingYaw = g.last.facing_yaw });
+												  .grounded = !ctrl || Grounded(ctrl), .wallRight = g.last.wall_right != 0,
+												  .ledgeMove = g.last.ledge_move, .verticalSpeed = g.last.velocity.y,
+												  .hasFacing = true, .facingYaw = g.last.facing_yaw });
 				}
 			}
 			static inline REL::Relocation<decltype(Update)> _Update;
@@ -582,6 +675,9 @@ namespace Jump
 	void Install()
 	{
 		g.sim = Ratchet::NewSim();
+		// Skyrim has no placed ledges or Swingshot targets: only rays, for lips he catches on
+		// the way down.
+		ratchet_set_world(g.sim, RatchetWorld{ .user = nullptr, .ledges = nullptr, .raycast = WorldRay, .swing_targets = nullptr });
 		Input::LogBindings();
 
 		REL::Relocation<std::uintptr_t> jumpVtbl{ RE::VTABLE_JumpHandler[0] };

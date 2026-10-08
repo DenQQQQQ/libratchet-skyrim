@@ -271,3 +271,24 @@ Probed offline through `ratchet.dll` before writing the tests:
   - air dash: 17.90 m across (17.87), landed 1.08 m lower after 1.388 s (1.380).
 - A screenshot asked for in the same frame as another used to replace it (the air dash and its
   "apex" come on the same step). Shots now queue, one a frame.
+
+## 2026-10-08: walls and ledges wired in (not checked in game yet)
+- **Walls:** each frame in the air, a probe like the sandbox's (`level::wall_probe`) looks from his
+  middle (0.6 m × scale up), 1 m × scale out, with 16 rays. It takes the nearest steep face (normal
+  within 45° of level), measures how far it is along its own normal, and checks two more rays
+  0.25 m × scale to either side (the game's three probes). On a wall, the one he's on wins. Skyrim
+  marks no wall-jump walls or zones, so every wall is plain (one wall jump per jump). During a wall
+  jump, a 32-step sweep of his flight path says whether a floor comes first (`landing_ahead`).
+- **Ledges:** `ratchet_set_world` gets a raycast callback into Skyrim's Havok world (no placed
+  ledges or Swingshot targets), so the sim can catch lips on the way down. Sneak is the sim's
+  crouch (it lets go).
+- A wall stick, ledge grab or climb out of Skyrim's own fall hands over to the sim like a double
+  jump. Sliding down a wall, hanging or climbing doesn't count toward fall damage. A wall jump
+  sends the takeoff event again. His clips: `wall_stick_*`, `wall_slide_*`, `wall_jump_*` (left or
+  right from the sim), `ledge_from_fall`, `ledge_idle`, `ledge_jump`. That's the simple version; the
+  sandbox's own choice does more (see the clip-choice proposal).
+- Flights a wall or ledge touched aren't replayed (the replay has a flat floor).
+- With all this live, the ten tests still pass. One run failed the 0.15 s hold's apex time only
+  (0.046 s late). Its frames ran 38-62 ms there, and the apex can only be seen at a frame's end. The
+  time checks now allow the frame the apex or landing was seen in, plus 0.015 s / 0.02 s.
+- No wall or ledge test yet: the test spot in Whiterun has no tall wall in reach.

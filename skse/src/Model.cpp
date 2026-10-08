@@ -76,7 +76,8 @@ namespace Model
 
 		bool Looping(std::string_view a_clip)
 		{
-			return a_clip == "idle" || a_clip == "run" || a_clip == "walk" || a_clip == "fall" || a_clip == "glide";
+			return a_clip == "idle" || a_clip == "run" || a_clip == "walk" || a_clip == "fall" || a_clip == "glide" ||
+			       a_clip == "wall_slide_left" || a_clip == "wall_slide_right" || a_clip == "ledge_idle";
 		}
 
 		void Play(std::string_view a_name, float a_fade)
@@ -217,6 +218,21 @@ namespace Model
 					break;
 				case RATCHET_STATE_AIR_DASH:
 					want = "air_dash";
+					break;
+				// Walls and ledges: the sandbox's clips, picked the simple way (its
+				// ratchet_model.rs also turns him in from a fall and loops the slide).
+				case RATCHET_STATE_WALL_STICK:
+					want = a_drive.verticalSpeed < -0.1f ? (a_drive.wallRight ? "wall_slide_right" : "wall_slide_left") :
+					                                       (a_drive.wallRight ? "wall_stick_right" : "wall_stick_left");
+					break;
+				case RATCHET_STATE_WALL_JUMP:
+					want = a_drive.wallRight ? "wall_jump_right" : "wall_jump_left";
+					break;
+				case RATCHET_STATE_LEDGE_HANG:
+					want = a_drive.ledgeMove == 2 ? "ledge_from_fall" : "ledge_idle";
+					break;
+				case RATCHET_STATE_LEDGE_CLIMB:
+					want = "ledge_jump";
 					break;
 				default:
 					want = "fall";

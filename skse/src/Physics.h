@@ -18,4 +18,15 @@ namespace Physics
 	// Metres from his feet down to the ground (looking up to a_max metres below); nullopt if
 	// there's none that close.
 	std::optional<float> GroundDistance(const RE::NiPoint3& a_feet, float a_max);
+
+	struct Wall
+	{
+		RE::NiPoint2 normal;  // out of the wall, on the ground plane (Skyrim's x, y), unit length
+		float        distance;  // metres from his middle to the wall's face, along the normal
+	};
+	// The nearest wall beside him as Rift Apart's wall probe finds one (the sandbox's
+	// level::wall_probe): a steep face within a_reach metres of his middle (a_middle metres above
+	// his feet) that also reaches a_side metres past him to either side. A face along a_prefer
+	// (the wall he's on) wins over nearer ones.
+	std::optional<Wall> WallProbe(const RE::NiPoint3& a_feet, float a_middle, float a_reach, float a_side, std::optional<RE::NiPoint2> a_prefer);
 }

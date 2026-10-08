@@ -36,11 +36,17 @@ namespace AutoTest
 		float landDz;      // landing height - takeoff height, metres
 		float airTime;
 		float distance;    // metres across the ground, takeoff to landing
-		// The sandbox's jump for the same frames on a flat floor.
-		float sandboxApex;
-		float sandboxApexTime;
-		float sandboxAirTime;
-		float sandboxDistance;
+		// The frames' lengths when the apex and the landing were seen: each can only be seen
+		// at a frame's end, up to a frame late.
+		float apexFrame = 0.0f;
+		float landFrame = 0.0f;
+		// The sandbox's jump for the same frames on a flat floor (not for a flight that started
+		// out of Skyrim's fall or touched a wall or ledge: replayed false).
+		bool  replayed = true;
+		float sandboxApex = 0.0f;
+		float sandboxApexTime = 0.0f;
+		float sandboxAirTime = 0.0f;
+		float sandboxDistance = 0.0f;
 	};
 	struct Dash
 	{

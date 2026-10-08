@@ -9,10 +9,13 @@ namespace Model
 	// What moves him this frame.
 	struct Drive
 	{
-		bool          simJump = false;  // the sim is flying the jump
+		bool          simJump = false;  // the sim is moving him (a flight, a dash, a wall, a ledge)
 		std::uint32_t simState = 0;     // RATCHET_STATE_*
 		std::uint32_t events = 0;       // this frame's RATCHET_EVENT_*
 		bool          grounded = true;  // Skyrim's controller is on the ground
+		bool          wallRight = false;  // on a wall or in a wall jump: the right-hand clips fit
+		std::uint8_t  ledgeMove = 0;    // the move onto a ledge (RatchetStepResult::ledge_move)
+		float         verticalSpeed = 0.0f;  // the sim's, m/s (sliding down a wall: below 0)
 		// The sim's facing (radians, atan2(x, z) in its axes): he turns the way Rift Apart turns him.
 		bool          hasFacing = false;
 		float         facingYaw = 0.0f;
