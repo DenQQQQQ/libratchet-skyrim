@@ -108,7 +108,13 @@ fn on_held_ready(
     players: Query<(), With<AnimationPlayer>>,
     mut commands: Commands,
 ) {
-    wrench.player = children.iter_descendants(ev.entity).find(|e| players.contains(*e));
+    // A scene spawned again (see clank.rs) brings a new player, which needs its clips again.
+    let player = children.iter_descendants(ev.entity).find(|e| players.contains(*e));
+    if player != wrench.player {
+        wrench.clips.clear();
+        wrench.playing = None;
+    }
+    wrench.player = player;
     commands.entity(ev.entity).insert(Visibility::Inherited);
 }
 

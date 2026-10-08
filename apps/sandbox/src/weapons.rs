@@ -245,8 +245,10 @@ fn on_gun_ready(
 ) {
     commands.entity(ev.entity).insert(Visibility::Inherited);
     for e in children.iter_descendants(ev.entity) {
-        if players.contains(e) {
+        // A scene spawned again (see clank.rs) brings a new player, which needs its clip again.
+        if players.contains(e) && arsenal.gun_player != Some(e) {
             arsenal.gun_player = Some(e);
+            arsenal.gun_fire = None;
         }
         // The game's locators (exported as nodes); older exports only have the muzzle's joint.
         match names.get(e).map(|n| n.as_str()) {

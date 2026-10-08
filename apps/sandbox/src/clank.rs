@@ -116,7 +116,15 @@ fn on_ready(
             }
         }
     }
-    rig.player = children.iter_descendants(root).find(|e| players.contains(*e));
+    // Bevy can spawn the scene again just after it loads (when its asset reports a change);
+    // the new copy's player needs its clips set up again, or he's left in his bind pose.
+    let player = children.iter_descendants(root).find(|e| players.contains(*e));
+    if player != rig.player {
+        rig.clips.clear();
+        rig.current = None;
+        rig.one_shot = 0.0;
+    }
+    rig.player = player;
     rig.root = Some(root);
     rig.attach = attach;
     let Some(mut e) = attach else {

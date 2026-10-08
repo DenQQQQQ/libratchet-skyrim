@@ -35,6 +35,25 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (midday): Clank stuck in his bind pose, sometimes
+
+Found while checking the swingshot demo: in some runs Clank rode on Ratchet's back in his bind
+pose, arms out, for the whole run.
+
+### Cause
+- Bevy reports a model's scene as changed just after it loads (some files load more than
+  once), and a change spawns the scene again.
+- Clank, the held wrench and the Burst Pistol set up their clips once, on the first copy's
+  animation player. When the second spawn came late enough to get past Bevy's short
+  debounce, the new copy never got its clips.
+- Whether it happens depends on load timing. The bigger model with the swing clips made it
+  likelier.
+
+### Fixed
+- **The fix:** when a scene comes back with a new animation player, Clank, the wrench and the
+  pistol set their clips up again. The Swingshot's hand locator takes the newest one too.
+- **Checked:** a forced re-spawn of Clank's scene mid-run, and he keeps animating.
+
 ## 2026-10-08 (midday): the Swingshot and the Hookshot
 
 The user was still away; the Swingshot, one of the project's goals, came after ledges. Research
