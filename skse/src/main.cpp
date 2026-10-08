@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "AutoTest.h"
 #include "Jump.h"
 #include "RatchetDll.h"
 #include "Settings.h"
@@ -19,13 +20,12 @@ namespace
 		switch (a_msg->type) {
 		case SKSE::MessagingInterface::kDataLoaded:
 			Jump::Install();
+			AutoTest::Install();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:
-			Jump::Reset();
-			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
-			Jump::OnGameLoaded();
+			Jump::Reset();
 			break;
 		default:
 			break;
@@ -52,6 +52,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	if (!Ratchet::Load(dir)) {
 		return true;  // logged; the game runs on without us
 	}
+	AutoTest::Load(dir);
 	const auto& e = Ratchet::Expected();
 	SKSE::log::info("sandbox numbers at scale {}: tap apex {:.3f} m at {:.3f} s, full-hold apex {:.3f} m at {:.3f} s, air time {:.3f} s",
 		settings.scale, e.tapApex, e.tapTime, e.fullApex, e.fullTime, e.fullAirTime);

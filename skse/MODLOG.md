@@ -73,6 +73,22 @@ The plugin's own log, kept in `skse/` while it's built on the `skse` branch (the
   controller reports the landing are the ground stopping him.
 - The owner sees Skyrim's jump animation on the sim's jumps.
 
+### Automated tests in the game (`skse/test/ingame.ps1`)
+- The owner asked for automated tests instead of playtests. A one-shot trigger file puts the
+  plugin in test mode. From the main menu it runs `coc qasmoke` through a console `Script`
+  (`CompileAndRun`), jumps by itself (the button pressed in code), checks each landing against
+  the sandbox and quits (`Main::quitGame`). The script starts SKSE through MO2
+  (`moshortcut://:SKSE`, handed to the running MO2) and follows the log, which is flushed on
+  every info line.
+- First runs: 4/4 pass in qasmoke. Tap 1.550 m (sandbox 1.550), 0.1 s hold 1.877-1.881 m
+  (1.893), 0.15 s 2.107-2.115 m (2.110), full hold 2.325 m (2.325). All landed back on the floor at
+  +0.000 m with no health lost. 58 s for build + install + game + test.
+- No save was written. Timed autosaves are switched off in memory for the run. The bSaveOn*
+  switches aren't in Skyrim's INI collections under those names; `coc` from the main menu
+  doesn't save anyway.
+- Not covered yet: ceilings, rising onto a ledge, running jumps (they need placed geometry or
+  movement input in the test).
+
 ### Choices (assumptions, not from the game)
 - Jump only: a press counts if it began on the ground, and the sim stops seeing the button once
   the jump turns down, so the sim's double jump and glide can't start. No press buffer before

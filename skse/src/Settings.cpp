@@ -53,8 +53,6 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	animations = ReadBool(a_ini, L"General", L"bAnimations", animations);
 	logJumps = ReadBool(a_ini, L"Debug", L"bLogJumps", logJumps);
 	traceJumps = ReadBool(a_ini, L"Debug", L"bTraceJumps", traceJumps);
-	autoTest = ReadBool(a_ini, L"Debug", L"bAutoTest", autoTest);
-	autoTestQuit = ReadBool(a_ini, L"Debug", L"bAutoTestQuit", autoTestQuit);
 }
 
 std::filesystem::path PluginDirectory()

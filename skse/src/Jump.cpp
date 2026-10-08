@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Jump.h"
 
+#include "AutoTest.h"
 #include "Input.h"
 #include "RatchetDll.h"
 #include "Settings.h"
@@ -33,23 +34,9 @@ namespace Jump
 			bool  released = false;
 		};
 
-		// [Debug] bAutoTest: the jumps it makes, by how long it holds the button (0: one frame).
-		constexpr float kTestHolds[] = { 0.0f, 0.1f, 0.5f };
-
-		struct AutoTest
-		{
-			bool  armed = false;
-			int   index = 0;         // into kTestHolds
-			float settle = 0.0f;     // grounded and in control this long before the next jump
-			float pressed = -1.0f;   // seconds the current press has been held; < 0 none
-			float elapsed = 0.0f;    // since this jump's press, to give up on one that never lands
-			bool  launched = false;  // the sim jumped on this press
-		};
-
 		struct Host
 		{
 			RatchetSim*       sim = nullptr;
-			AutoTest          test;
 			bool              ours = false;           // in a jump we launched: we set his vertical speed
 			bool              pressOnGround = false;  // this press began on the ground (presses in the air are masked: jump only)
 			bool              prevHeld = false;
@@ -180,66 +167,23 @@ namespace Jump
 			EndOurs(a_ctrl);
 		}
 
-		void LogLanding(float a_landZ)
+		void ReportLanding(float a_landZ)
 		{
-			const auto& s = Settings::Get();
-			if (!s.logJumps) {
-				return;
-			}
 			const float k = 1.0f / UnitsPerMetre();
-			const float apex = (g.m.apexZ - g.m.takeoffZ) * k;
-			const float hold = g.m.released ? g.m.held : 1.0f;
-			// The sandbox's apex for this hold.
-			const auto expected = Ratchet::MeasureFlatJump(1.0f / 60.0f, hold);
-			SKSE::log::info("jump: apex {:.3f} m at {:.3f} s (sandbox {:.3f} m at {:.3f} s for a {:.3f} s hold), landed {:+.3f} m after {:.3f} s",
-				apex, g.m.apexTime, expected.fullApex, expected.fullTime, hold, (a_landZ - g.m.takeoffZ) * k, g.m.time);
-		}
-
-		// The auto test's jump button this frame.
-		bool TestHeld(float a_dt, bool a_grounded)
-		{
-			auto& t = g.test;
-			if (!t.armed) {
-				return false;
+			const AutoTest::Jump jump{
+				.apex = (g.m.apexZ - g.m.takeoffZ) * k,
+				.apexTime = g.m.apexTime,
+				.hold = g.m.released ? g.m.held : 1.0f,
+				.landDz = (a_landZ - g.m.takeoffZ) * k,
+				.airTime = g.m.time,
+			};
+			AutoTest::OnLanded(jump);
+			if (Settings::Get().logJumps && !AutoTest::Active()) {
+				// The sandbox's apex for this hold.
+				const auto expected = Ratchet::MeasureFlatJump(1.0f / 60.0f, jump.hold);
+				SKSE::log::info("jump: apex {:.3f} m at {:.3f} s (sandbox {:.3f} m at {:.3f} s for a {:.3f} s hold), landed {:+.3f} m after {:.3f} s",
+					jump.apex, jump.apexTime, expected.fullApex, expected.fullTime, jump.hold, jump.landDz, jump.airTime);
 			}
-			if (t.index >= static_cast<int>(std::size(kTestHolds))) {
-				t.armed = false;
-				SKSE::log::info("autotest: done");
-				if (Settings::Get().autoTestQuit) {
-					RE::Main::GetSingleton()->quitGame = true;
-				}
-				return false;
-			}
-			if (t.pressed >= 0.0f) {
-				t.elapsed += a_dt;
-				const bool hold = t.pressed == 0.0f || t.pressed < kTestHolds[t.index];
-				t.pressed += a_dt;
-				if (hold) {
-					return true;
-				}
-				if (!g.ours && a_grounded) {
-					// Landed (or never left): the next one after a pause.
-					if (!t.launched) {
-						SKSE::log::warn("autotest: jump {} didn't take off", t.index);
-					}
-					t.launched = false;
-					t.pressed = -1.0f;
-					t.settle = 0.0f;
-					++t.index;
-				} else if (t.elapsed > 5.0f) {
-					SKSE::log::warn("autotest: jump {} hasn't landed after 5 s; stopping", t.index);
-					t.index = static_cast<int>(std::size(kTestHolds));
-				}
-				return false;
-			}
-			t.settle = a_grounded ? t.settle + a_dt : 0.0f;
-			if (t.settle >= 2.0f) {
-				SKSE::log::info("autotest: jump {} holds the button {:.2f} s", t.index, kTestHolds[t.index]);
-				t.pressed = 0.0f;
-				t.elapsed = 0.0f;
-				return TestHeld(a_dt, a_grounded);
-			}
-			return false;
 		}
 
 		void Step(RE::PlayerCharacter* a_player, float a_dt)
@@ -251,6 +195,7 @@ namespace Jump
 			if (const char* why = NotOnFoot(a_player, ctrl)) {
 				if (g.ours) {
 					SKSE::log::info("jump: handed back to Skyrim mid-air ({})", why);
+					AutoTest::OnHandedBack(why);
 				}
 				EndOurs(ctrl);
 				ratchet_reset(g.sim);
@@ -260,7 +205,7 @@ namespace Jump
 
 			const float z = a_player->GetPositionZ();
 			const bool grounded = Grounded(ctrl);
-			const bool held = TestHeld(a_dt, grounded) || Input::JumpHeld();
+			const bool held = AutoTest::JumpButton(a_dt, grounded, g.ours) || Input::JumpHeld();
 			if (held && !g.prevHeld) {
 				g.pressOnGround = grounded && !g.ours;
 			}
@@ -288,10 +233,10 @@ namespace Jump
 
 			if (r.events & RATCHET_EVENT_JUMPED) {
 				Launch(a_player, ctrl, r.velocity.y);
-				g.test.launched = true;
+				AutoTest::OnTakeoff();
 			} else if (g.ours) {
 				if (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND) {
-					LogLanding(z);
+					ReportLanding(z);
 					Land(a_player, ctrl);
 				} else {
 					SetVerticalSpeed(ctrl, r.velocity.y);
@@ -370,31 +315,12 @@ namespace Jump
 			static inline REL::Relocation<decltype(Update)> _Update;
 		};
 
-		// [Debug] bAutoTest: the main menu loads the most recent save by itself.
-		struct MainMenuSink : RE::BSTEventSink<RE::MenuOpenCloseEvent>
-		{
-			RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
-			{
-				if (a_event && a_event->opening && a_event->menuName == RE::MainMenu::MENU_NAME && !done) {
-					done = true;
-					SKSE::log::info("autotest: loading the most recent save");
-					SKSE::GetTaskInterface()->AddTask([] { RE::BGSSaveLoadManager::GetSingleton()->LoadMostRecentSaveGame(); });
-				}
-				return RE::BSEventNotifyControl::kContinue;
-			}
-			bool done = false;
-		};
 	}
 
 	void Install()
 	{
 		g.sim = Ratchet::NewSim();
 		Input::LogBindings();
-		if (Settings::Get().autoTest) {
-			static MainMenuSink sink;
-			RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
-			SKSE::log::info("autotest: on");
-		}
 
 		REL::Relocation<std::uintptr_t> jumpVtbl{ RE::VTABLE_JumpHandler[0] };
 		JumpHandlerHook::_CanProcess = jumpVtbl.write_vfunc(0x1, JumpHandlerHook::CanProcess);
@@ -415,15 +341,5 @@ namespace Jump
 		g.prevHeld = false;
 		g.pressOnGround = false;
 		g.last = {};
-		g.test = {};
-	}
-
-	void OnGameLoaded()
-	{
-		Reset();
-		if (Settings::Get().autoTest && g.sim) {
-			g.test.armed = true;
-			SKSE::log::info("autotest: armed ({} jumps once he's stood still for 2 s)", std::size(kTestHolds));
-		}
 	}
 }

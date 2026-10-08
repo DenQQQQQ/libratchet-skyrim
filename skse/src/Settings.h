@@ -16,10 +16,6 @@ struct Settings
 	bool logJumps = true;
 	// Per-frame trace while a jump is active (big logs).
 	bool traceJumps = false;
-	// A test run without anyone at the keyboard: load the most recent save from the main menu,
-	// make a few jumps (a tap, a short and a full hold) where the player stands, log them, quit.
-	bool autoTest = false;
-	bool autoTestQuit = true;
 
 	static Settings& Get()
 	{
