@@ -35,6 +35,69 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (evening): turning in the air and in dashes, from the game
+
+His turn in the air was ours: toward where he was going, at 14 rad/s. A research agent read
+the game's rule.
+
+### Read from RiftApart.exe
+- **In jumps, double jumps, falls, glides and wall jumps**, the same mover turn law as on the
+  ground at (−13, −10, 1500°/s), all scaled by the fourth root of how hard the stick is pushed:
+  - let go: full strength above the air run's minimum speed (4 m/s), none below, so he keeps
+    facing where he was;
+  - before NoInputTime: the take-off push;
+  - a wall jump always at full strength.
+- **What he turns to:**
+  - the take-off direction until NoInputTime;
+  - the aim in a strafe jump;
+  - else the stick's direction (let go, the take-off direction if the stick wasn't touched
+    since, else straight on);
+  - after the first frame, blended back toward where he faces by the jump's momentum share:
+    about 0.03 a frame for a single jump (he turns at once), 0.72 for a double jump, a fall or
+    a wall jump (lazily).
+- **The mover config's OrientGain and OrientDamp** (−3, −30) don't turn him; they tilt his up
+  vector.
+- **Dashes:**
+  - The dodge (ground dash) steers its direction toward the stick every frame, by the same law
+    at its config's TurnSpeedGain/Damp/Max, and snaps his facing to it.
+  - The air dash turns his facing by HeroDashConfig's (−15, −8, 180°/s), the class defaults:
+    the asset sets none of them.
+- **HeroDashConfig's other defaults:** MaxSpeed 12, Acceleration 100, Distance 7. The asset's
+  AirDashConfig sets only its distance and speed, so the air dash speeds up at 100 m/s². We
+  had read the missing acceleration as 0, an instant start.
+- **No gravity in the air dash.** This settles an earlier assumption; its code never touches
+  the vertical speed.
+- **Also found:**
+  - Idle's entry turn is (−8, −30, 720°/s).
+  - The ground turn's looser start (−1.5, −40, blending to normal over 0.33–0.66 s) applies
+    when a run request sets a flag whose setter wasn't found.
+  - Which mover gravity the hero runs with (−25 from the constructor, or the config default
+    −10) is still open.
+
+### Built
+- **The air turn:** `air_turn` and a shared `turn_law`. A fall now carries its own take-off
+  (along its speed, as the game's fall message does), which its facing follows.
+- **The ground dash bends toward the stick**, at up to 180°/s. In the air dash his facing
+  turns toward the stick (or the aim if he was strafing) by its own law; its path holds.
+- **Dash configs:** fields a config leaves out keep the class defaults. The air dash speeds up
+  at 100 m/s². The defaults without configs are the game's (dodge 7 m at up to 30 m/s, air
+  dash 7 m at 12 m/s).
+- **`turn_rate`** (ours) now only turns him during the melee and the Hyper-Strike.
+- **Tests:**
+  - the air turn: a single jump turns at once, a double jump lags, a light push is weaker, and
+    he doesn't turn with the stick let go while slow;
+  - a dash bending toward the stick;
+  - the air dash speeding up.
+  - The C API's ledge test now stands him facing the block before the fall. With the stick let
+    go he no longer swings round to face it, which is the game's rule.
+
+### Derived or assumed
+- **The dodge's turn values:** HeroDashConfig's class defaults, assumed shared with the air
+  dash's config.
+- **Per tick:** the momentum share used for the facing blend is the same 60 fps reading as
+  the velocity's.
+- **The swing jump's facing** (not read) follows the same rule.
+
 ## 2026-10-08 (afternoon): code review fixes
 
 Three review agents read the sim, the ledges/Swingshot code with the C API and libarsenal,

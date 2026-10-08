@@ -197,6 +197,14 @@ const MOVE_STICK: f32 = 0.07;
 /// (running or strafing, 1500°/s) and standing (aiming or firing, 2500°/s).
 const MOVING_TURN: (f32, f32, f32) = (-4.0, -25.0, 26.18);
 const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
+/// In the air: the mover turn's gain, damp and cap (rad/s), before the stick scales them
+/// (RiftApart.exe).
+const AIR_TURN: (f32, f32, f32) = (-13.0, -10.0, 26.18);
+/// The dashes' turn law (gain, damp, cap in rad/s, 180°/s): HeroDashConfig's TurnSpeedGain,
+/// Damp and Max, which the asset doesn't set, so the class defaults (RiftApart.exe). The dodge
+/// steers its direction by it, the air dash his facing. (Assumption: the dodge's config has the
+/// same defaults as the air dash's.)
+const DASH_TURN: (f32, f32, f32) = (-15.0, -8.0, std::f32::consts::PI);
 /// Closer than this (radians), the turn snaps onto its target (RiftApart.exe).
 const TURN_SNAP: f32 = 0.005;
 /// A jump coming down after its NoFallTime only becomes a fall more than this far above the
@@ -250,6 +258,8 @@ pub struct Ratchet {
     prev_jump: bool,
     prev_dash: bool,
     dash_dir: Vec2,
+    /// The dash's turn toward the stick (its turn law's rate, rad/s).
+    dash_turn_omega: f32,
     dash_speed: f32,
     dash_travelled: f32,
     dash_braking: bool,
@@ -359,6 +369,7 @@ impl Ratchet {
             prev_jump: false,
             prev_dash: false,
             dash_dir: Vec2::ZERO,
+            dash_turn_omega: 0.0,
             dash_speed: 0.0,
             dash_travelled: 0.0,
             dash_braking: false,
@@ -607,6 +618,7 @@ impl Ratchet {
                 } else if self.melee_wanted() && self.start_swing(self.combo_swing(), stick) {
                     self.swing(dt, false, stick, position);
                 } else {
+                    self.steer_dash(dt, stick);
                     self.ground_dash(dt);
                 }
             }
@@ -1011,6 +1023,7 @@ impl Ratchet {
         self.dash_braking = false;
         self.dash_time = 0.0;
         self.dash_jump_queued = false;
+        self.dash_turn_omega = 0.0;
         self.extending = false;
         self.state = kind;
         if kind == MoveState::AirDash {
@@ -1026,6 +1039,18 @@ impl Ratchet {
         if !self.dash_strafe {
             self.facing_yaw = self.dash_dir.x.atan2(self.dash_dir.y);
         }
+    }
+
+    /// The ground dash's direction turns toward the stick (RiftApart.exe: the dodge steers it
+    /// every frame by the mover's turn law, at its config's TurnSpeedGain/Damp/Max).
+    fn steer_dash(&mut self, dt: f32, stick: Vec2) {
+        if stick.length() <= MOVE_STICK {
+            self.dash_turn_omega = 0.0;
+            return;
+        }
+        let yaw = self.dash_dir.x.atan2(self.dash_dir.y);
+        let yaw = turn_law(yaw, stick.x.atan2(stick.y), &mut self.dash_turn_omega, DASH_TURN, dt);
+        self.dash_dir = Vec2::new(yaw.sin(), yaw.cos());
     }
 
     fn dash_params(&self, kind: MoveState) -> DashParams {
@@ -1285,6 +1310,12 @@ impl Ratchet {
         self.air_time = 0.0;
         self.extending = false;
         self.chain_origin_y = None;
+        // The fall's own take-off (RiftApart.exe): along the speed he has, pushed as hard as
+        // that speed is of the run's top speed. His facing follows it (`air_turn`).
+        let flat = Vec2::new(self.velocity.x, self.velocity.z);
+        self.jump_dir = if flat.length() > 1e-3 { flat.normalize() } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) };
+        self.jump_stick = (flat.length() / self.tuning.air_speeds.run_max.max(1e-3)).min(1.0);
+        self.jump_carry = true;
     }
 
     fn land(&mut self) {
@@ -1388,11 +1419,10 @@ impl Ratchet {
     }
 
     /// Turns Ratchet toward where he should face: the aim while strafing, else where he's
-    /// going. On the ground this is the game's mover turn (RiftApart.exe): each tick takes an
-    /// exponential share of the angle left (gain) plus part of the last tick's turn (damp),
-    /// capped per second and never past the target; moving, a 180° turn is 90 % done in about
-    /// a quarter second, standing it's nearly a snap. In the air and during moves, a plain turn
-    /// rate (ours).
+    /// going. On the ground this is the game's mover turn (RiftApart.exe, `mover_turn`):
+    /// moving, a 180° turn is 90 % done in about a quarter second, standing it's nearly a snap.
+    /// In the air the jumps' own rule (`air_turn`). During the melee and the Hyper-Strike, a
+    /// plain turn rate (ours).
     fn turn(&mut self, dt: f32) {
         // On a ledge, a swing or a wall, the move sets his facing.
         if matches!(self.state, MoveState::LedgeHang | MoveState::LedgeClimb | MoveState::LedgeDrop | MoveState::Swing | MoveState::Hook) {
@@ -1404,14 +1434,38 @@ impl Ratchet {
             self.turn_omega = 0.0;
             return;
         }
-        // Dashing, he faces the aim (snapped, every tick) if he was strafing when the dash
+        // In an air dash he turns by the dash's own turn law, toward the aim if he was strafing
+        // when it started, else the stick, or where it goes (RiftApart.exe).
+        if self.state == MoveState::AirDash {
+            let toward = match self.aiming {
+                Some(aim) if self.dash_strafe => aim,
+                _ if self.stick.length() > MOVE_STICK => self.stick,
+                _ => self.dash_dir,
+            };
+            self.mover_turn(toward.x.atan2(toward.y), DASH_TURN, dt);
+            return;
+        }
+        // On the ground he faces the aim (snapped, every tick) if he was strafing when the dash
         // started, else where the dash goes (RiftApart.exe).
-        if matches!(self.state, MoveState::Dash | MoveState::AirDash) {
+        if self.state == MoveState::Dash {
             let toward = if self.dash_strafe { self.aiming } else { Some(self.dash_dir) };
             if let Some(d) = toward {
                 self.facing_yaw = d.x.atan2(d.y);
             }
             self.turn_omega = 0.0;
+            return;
+        }
+        if matches!(
+            self.state,
+            MoveState::Jump
+                | MoveState::DoubleJump
+                | MoveState::Fall
+                | MoveState::Glide
+                | MoveState::WallJump
+                | MoveState::LedgeJump
+                | MoveState::SwingJump
+        ) {
+            self.air_turn(dt);
             return;
         }
         let flat = Vec2::new(self.velocity.x, self.velocity.z);
@@ -1432,19 +1486,90 @@ impl Ratchet {
             self.turn_omega = 0.0;
             return;
         }
-        if diff.abs() <= TURN_SNAP {
-            self.facing_yaw = target;
+        self.mover_turn(target, if moving { MOVING_TURN } else { STANDING_TURN }, dt);
+    }
+
+    /// The game's mover turn toward the yaw `target` (RiftApart.exe): each tick takes an
+    /// exponential share of the angle left (gain) plus part of the last tick's turn (damp),
+    /// capped per second (cap) and never past the target.
+    fn mover_turn(&mut self, target: f32, law: (f32, f32, f32), dt: f32) {
+        let mut omega = self.turn_omega;
+        self.facing_yaw = turn_law(self.facing_yaw, target, &mut omega, law, dt);
+        self.turn_omega = omega;
+    }
+
+    /// Facing in a jump, a fall or a glide (RiftApart.exe):
+    /// - the target: the take-off direction until NoInputTime; the aim while strafing; else the
+    ///   stick's direction (let go, the take-off direction if it wasn't touched since, else
+    ///   straight on). After the first tick it's blended back toward where he faces by the
+    ///   jump's momentum share, so a double jump or a fall turns lazily and a single jump at once;
+    /// - the turn: the mover's law at (−13, −10, 1500°/s), all three scaled by the fourth root of
+    ///   the stick's push. Let go, that's full strength above the air run's minimum speed and
+    ///   none below (he keeps facing where he was); a wall jump always turns at full strength;
+    ///   until NoInputTime it's the take-off push.
+    fn air_turn(&mut self, dt: f32) {
+        let params = match self.state {
+            MoveState::Fall => self.tuning.fall.clone(),
+            MoveState::Glide => self.tuning.glide.clone(),
+            s => self.params(s).clone(),
+        };
+        let forward = Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos());
+        let push = self.stick.length().min(1.0);
+        let before_input = self.air_time < params.no_input_time;
+        let dir = if before_input {
+            self.jump_dir
+        } else if let Some(aim) = self.aiming {
+            aim
+        } else if push > MOVE_STICK {
+            self.stick / self.stick.length()
+        } else if self.jump_carry {
+            self.jump_dir
+        } else {
+            forward
+        };
+        let first = self.air_time <= dt + 1e-6;
+        let target = if first || before_input || self.aiming.is_some() || dir == Vec2::ZERO {
+            dir
+        } else {
+            let r = params.momentum_keep(self.air_time, dt);
+            Vec2::from_angle(dir.angle_to(forward) * r).rotate(dir)
+        };
+        if target.length_squared() < 1e-6 {
             self.turn_omega = 0.0;
             return;
         }
-        let (gain, damp, cap) = if moving { MOVING_TURN } else { STANDING_TURN };
-        // Only the upper end is clamped (as in the game), so a turn of exactly 180° has a side.
-        let err = diff.min(0.99 * std::f32::consts::PI);
-        let carry = 0.5 * dt * self.turn_omega * (2.0 - (damp * dt / 30.0).exp());
-        let step = (carry + (1.0 - (gain * dt).exp()) * err).clamp(-cap * dt, cap * dt).clamp(-err.abs(), err.abs());
-        self.turn_omega = step / dt;
-        self.facing_yaw = wrap_angle(self.facing_yaw + step);
+        let flat_speed = Vec2::new(self.velocity.x, self.velocity.z).length();
+        let strength = if self.state == MoveState::WallJump {
+            1.0
+        } else if before_input {
+            self.jump_stick
+        } else if push > MOVE_STICK || flat_speed <= self.tuning.air_speeds.run_min {
+            push
+        } else {
+            1.0
+        };
+        let k = strength.clamp(0.0, 1.0).powf(0.25);
+        let (gain, damp, cap) = AIR_TURN;
+        self.mover_turn(target.x.atan2(target.y), (gain * k, damp * k, cap * k), dt);
     }
+}
+
+/// One tick of the game's mover turn from the yaw `current` toward `target` (RiftApart.exe): an
+/// exponential share of the angle left (gain) plus part of the last tick's turn (damp,
+/// carried in `omega`), capped per second (cap) and never past the target; within 0.005 rad
+/// it snaps on.
+fn turn_law(current: f32, target: f32, omega: &mut f32, (gain, damp, cap): (f32, f32, f32), dt: f32) -> f32 {
+    let diff = wrap_angle(target - current);
+    if diff.abs() <= TURN_SNAP {
+        *omega = 0.0;
+        return target;
+    }
+    // Only the upper end is clamped (as in the game), so a turn of exactly 180° has a side.
+    let err = diff.min(0.99 * std::f32::consts::PI);
+    let carry = 0.5 * dt * *omega * (2.0 - (damp * dt / 30.0).exp());
+    let step = (carry + (1.0 - (gain * dt).exp()) * err).clamp(-cap * dt, cap * dt).clamp(-err.abs(), err.abs());
+    *omega = step / dt;
+    wrap_angle(current + step)
 }
 
 /// The same angle in -π..=π.

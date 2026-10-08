@@ -1297,3 +1297,76 @@ fn a_dash_pressed_just_before_landing_dashes_on_landing() {
     }
     assert!(h.events.iter().any(|(_, e)| *e == Event::Dashed), "no dash on landing (now {:?})", h.r.state());
 }
+
+/// How far (radians) he turns toward the stick pushed sideways at `push`, over `secs`, in a jump
+/// `double` or not, starting from a standstill facing +Z.
+fn air_turn_toward_stick(push: f32, double: bool, secs: f32) -> f32 {
+    let mut h = Flat::new(Tuning::default());
+    h.tick(true, Vec2::ZERO);
+    for _ in 0..24 {
+        h.tick(double, Vec2::ZERO);
+    }
+    if double {
+        // Let go, then press again for the double jump.
+        h.tick(false, Vec2::ZERO);
+        h.tick(true, Vec2::ZERO);
+        assert_eq!(h.r.state(), MoveState::DoubleJump);
+    }
+    let start = h.r.facing_yaw();
+    for _ in 0..(secs / DT) as usize {
+        h.tick(false, Vec2::new(push, 0.0));
+    }
+    h.r.facing_yaw() - start
+}
+
+#[test]
+fn in_the_air_he_turns_by_the_games_rule() {
+    // Toward a stick pushed sideways: a single jump turns to it at once, a double jump lags
+    // (its momentum share holds the target back), and a light push turns him more slowly
+    // (the turn scales with its fourth root).
+    let single = air_turn_toward_stick(1.0, false, 0.1);
+    let double = air_turn_toward_stick(1.0, true, 0.1);
+    let light = air_turn_toward_stick(0.3, false, 0.1);
+    assert!(single > 1.2, "a single jump turned {single:.2} rad in 0.1 s");
+    assert!(double < single * 0.8, "a double jump turned {double:.2} rad, a single {single:.2}");
+    assert!(light < single && light > 0.2, "a light push turned {light:.2} rad, a full one {single:.2}");
+    // Let go of the stick while slow, he keeps facing where he was.
+    let mut h = Flat::new(Tuning::default());
+    h.tick(true, Vec2::new(1.0, 0.0));
+    let yaw = h.r.facing_yaw();
+    for _ in 0..30 {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert!(close(h.r.facing_yaw(), yaw, 1e-3), "turned from {yaw:.3} to {:.3} with the stick let go", h.r.facing_yaw());
+}
+
+#[test]
+fn a_dash_curves_toward_the_stick_at_up_to_180_degrees_a_second() {
+    let mut h = Flat::new(Tuning::default());
+    h.tick_with(Input { dash: true, move_dir: Vec2::new(0.0, 1.0), ..Default::default() });
+    assert_eq!(h.r.state(), MoveState::Dash);
+    // The stick swung round to +X: the dash bends toward it, no faster than 180°/s.
+    for _ in 0..24 {
+        h.tick(false, Vec2::new(1.0, 0.0));
+    }
+    assert_eq!(h.r.state(), MoveState::Dash);
+    let d = h.r.dash_dir();
+    let turned = d.x.atan2(d.y);
+    assert!(turned > 0.15 && turned <= std::f32::consts::PI * 0.2 + 1e-3, "turned {:.1}° in 0.2 s", turned.to_degrees());
+}
+
+#[test]
+fn an_air_dash_speeds_up_to_its_top_speed() {
+    // HeroDashConfig's acceleration (100 m/s²) applies; the asset only sets distance and speed.
+    let t = Tuning::default();
+    let mut h = Flat::falling(t.clone());
+    h.tick(false, Vec2::ZERO);
+    h.tick_with(Input { dash: true, move_dir: Vec2::new(0.0, 1.0), ..Default::default() });
+    assert_eq!(h.r.state(), MoveState::AirDash);
+    let first = h.r.velocity().z;
+    assert!(first < t.air_dash.max_speed * 0.5, "started at {first} m/s");
+    for _ in 0..18 {
+        h.tick(false, Vec2::new(0.0, 1.0));
+    }
+    assert!(close(h.r.velocity().z, t.air_dash.max_speed, 0.01), "at {} m/s after 0.15 s", h.r.velocity().z);
+}

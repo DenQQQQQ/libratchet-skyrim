@@ -717,20 +717,23 @@ mod tests {
     fn catches_a_ledge_through_the_c_api() {
         let sim = ratchet_new(1.0);
         unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: Some(block_raycast), swing_targets: None }) };
-        // Facing the block a metre out, falling from above its top.
+        // A metre out from the block, above its top: standing first (on a floor that then goes
+        // away), turned to face it, then falling.
         let mut pos = RatchetVec3 { x: 0.0, y: 5.6, z: 0.0 };
         let face = RatchetInput { move_x: 1.0, ..Default::default() };
         let mut seen = 0;
         let mut state = 0;
         let mut last = RatchetStepResult::default();
-        for i in 0..240 {
-            let contact = RatchetContact { grounded: (i == 0) as u8, has_ground_distance: 1, ground_distance: pos.y, ..Default::default() };
-            let input = if i < 2 { face } else { RatchetInput::default() };
+        for i in 0..280 {
+            let standing = i < 40;
+            let ground_distance = if standing { 0.0 } else { pos.y };
+            let contact = RatchetContact { grounded: standing as u8, has_ground_distance: 1, ground_distance, ..Default::default() };
+            let input = if standing { face } else { RatchetInput::default() };
             let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
             seen |= r.events;
             state = r.state;
             last = r;
-            if i > 0 {
+            if !standing {
                 pos.y += r.velocity.y / 120.0;
             }
         }

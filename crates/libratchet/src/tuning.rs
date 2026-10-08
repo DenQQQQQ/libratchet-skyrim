@@ -858,8 +858,8 @@ pub struct Tuning {
     pub ground_decel: f32,
     pub air_accel: f32,
     pub glide_accel: f32,
-    /// How fast the character turns in the air and during moves (rad/s, ours). On the ground
-    /// the game's mover turn applies (see `Ratchet`).
+    /// How fast the character turns during the melee and the Hyper-Strike (rad/s, ours). On the
+    /// ground and in the air the game's own turns apply (see `Ratchet`).
     pub turn_rate: f32,
     pub single_jump: JumpParams,
     pub double_jump: JumpParams,
@@ -952,8 +952,9 @@ impl Default for Tuning {
                 ..JumpParams::FALLBACK
             },
             max_midair_jumps: 1,
-            ground_dash: DashParams { distance: 6.5, max_speed: 28.0, accel: 100.0, decel: 50.0 },
-            air_dash: DashParams { distance: 6.5, max_speed: 12.0, accel: 0.0, decel: 0.0 },
+            // The game's DodgeConfig, and AirDashConfig over HeroDashConfig's class defaults.
+            ground_dash: DashParams { distance: 7.0, max_speed: 30.0, accel: 100.0, decel: 50.0 },
+            air_dash: DashParams { distance: 7.0, max_speed: 12.0, accel: 100.0, decel: 0.0 },
             melee: MeleeParams::default(),
             ledge: LedgeParams::default(),
             swingshot: SwingshotParams::default(),
@@ -1162,12 +1163,13 @@ fn dash_from(v: &Value, base: &DashParams) -> DashParams {
     if !v.is_object() {
         return base.clone();
     }
-    // Fields a config leaves out default to 0 (instant start / instant stop).
+    // Fields a config leaves out keep the class's defaults (`base`): AirDashConfig sets only its
+    // distance and top speed, and HeroDashConfig's Acceleration defaults to 100 (RiftApart.exe).
     DashParams {
         distance: f(v, "Distance").unwrap_or(base.distance),
         max_speed: f(v, "MaxSpeed").unwrap_or(base.max_speed),
-        accel: f(v, "Acceleration").unwrap_or(0.0),
-        decel: f(v, "Deceleration").unwrap_or(0.0),
+        accel: f(v, "Acceleration").unwrap_or(base.accel),
+        decel: f(v, "Deceleration").unwrap_or(base.decel),
     }
 }
 
