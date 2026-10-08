@@ -307,6 +307,94 @@ namespace Model
 			Hang(g_pistol, hand, held == Combat::Hand::kPistol);
 		}
 
+		// Additive layers over the move clip, as the sandbox's graph adds them
+		// (apps/sandbox/src/ratchet_model.rs): his upper body bending toward the crosshair while
+		// he strafes (the pistol's aim poses scrubbed by the angle up or down and to the side of
+		// where he faces), the pistol's recoil on each shot, and the throw.
+		struct Layers
+		{
+			float         aimWeight = 0.0f;
+			float         fireTime = -1.0f;  // < 0: not playing
+			float         throwTime = -1.0f;
+			std::uint32_t shotsSeen = 0;
+			std::uint32_t throwsSeen = 0;
+		};
+		Layers g_layers;
+
+		constexpr float kAimUp = 90.0f;  // degrees the aim poses reach (the sandbox's)
+		constexpr float kAimDown = 45.0f;
+		constexpr float kAimSide = 90.0f;
+		constexpr float kLayerFadeIn = 0.08f;
+		constexpr float kLayerFadeOut = 0.25f;
+
+		void AddLayers(RE::PlayerCharacter* a_player, const Drive& a_drive, float a_speed, float a_dt)
+		{
+			const auto play = [](std::string_view a_name, float a_t, float a_weight) {
+				if (const Anim::Clip* clip = s.lib.Find(a_name)) {
+					s.lib.AddAdditive(*clip, a_t, a_weight, s.pose);
+				}
+			};
+
+			// Aiming (not while dashing: the dash clips are whole-body).
+			const bool aiming = a_drive.strafing && a_drive.simState != RATCHET_STATE_DASH && a_drive.simState != RATCHET_STATE_AIR_DASH;
+			const float fade = a_dt / kLayerFadeIn;
+			g_layers.aimWeight = aiming ? std::min(1.0f, g_layers.aimWeight + fade) : std::max(0.0f, g_layers.aimWeight - fade);
+			if (g_layers.aimWeight > 0.0f && a_drive.aimAt) {
+				const float        u = UnitsPerMetre();
+				const RE::NiPoint3 from = a_player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.85f * Settings::Get().scale * u };
+				const RE::NiPoint3 d = *a_drive.aimAt - from;
+				// The sim's yaw: atan2(x, z) with z south.
+				const float yaw = std::atan2(d.x, -d.y) - a_drive.facingYaw;
+				const float side = WrapAngle(yaw) * (180.0f / 3.14159265f);
+				const float pitch = std::atan2(d.z, std::sqrt(d.x * d.x + d.y * d.y)) * (180.0f / 3.14159265f);
+				const bool  running = a_speed > kMoving;
+				const char* vertical = running ? "aim_pistol_run_v_additive" : "aim_pistol_v_additive";
+				const char* across = running ? "aim_pistol_run_h_additive" : "aim_pistol_h_additive";
+				if (const Anim::Clip* clip = s.lib.Find(vertical)) {
+					const float half = clip->seconds * 0.5f;
+					const float t = pitch >= 0.0f ? half * (1.0f - pitch / kAimUp) : half * (1.0f - pitch / kAimDown);
+					s.lib.AddAdditive(*clip, std::clamp(t, 0.0f, clip->seconds * 0.999f), g_layers.aimWeight, s.pose);
+				}
+				if (const Anim::Clip* clip = s.lib.Find(across)) {
+					const float half = clip->seconds * 0.5f;
+					const float t = half * (1.0f + side / kAimSide);
+					s.lib.AddAdditive(*clip, std::clamp(t, 0.0f, clip->seconds * 0.999f), g_layers.aimWeight, s.pose);
+				}
+			}
+
+			// The recoil, restarted by each shot.
+			if (a_drive.shots != g_layers.shotsSeen) {
+				g_layers.shotsSeen = a_drive.shots;
+				g_layers.fireTime = 0.0f;
+			}
+			if (g_layers.fireTime >= 0.0f) {
+				g_layers.fireTime += a_dt;
+				const Anim::Clip* clip = s.lib.Find("fire_pistol_additive");
+				if (!clip || g_layers.fireTime >= clip->seconds) {
+					g_layers.fireTime = -1.0f;
+				} else {
+					const float t = g_layers.fireTime;
+					play(clip->name, t, std::min({ t / 0.03f, 1.0f, (clip->seconds - t) / 0.12f }));
+				}
+			}
+
+			// The throw, restarted by each one.
+			if (a_drive.throws != g_layers.throwsSeen) {
+				g_layers.throwsSeen = a_drive.throws;
+				g_layers.throwTime = 0.0f;
+			}
+			if (g_layers.throwTime >= 0.0f) {
+				g_layers.throwTime += a_dt;
+				const Anim::Clip* clip = s.lib.Find("throw_additive");
+				if (!clip || g_layers.throwTime >= clip->seconds) {
+					g_layers.throwTime = -1.0f;
+				} else {
+					const float t = g_layers.throwTime;
+					play(clip->name, t, std::min({ t / kLayerFadeIn, 1.0f, (clip->seconds - t) / kLayerFadeOut }));
+				}
+			}
+		}
+
 		void PickClip(const Drive& a_drive, float a_speed, float a_vy, float a_dt)
 		{
 			const bool air = a_drive.simJump ? a_drive.simState != RATCHET_STATE_GROUND : !a_drive.grounded;
@@ -525,6 +613,7 @@ namespace Model
 		} else {
 			s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.pose);
 		}
+		AddLayers(a_player, a_drive, speed, a_dt);
 
 		for (std::size_t i = 0; i < s.nodes.size(); ++i) {
 			auto* node = s.nodes[i];
@@ -541,9 +630,16 @@ namespace Model
 		HoldWeapons(a_player);
 		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 		s.model->Update(update);
-		if (const auto thrown = Combat::ThrownWrench(); thrown && g_wrench.node && g_wrench.node->parent != s.model.get()) {
-			// Not under his model: it needs its own update.
-			g_wrench.node->Update(update);
+		// Once a throw, a few frames out: where the flying wrench is drawn against where it flies.
+		static int thrownFrames = 0;
+		if (const auto thrown = Combat::ThrownWrench(); thrown && g_wrench.node) {
+			if (++thrownFrames == 10) {
+				SKSE::log::info("ratchet model: the thrown wrench is drawn {:.2f} m from where it flies ({}, under {})",
+					g_wrench.node->world.translate.GetDistance(thrown->first) / UnitsPerMetre(), g_wrench.node->GetAppCulled() ? "culled" : "shown",
+					g_wrench.node->parent ? g_wrench.node->parent->name.c_str() : "nothing");
+			}
+		} else {
+			thrownFrames = 0;
 		}
 	}
 }

@@ -779,6 +779,7 @@ namespace Jump
 												  .grounded = !ctrl || Grounded(ctrl), .wallRight = g.last.wall_right != 0,
 												  .ledgeMove = g.last.ledge_move, .verticalSpeed = g.last.velocity.y,
 												  .meleeSwing = g.last.melee_swing, .strafing = Combat::Strafing(), .strafeAngle = strafeAngle,
+												  .aimAt = Combat::AimTarget(), .shots = Combat::Shots(), .throws = Combat::Throws(),
 												  .hasFacing = true, .facingYaw = g.last.facing_yaw });
 				}
 			}

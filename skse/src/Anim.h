@@ -54,6 +54,10 @@ namespace Anim
 		Pose Rest() const;
 		// The clip at time a_t (looped or held at its ends) over the rest pose.
 		void Sample(const Clip& a_clip, float a_t, bool a_loop, Pose& a_out) const;
+		// An additive clip (its keys are changes) at a_t on top of a_pose, at a_weight, as
+		// Bevy's additive blend does it: translations added, rotations turned by
+		// slerp(identity, change, weight) after the pose's.
+		void AddAdditive(const Clip& a_clip, float a_t, float a_weight, Pose& a_pose) const;
 
 	private:
 		std::vector<Joint> _joints;

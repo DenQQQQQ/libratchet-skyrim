@@ -19,6 +19,9 @@ namespace Model
 		std::uint32_t meleeSwing = 0;   // the wrench combo's swing (0 = first)
 		bool          strafing = false; // aiming or firing: facing the aim
 		float         strafeAngle = 0.0f;  // the way he moves from where he faces, radians (0 ahead, pi/2 right)
+		std::optional<RE::NiPoint3> aimAt;  // what the crosshair is on while he strafes (game units)
+		std::uint32_t shots = 0;        // shots so far (his recoil restarts on a change)
+		std::uint32_t throws = 0;       // throws so far
 		// The sim's facing (radians, atan2(x, z) in its axes): he turns the way Rift Apart turns him.
 		bool          hasFacing = false;
 		float         facingYaw = 0.0f;

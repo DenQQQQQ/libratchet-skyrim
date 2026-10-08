@@ -76,6 +76,10 @@ namespace Combat
 			float          thrownFor = 0.0f;    // seconds out
 			float          thrownFar = 0.0f;    // metres out at most
 			std::vector<RE::ActorHandle> struck;  // hit by this throw already
+			// For his poses.
+			std::optional<RE::NiPoint3> aimAt;
+			std::uint32_t               shots = 0;
+			std::uint32_t               throws = 0;
 		};
 		State c;
 
@@ -267,6 +271,7 @@ namespace Combat
 			c.thrownFar = 0.0f;
 			c.struck.clear();
 			++c.tally.throws;
+			++c.throws;
 			Sounds::Play("wrench_throw", hand);
 			Sounds::Play("voice_throw", hand);
 			SKSE::log::info("combat: the wrench leaves his hand ({})", c.thrown ? "flying" : "the sim didn't throw it");
@@ -364,8 +369,8 @@ namespace Combat
 			dir.Unitize();
 			Spells::Shoot(muzzle, Scatter(dir, c.spread), kShotDamage * Settings::Get().damageMult);
 			Sounds::Play("pistol_shot", muzzle);
-			if (c.shotsInARow == 1) {
-				AutoTest::OnMove("shot");
+			if (c.shotsInARow == 3) {
+				AutoTest::OnMove("shot");  // his aim pose is in by then
 			}
 			if (something) {
 				// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
@@ -373,6 +378,7 @@ namespace Combat
 			}
 			c.sinceShot = 0.0f;
 			++c.tally.shots;
+			++c.shots;
 		}
 
 		// --- Skyrim's own fighting, off on foot
@@ -484,7 +490,14 @@ namespace Combat
 			Fly(a_player, a_dt);
 		}
 		Gun(a_player, a_dt);
+		c.aimAt = Strafing() ? std::optional(AimPoint().first) : std::nullopt;
 	}
+
+	std::optional<RE::NiPoint3> AimTarget() { return c.aimAt; }
+
+	std::uint32_t Shots() { return c.shots; }
+
+	std::uint32_t Throws() { return c.throws; }
 
 	std::optional<std::pair<RE::NiPoint3, float>> ThrownWrench()
 	{

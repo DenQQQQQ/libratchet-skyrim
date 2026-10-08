@@ -34,6 +34,11 @@ namespace Combat
 	// The thrown wrench while it flies: where it is (game units) and how far it has spun
 	// (radians, flat).
 	std::optional<std::pair<RE::NiPoint3, float>> ThrownWrench();
+	// While he strafes: the point the crosshair is on (game units), for his aim pose.
+	std::optional<RE::NiPoint3> AimTarget();
+	// Shots fired and wrenches thrown so far (his recoil and throw poses restart on a change).
+	std::uint32_t Shots();
+	std::uint32_t Throws();
 
 	// Tests: the buttons, as if held (nullopt gives them back).
 	struct TestButtons

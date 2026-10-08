@@ -396,6 +396,19 @@ The owner played the combat build and reported three things:
   its bounds), not its middle: a lunge along a cow's 2.5 m side used to miss.
 
 Tests: **17/17 pass at lore size**, now with a wrench throw, a hunter who has to fight back and a
-guard who has to report the assault. The test place clears hostiles that wander in (a wolf and a
+guard who has to report the assault.
+
+### Additive layers (his aim, recoil and throw)
+- Screenshots showed the pistol hanging at his side while aiming. In the sandbox, additive layers
+  bend his upper body toward the crosshair. The plugin now plays additive clips the way Bevy's
+  additive blend does: translations added, rotations as `slerp(identity, change, weight) * pose`.
+  - Aiming: `aim_pistol_v/h_additive` (or `_run_` while moving), scrubbed by the crosshair's
+    angle up or down (up to 90°, down to 45°) and to the side (90°). Fade 0.08 s.
+  - `fire_pistol_additive` restarts with each shot (fade 0.03 s in, 0.12 s out).
+  - `throw_additive` restarts with each throw (0.08 in, 0.25 out).
+- In game, by the third aimed shot his arm is out in front, pointing at the target.
+- Fixed with it: sampling a clip left joints it doesn't key wherever the last clip had put
+  them. They're back at rest now.
+- The flying wrench, checked by a log line: drawn 0.00 m from where the sim has it, shown. The test place clears hostiles that wander in (a wolf and a
 mudcrab bit him on the Whiterun road) by killing them. Disabling them instead crashed Skyrim's
 pathfinding thread on the way out, since a path request was still in flight.

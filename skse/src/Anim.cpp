@@ -64,6 +64,15 @@ namespace Anim
 			return Normalized({ a_a.w + (a_b.w - a_a.w) * a_w, a_a.x + (a_b.x - a_a.x) * a_w, a_a.y + (a_b.y - a_a.y) * a_w,
 				a_a.z + (a_b.z - a_a.z) * a_w });
 		}
+
+		// The Hamilton product a * b (b's turn first, then a's), as glam's.
+		RE::NiQuaternion Multiply(const RE::NiQuaternion& a_a, const RE::NiQuaternion& a_b)
+		{
+			return Normalized({ a_a.w * a_b.w - a_a.x * a_b.x - a_a.y * a_b.y - a_a.z * a_b.z,
+				a_a.w * a_b.x + a_a.x * a_b.w + a_a.y * a_b.z - a_a.z * a_b.y,
+				a_a.w * a_b.y - a_a.x * a_b.z + a_a.y * a_b.w + a_a.z * a_b.x,
+				a_a.w * a_b.z + a_a.x * a_b.y - a_a.y * a_b.x + a_a.z * a_b.w });
+		}
 	}
 
 	bool Library::Load(const std::filesystem::path& a_file)
@@ -145,9 +154,9 @@ namespace Anim
 
 	void Library::Sample(const Clip& a_clip, float a_t, bool a_loop, Pose& a_out) const
 	{
-		if (a_out.t.size() != _joints.size()) {
-			a_out = Rest();
-		}
+		// Joints the clip doesn't key stay at rest (not where the last clip sampled into this pose
+		// left them).
+		a_out = Rest();
 		const float last = static_cast<float>(a_clip.frames > 0 ? a_clip.frames - 1 : 0);
 		float f = a_t * a_clip.rate;
 		if (a_loop && last > 0.0f) {
@@ -186,6 +195,35 @@ namespace Anim
 					break;
 				}
 			}
+		}
+	}
+
+	void Library::AddAdditive(const Clip& a_clip, float a_t, float a_weight, Pose& a_pose) const
+	{
+		if (a_weight <= 0.0f || a_pose.t.size() != _joints.size()) {
+			return;
+		}
+		const float last = static_cast<float>(a_clip.frames > 0 ? a_clip.frames - 1 : 0);
+		const float f = std::clamp(a_t * a_clip.rate, 0.0f, last);
+		const auto  i0 = static_cast<std::uint32_t>(f);
+		const auto  i1 = std::min(i0 + 1, a_clip.frames > 0 ? a_clip.frames - 1 : 0);
+		const float w = f - static_cast<float>(i0);
+		const RE::NiQuaternion identity{ 1.0f, 0.0f, 0.0f, 0.0f };
+		for (const auto& tr : a_clip.tracks) {
+			const float* v = tr.values.data();
+			if (tr.path == 0) {
+				const float* a = v + (tr.constant ? 0 : i0 * 3);
+				const float* b = v + (tr.constant ? 0 : i1 * 3);
+				const RE::NiPoint3 d{ a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w };
+				a_pose.t[tr.joint] = a_pose.t[tr.joint] + d * a_weight;
+			} else if (tr.path == 1) {
+				const float* a = v + (tr.constant ? 0 : i0 * 4);
+				const float* b = v + (tr.constant ? 0 : i1 * 4);
+				const RE::NiQuaternion d = Nlerp({ a[3], a[0], a[1], a[2] }, { b[3], b[0], b[1], b[2] }, w);
+				// Bevy's additive rotation: slerp(identity, d, weight) * base.
+				a_pose.r[tr.joint] = Multiply(Nlerp(identity, d, a_weight), a_pose.r[tr.joint]);
+			}
+			// Scale: none of his additive clips key it.
 		}
 	}
 
