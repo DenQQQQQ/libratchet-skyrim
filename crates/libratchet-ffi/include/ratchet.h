@@ -3,11 +3,17 @@
  * Coordinates: Y up, metres. Skyrim hosts convert (Z up, ~70 units per metre).
  * Each tick: fill RatchetInput + RatchetContact, call ratchet_step, move the character by
  * result.velocity * dt with your own collision, then report the new contacts next tick.
+ *
+ * Versioning: RATCHET_API_VERSION goes up with every change to a struct or function here.
+ * Fields are only ever added at the end of a struct, never moved or removed. Check
+ * ratchet_api_version() == RATCHET_API_VERSION before using anything else.
  */
 #ifndef RATCHET_H
 #define RATCHET_H
 
 #include <stdint.h>
+
+#define RATCHET_API_VERSION 1u
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,7 +119,6 @@ typedef struct RatchetStepResult {
     float facing_yaw;        /* radians, atan2(x, z) */
     float landed_fall_speed; /* valid when RATCHET_EVENT_LANDED is set */
     uint32_t melee_swing;    /* combo swing (0 = first) in progress or of this tick's swing/hit event */
-    float wall_normal_x, wall_normal_z; /* on a wall or in a wall jump (10, 11): the wall's normal */
     uint8_t wall_right;      /* on a wall or in a wall jump: 1 if the game's right wall clips fit, 0 left */
     float gravity;           /* how fast he's pulled down now, m/s^2, e.g. for RatchetContact.landing_ahead */
     uint8_t ledge_caught;    /* with RATCHET_EVENT_LEDGE_GRABBED: 1 caught on the way down, 0 placed */
@@ -135,6 +140,7 @@ typedef struct RatchetStepResult {
     float swing_lean, swing_speed;    /* on a swing (16): the game's swing-loop animation values. Lean 0
                                          swinging ahead, 0.5 stalled at an end, 1 back; Speed toward 1
                                          as he passes slowly under the target */
+    float wall_normal_x, wall_normal_z; /* on a wall or in a wall jump (10, 11): the wall's normal */
 } RatchetStepResult;
 
 /* A placed ledge (the game's ledge paths): a straight stretch of edge he can hang from. */
@@ -179,6 +185,9 @@ typedef struct RatchetSwingInfo {
 } RatchetSwingInfo;
 
 typedef struct RatchetWrench RatchetWrench;
+
+/* The API version the library was built with: compare with RATCHET_API_VERSION. */
+uint32_t ratchet_api_version(void);
 
 /* Generic default tuning, scaled (1 = Ratchet-sized). Free with ratchet_free. */
 RatchetSim *ratchet_new(float scale); /* scale <= 0 or not a number: 1 */

@@ -238,9 +238,6 @@ pub struct RatchetStepResult {
     pub landed_fall_speed: f32,
     /// Combo swing (0 = first) in progress, or of this tick's swing/hit event.
     pub melee_swing: u32,
-    /// On a wall or in a wall jump (states 10, 11): the wall's normal (x, z).
-    pub wall_normal_x: f32,
-    pub wall_normal_z: f32,
     /// On a wall or in a wall jump: 1 if the game's right wall clips fit, 0 for the left.
     pub wall_right: u8,
     /// How fast he's pulled down right now (m/s²), e.g. for `RatchetContact::landing_ahead`.
@@ -275,6 +272,9 @@ pub struct RatchetStepResult {
     /// stalled at an end, 1 swinging back; Speed: toward 1 as he passes slowly under the target.
     pub swing_lean: f32,
     pub swing_speed: f32,
+    /// On a wall or in a wall jump (states 10, 11): the wall's normal (x, z).
+    pub wall_normal_x: f32,
+    pub wall_normal_z: f32,
 }
 
 /// What a combo swing does, for hosts that apply damage.
@@ -322,6 +322,18 @@ fn state_code(s: MoveState) -> u32 {
         MoveState::Hook => 17,
         MoveState::SwingJump => 18,
     }
+}
+
+/// The C API's version (`RATCHET_API_VERSION` in ratchet.h): raised with every change to its
+/// structs or functions. Fields are only ever added at the end of a struct, never moved or
+/// removed.
+pub const RATCHET_API_VERSION: u32 = 1;
+
+/// The API version this library was built with, for a host to check against the header it was
+/// built with (`RATCHET_API_VERSION`) before using anything else.
+#[unsafe(no_mangle)]
+pub extern "C" fn ratchet_api_version() -> u32 {
+    RATCHET_API_VERSION
 }
 
 /// Creates a sim with generic default tuning, scaled by `scale` (1 = Ratchet-sized).
@@ -476,8 +488,6 @@ pub unsafe extern "C" fn ratchet_step(
         facing_yaw: sim.sim.facing_yaw(),
         landed_fall_speed,
         melee_swing,
-        wall_normal_x: sim.sim.wall_normal().x,
-        wall_normal_z: sim.sim.wall_normal().y,
         wall_right: sim.sim.wall_right() as u8,
         gravity: sim.sim.gravity(),
         ledge_caught,
@@ -502,6 +512,8 @@ pub unsafe extern "C" fn ratchet_step(
         dash_dir_z: dash_dir.y,
         swing_lean: sim.sim.swing_lean_speed().map_or(0.0, |s| s.0),
         swing_speed: sim.sim.swing_lean_speed().map_or(0.0, |s| s.1),
+        wall_normal_x: sim.sim.wall_normal().x,
+        wall_normal_z: sim.sim.wall_normal().y,
     }
 }
 
@@ -637,6 +649,15 @@ pub unsafe extern "C" fn ratchet_reset(sim: *mut RatchetSim) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The header's RATCHET_API_VERSION is the library's.
+    #[test]
+    fn the_header_has_the_librarys_api_version() {
+        let header = include_str!("../include/ratchet.h");
+        assert!(header.contains(&format!("#define RATCHET_API_VERSION {RATCHET_API_VERSION}u
+")), "ratchet.h's version isn't {RATCHET_API_VERSION}");
+        assert_eq!(ratchet_api_version(), RATCHET_API_VERSION);
+    }
 
     #[test]
     fn jump_through_the_c_api() {

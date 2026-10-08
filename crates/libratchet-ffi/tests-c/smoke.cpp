@@ -5,6 +5,10 @@
 #include <cstdio>
 
 int main() {
+    if (ratchet_api_version() != RATCHET_API_VERSION) {
+        std::printf("library API %u, header %u\n", ratchet_api_version(), RATCHET_API_VERSION);
+        return 1;
+    }
     RatchetSim* sim = ratchet_new(1.0f);
     RatchetVec3 feet{0, 0, 0};
     RatchetContact contact{1, 0, 1, 0.0f};
