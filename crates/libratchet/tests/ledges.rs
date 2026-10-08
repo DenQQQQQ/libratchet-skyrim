@@ -67,6 +67,8 @@ struct Climber {
     contact: Contact,
     time: f32,
     events: Vec<(f32, Event)>,
+    /// The tick length.
+    dt: f32,
 }
 
 impl Climber {
@@ -84,8 +86,8 @@ impl Climber {
         r.set_facing_yaw(std::f32::consts::FRAC_PI_2);
         let pos = Vec3::new(1.0 - away, height, 0.0);
         let contact = Contact { grounded: false, ground_distance: Some(height), hit_ceiling: false, wall: None, wall_jump_zone: false, landing_ahead: false };
-        let mut c = Climber { r, world, pos, contact, time: 0.0, events: vec![] };
-        // Into the air (not off an edge: no walk-off catch).
+        let mut c = Climber { r, world, pos, contact, time: 0.0, events: vec![], dt: DT };
+        // Into the air: the next tick he leaves the ground, as if he'd walked off an edge.
         c.r.step_in(DT, &Input::default(), &Contact { grounded: true, ..c.contact }, c.pos, &c.world);
         c
     }
@@ -103,13 +105,14 @@ impl Climber {
     }
 
     fn tick_with(&mut self, input: Input) {
-        let v = self.r.step_in(DT, &input, &self.contact, self.pos, &self.world);
+        let dt = self.dt;
+        let v = self.r.step_in(dt, &input, &self.contact, self.pos, &self.world);
         self.events.extend(self.r.events().iter().map(|e| (self.time, *e)));
-        self.time += DT;
+        self.time += dt;
         let mut p = self.pos;
         // Down onto tops, then sideways unless that goes into a box.
         let mut grounded = false;
-        let next_y = p.y + v.y * DT;
+        let next_y = p.y + v.y * dt;
         if v.y <= 0.0 {
             let mut floor = f32::NEG_INFINITY;
             for (lo, hi) in &self.world.boxes {
@@ -129,7 +132,7 @@ impl Climber {
         }
         for axis in [0, 2] {
             let mut n = p;
-            n[axis] += v[axis] * DT;
+            n[axis] += v[axis] * dt;
             if !self.world.inside(n) {
                 p = n;
             }
@@ -261,4 +264,88 @@ fn jumps_from_a_placed_ledge_to_one_above_and_drops_with_a_turn() {
     // Not back onto the ledge it let go of on the way down.
     c.until(3.0, |c| c.r.state() == MoveState::Ground || c.r.state() == MoveState::LedgeHang);
     assert!(c.r.ledge().is_none_or(|(p, _)| !close(p.y, 6.5, 0.01)));
+}
+
+/// Him standing on a box `stand` tall (x from -5 to 0, facing +X) and a second box `top` tall
+/// past a 1 m gap (x from 1).
+fn on_a_box(stand: f32, top: f32, ledges: Vec<Ledge>) -> Climber {
+    let world = Boxes {
+        boxes: vec![
+            (Vec3::new(-50.0, -1.0, -50.0), Vec3::new(50.0, 0.0, 50.0)),
+            (Vec3::new(-5.0, 0.0, -3.0), Vec3::new(0.0, stand, 3.0)),
+            (Vec3::new(1.0, 0.0, -3.0), Vec3::new(5.0, top, 3.0)),
+        ],
+        ledges,
+    };
+    let mut r = Ratchet::new(Tuning::default());
+    r.set_facing_yaw(std::f32::consts::FRAC_PI_2);
+    Climber { r, world, pos: Vec3::new(-0.3, stand, 0.0), contact: Contact::default(), time: 0.0, events: vec![], dt: DT }
+}
+
+#[test]
+fn catches_a_lip_ahead_coming_down_from_a_jump() {
+    // A jump from a 5 m box at a 6 m one that falls short: caught on the way down (the jump's
+    // search, ahead only).
+    let mut c = on_a_box(5.0, 6.0, vec![]);
+    let toward = Vec2::new(1.0, 0.0);
+    for _ in 0..24 {
+        c.tick(true, false, toward);
+    }
+    c.until(3.0, |c| matches!(c.r.state(), MoveState::LedgeHang | MoveState::Ground));
+    assert_eq!(c.r.state(), MoveState::LedgeHang, "never caught it, ended at {:?}", c.pos);
+    assert!(close(c.r.ledge().unwrap().0.y, 6.0, 0.01));
+}
+
+#[test]
+fn walking_off_a_placed_ledge_does_not_grab_it_behind_him() {
+    // A 2 m box with a placed ledge along its edge: walking off it, the ledge is behind him.
+    let edge = Ledge { a: Vec3::new(0.0, 2.0, -3.0), b: Vec3::new(0.0, 2.0, 3.0), normal: Vec2::new(1.0, 0.0), id: 1, flags: LedgeFlags::default() };
+    let mut c = on_a_box(2.0, 0.5, vec![edge]);
+    c.until(2.0, |c| c.pos.x > 0.4 || c.r.state() == MoveState::LedgeHang);
+    let away = Vec2::new(1.0, 0.0);
+    while c.time < 3.0 && !matches!(c.r.state(), MoveState::LedgeHang) && !(c.r.state() == MoveState::Ground && c.pos.y < 1.0) {
+        c.tick(false, false, away);
+    }
+    assert!(c.first(|e| matches!(e, Event::LedgeGrabbed { .. })).is_none(), "grabbed the ledge behind him at {:?}", c.pos);
+}
+
+#[test]
+fn a_jump_press_on_a_ledge_without_the_ledge_jump_hangs_on() {
+    let mut c = Climber::before_platform(4.0, 2.5, 0.7).with_ledge(1, 4.0);
+    c.world.ledges[0].flags = LedgeFlags { jump: false, ..LedgeFlags::default() };
+    c.until(1.0, |c| c.r.state() == MoveState::LedgeHang && c.r.ledge_move().is_none());
+    c.tick(true, false, Vec2::ZERO);
+    for _ in 0..30 {
+        c.tick(false, false, Vec2::ZERO);
+    }
+    assert_eq!(c.r.state(), MoveState::LedgeHang, "let go on a plain jump press");
+    // The drop button still lets go.
+    c.tick(false, true, Vec2::ZERO);
+    assert_eq!(c.r.state(), MoveState::LedgeDrop);
+}
+
+#[test]
+fn a_placed_ledge_taken_away_drops_him() {
+    let mut c = Climber::before_platform(4.0, 2.5, 0.7).with_ledge(1, 4.0);
+    c.until(1.0, |c| c.r.state() == MoveState::LedgeHang && c.r.ledge_move().is_none());
+    c.world.ledges.clear();
+    c.tick(false, false, Vec2::ZERO);
+    assert_eq!(c.r.state(), MoveState::Fall);
+}
+
+#[test]
+fn a_fast_fall_catches_the_lip_at_30_hz() {
+    // From 6 to 16 m above the lip, at 30 ticks a second he falls up to 1.7 m a tick, more than
+    // the catch window; the catch sweeps the tick's fall.
+    let mut missed = vec![];
+    for i in 0..40 {
+        let height = 10.0 + i as f32 * 0.25;
+        let mut c = Climber::before_platform(4.0, height, 1.0);
+        c.dt = 1.0 / 30.0;
+        c.until(5.0, |c| c.r.state() == MoveState::LedgeHang || (c.r.state() == MoveState::Ground && c.pos.y < 0.5));
+        if c.r.state() != MoveState::LedgeHang {
+            missed.push(height);
+        }
+    }
+    assert!(missed.is_empty(), "missed the lip falling from {missed:?} m");
 }

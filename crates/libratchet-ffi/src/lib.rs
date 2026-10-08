@@ -37,7 +37,8 @@ pub struct RatchetInput {
     pub aim_x: f32,
     pub aim_z: f32,
     /// The camera's right on the ground plane (zero without one): wall jumps take their side
-    /// from it, as in the game.
+    /// from it, as in the game, and the Swingshot frames its view and pumps sideways by it
+    /// (worked out from `view_forward_*` when zero).
     pub view_right_x: f32,
     pub view_right_z: f32,
     /// Crouch (the ledge drop button) held (0/1).

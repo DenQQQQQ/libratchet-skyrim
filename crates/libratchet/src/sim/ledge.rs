@@ -31,8 +31,9 @@ const TRANSFER_UP_MIN: f32 = 1.0;
 const HANG_BODY: f32 = 0.65;
 /// Ledge heights more than this apart, the smaller height change wins over the nearer ledge.
 const TRANSFER_HEIGHT_PREFERENCE: f32 = 0.5;
-/// A ledge to move to must be at least this much in front of him (direction · ahead).
-const TRANSFER_AHEAD: f32 = 0.075;
+/// A ledge to grab or move to must be at least this much in front of him (his facing · the
+/// level direction to it), and one to move to must face him at least this much.
+const IN_FRONT: f32 = 0.075;
 /// Grabbing a placed ledge looks from this far above his feet (from his feet in double jumps
 /// and air dashes), and doesn't check he faces it this close to the ground.
 const FROM_AIR_LIFT: f32 = 1.0;
@@ -94,7 +95,7 @@ fn progress(path: &RootPath, t: f32) -> f32 {
 
 impl Ratchet {
     /// Grabs a ledge in reach while he's coming down: a placed one first, then one to catch.
-    pub(crate) fn try_grab_ledge(&mut self, world: &dyn World, position: Vec3, ground_distance: Option<f32>) -> bool {
+    pub(crate) fn try_grab_ledge(&mut self, world: &dyn World, position: Vec3, ground_distance: Option<f32>, dt: f32) -> bool {
         let from_feet = matches!(self.state, MoveState::DoubleJump | MoveState::AirDash);
         if let Some(hold) = self.find_path_ledge(world, position, from_feet, ground_distance) {
             self.grab(hold, position, LedgeMove::Grab);
@@ -103,7 +104,10 @@ impl Ratchet {
         let mode = if self.walk_off_time > 0.0 { Recovery::WalkOff } else { Recovery::Jump };
         let s = self.tuning.scale;
         let window = if self.state == MoveState::AirDash { (AIR_DASH_RECOVERY.0 * s, AIR_DASH_RECOVERY.1 * s) } else { (f32::NEG_INFINITY, f32::INFINITY) };
-        if let Some(hold) = self.find_recovery_ledge(world, position, mode, window) {
+        // A lip that passed through the window during this tick counts, so fast falls at low
+        // tick rates don't step over it.
+        let fallen = (-self.velocity.y * dt).max(0.0);
+        if let Some(hold) = self.find_recovery_ledge(world, position, mode, window, fallen) {
             self.grab(hold, position, LedgeMove::FromFall);
             return true;
         }
@@ -135,8 +139,9 @@ impl Ratchet {
     }
 
     /// A placed ledge inside the FromAir window: up to `side` past its ends, up to `forward` out
-    /// from it, its height within the window over a point FROM_AIR_LIFT above him, facing him
-    /// with him facing it (not checked near the ground), and not the one he just left.
+    /// from it, its height within the window over a point FROM_AIR_LIFT above him, in front of
+    /// him, facing him with him facing it (not checked near the ground), and not the one he just
+    /// left.
     fn find_path_ledge(&self, world: &dyn World, position: Vec3, from_feet: bool, ground_distance: Option<f32>) -> Option<Hold> {
         let w = &self.tuning.ledge.from_air;
         let s = self.tuning.scale;
@@ -166,7 +171,8 @@ impl Ratchet {
             if !(0.0..=w.forward).contains(&out) || height < w.height_min || height > w.height_max {
                 continue;
             }
-            if check_facing && facing.dot(-ledge.normal) <= 0.0 {
+            // In front of him always, so walking off a ledge's edge doesn't grab it behind him.
+            if facing.dot(-to_eye.normalize_or_zero()) <= IN_FRONT || (check_facing && facing.dot(-ledge.normal) <= 0.0) {
                 continue;
             }
             let distance = to_eye.length() + height.abs();
@@ -181,7 +187,7 @@ impl Ratchet {
     /// round after walking off) within reach and the search heights, its top level enough, the
     /// wall below it not sticking out, room to hang below it and to climb onto it, and both
     /// hands on it.
-    fn find_recovery_ledge(&self, world: &dyn World, position: Vec3, mode: Recovery, window: (f32, f32)) -> Option<Hold> {
+    fn find_recovery_ledge(&self, world: &dyn World, position: Vec3, mode: Recovery, window: (f32, f32), fallen: f32) -> Option<Hold> {
         let p: &RecoveryParams = match mode {
             Recovery::Jump => &self.tuning.ledge.recovery_jump,
             Recovery::WalkOff => &self.tuning.ledge.recovery_run_off,
@@ -196,7 +202,7 @@ impl Ratchet {
         // this far over his feet (it then sinks him into the hang), so lower lips wait (ours).
         let catch = self.tuning.ledge.hang_down + self.tuning.ledge.from_fall.end().y;
         let lo = position.y + p.search_min.max(catch).max(window.0);
-        let hi = position.y + p.search_max.min(window.1);
+        let hi = position.y + p.search_max.min(window.1) + fallen;
         if lo > hi {
             return None;
         }
@@ -264,6 +270,19 @@ impl Ratchet {
             self.enter_fall();
             return;
         };
+        // A placed ledge the level no longer offers drops him (the game: path gone or disabled).
+        if let Some(path) = hold.path {
+            let mut near = Vec::new();
+            world.ledges(hold.point, 0.5 * self.tuning.scale, &mut near);
+            if !near.iter().any(|l| l.id == path.id && l.flags.grab) {
+                self.hold = None;
+                self.ledge_move = None;
+                self.velocity = Vec3::ZERO;
+                self.enter_fall();
+                self.events.push(Event::LedgeDropped);
+                return;
+            }
+        }
         self.ledge_time += dt;
         let target = hold.hang_point(self.tuning.ledge.hang_out, self.tuning.ledge.hang_down);
         if let Some(how) = self.ledge_move {
@@ -341,9 +360,11 @@ impl Ratchet {
             self.events.push(Event::LedgeTransferred);
             return;
         }
+        // Jump climbs over (the stick not pointing away); the drop button, or jump with the stick
+        // pointing away, lets go.
         if jump && !away && path.flags.jump {
             self.ledge_jump(dt, hold, position);
-        } else if path.flags.drop {
+        } else if path.flags.drop && (drop || away) {
             self.let_go(hold, true);
         }
     }
@@ -361,7 +382,8 @@ impl Ratchet {
         let along = current.along();
         let mut best: Option<(f32, f32, Hold)> = None;
         for ledge in ledges {
-            if ledge.id == current.id || !ledge.flags.transfer || ledge.normal.dot(hold.normal) <= 0.0 {
+            // The candidate must take grabs, and face him (RiftApart.exe).
+            if ledge.id == current.id || !ledge.flags.grab || ledge.normal.dot(-hold.normal) >= IN_FRONT {
                 continue;
             }
             let (point, _) = ledge.closest(hold.point);
@@ -370,7 +392,8 @@ impl Ratchet {
             if below != (rise < 0.0) || rise < w.height_min || rise > w.height_max {
                 continue;
             }
-            if offset.dot(along).abs() > w.side || offset.dot(ahead) > w.forward || (point - position).normalize_or_zero().dot(ahead) <= TRANSFER_AHEAD {
+            let flat = Vec3::new(point.x - position.x, 0.0, point.z - position.z).normalize_or_zero();
+            if offset.dot(along).abs() > w.side || offset.dot(ahead) > w.forward || flat.dot(ahead) <= IN_FRONT {
                 continue;
             }
             let distance = offset.length();

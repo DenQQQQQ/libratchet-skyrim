@@ -64,6 +64,14 @@ fn approach(value: f32, target: f32, rate: &mut f32, (gain, damp, max): (f32, f3
     value + step
 }
 
+/// The camera's side (its right on the level) worked out from its forward, for hosts that
+/// don't give it: square to the forward, or to `fallback` when the camera looks straight up or
+/// down.
+fn view_side(forward: Vec3, fallback: Vec3) -> Vec3 {
+    let side = forward.cross(Vec3::Y);
+    if side.length_squared() > 1e-4 { side.normalize() } else { fallback.cross(Vec3::Y).normalize_or_zero() }
+}
+
 impl Ratchet {
     /// The game's target hunt, each tick: which targets qualify, each one's grace period, and
     /// the best-scoring one to fire at.
@@ -76,7 +84,7 @@ impl Ratchet {
         let facing = Vec3::new(self.facing_yaw.sin(), 0.0, self.facing_yaw.cos());
         let forward = if input.view_forward.length_squared() > 0.25 { input.view_forward.normalize() } else { facing };
         let right = Vec3::new(input.view_right.x, 0.0, input.view_right.y);
-        let right = if right.length_squared() > 0.25 { right.normalize() } else { Vec3::new(-facing.z, 0.0, facing.x) };
+        let right = if right.length_squared() > 0.25 { right.normalize() } else { view_side(forward, facing) };
         let up = right.cross(forward).normalize_or_zero();
         let (tan_h, tan_v) = ((p.horiz_fov * 0.5).to_radians().tan(), (p.vert_fov * 0.5).to_radians().tan());
         // The score, from his feet: 1.2 × (1 − cos)/2 of the angle off the camera's forward,
@@ -94,7 +102,7 @@ impl Ratchet {
         // The best one qualifying now; the score has to beat zero.
         let mut best = (0.0, None);
         for t in targets {
-            let known = self.swing_seen.iter().position(|(k, _)| *k == t);
+            let known = self.swing_seen.iter().position(|(k, _)| k.id == t.id && k.kind == t.kind);
             if world.raycast(apex, t.position).is_some_and(|h| h.point.distance(t.position) > SIGHT_SLACK * s) {
                 // Out of sight: dropped at once, grace or not.
                 if let Some(i) = known {
@@ -111,7 +119,7 @@ impl Ratchet {
                 continue;
             }
             match known {
-                Some(i) => self.swing_seen[i].1 = 0.0,
+                Some(i) => self.swing_seen[i] = (t, 0.0),
                 None => self.swing_seen.push((t, 0.0)),
             }
             let score = score(&t);
@@ -154,7 +162,7 @@ impl Ratchet {
             axis,
             normal: axis.cross(Vec3::Y).normalize_or_zero(),
             strength: (1.4 * speed).min(p.max_speed),
-            push_ahead: 0.0,
+            push_ahead: (1.4 * speed).min(p.max_speed),
             push_side: 0.0,
         });
         self.state = if target.kind == SwingKind::Hook { MoveState::Hook } else { MoveState::Swing };
@@ -166,11 +174,17 @@ impl Ratchet {
     }
 
     /// One tick of the swing.
-    pub(crate) fn swing_tick(&mut self, dt: f32, input: &Input, jump_pressed: bool, position: Vec3) {
+    pub(crate) fn swing_tick(&mut self, dt: f32, input: &Input, jump_pressed: bool, position: Vec3, world: &dyn World) {
         let Some(mut sw) = self.swingshot else {
             self.enter_fall();
             return;
         };
+        if !self.target_still_there(world, &sw.target) {
+            self.swingshot = None;
+            self.events.push(Event::SwingReleased);
+            self.enter_fall();
+            return;
+        }
         let p = self.tuning.swingshot.clone();
         let t = sw.target.position;
         let r = position - t;
@@ -209,6 +223,7 @@ impl Ratchet {
         if below {
             let forward = if input.view_forward.length_squared() > 0.25 { input.view_forward.normalize() } else { sw.axis };
             let side = Vec3::new(input.view_right.x, 0.0, input.view_right.y).normalize_or_zero();
+            let side = if side == Vec3::ZERO { view_side(forward, sw.axis) } else { side };
             let stick = input.move_dir.clamp_length_max(1.0);
             // The stick here is in the world; read it against the camera's axes.
             let flat_forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
@@ -287,11 +302,17 @@ impl Ratchet {
     /// One tick of the Hookshot: reeled along the cable to the target's length (its hand ahead
     /// of him on the cable), speeding up and slowing to stop there; sideways speed drags off and
     /// sags. Arrived (the tick after the reel gets there), or with the button let go, he drops.
-    pub(crate) fn hook_tick(&mut self, dt: f32, input: &Input, position: Vec3) {
+    pub(crate) fn hook_tick(&mut self, dt: f32, input: &Input, position: Vec3, world: &dyn World) {
         let Some(mut sw) = self.swingshot else {
             self.enter_fall();
             return;
         };
+        if !self.target_still_there(world, &sw.target) {
+            self.swingshot = None;
+            self.events.push(Event::SwingReleased);
+            self.enter_fall();
+            return;
+        }
         let p = self.tuning.swingshot.clone();
         let t = sw.target.position;
         let dir = (t - position).normalize_or_zero();
@@ -328,8 +349,18 @@ impl Ratchet {
         side += (g - dir * g.dot(dir)) * dt;
         let next = t - dir * (new_d + p.hook_hand) + side * dt;
         self.velocity = (next - position) / dt.max(1e-6);
-        self.facing_yaw = dir.x.atan2(dir.z);
+        if Vec2::new(dir.x, dir.z).length() > 0.1 {
+            self.facing_yaw = dir.x.atan2(dir.z);
+        }
         self.swingshot = Some(sw);
+    }
+
+    /// The level still offers the target he's on (the game lets go once it's gone or switched
+    /// off).
+    fn target_still_there(&self, world: &dyn World, target: &SwingTarget) -> bool {
+        let mut near = Vec::new();
+        world.swing_targets(target.position, 0.5 * self.tuning.scale, &mut near);
+        near.iter().any(|t| t.id == target.id && t.kind == target.kind)
     }
 
     /// The Swingshot target he'd fire at now, if any.

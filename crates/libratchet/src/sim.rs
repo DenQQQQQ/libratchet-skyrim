@@ -40,7 +40,8 @@ pub struct Input {
     /// in its view, and a swing pumps along it.
     pub view_forward: Vec3,
     /// The camera's right on the ground plane (x, z), or zero without a camera: the game picks a
-    /// wall jump's side by it (its clips, and which way he turns off the wall).
+    /// wall jump's side by it (its clips, and which way he turns off the wall), and the Swingshot
+    /// frames its view and pumps sideways by it (worked out from `view_forward` when zero).
     pub view_right: Vec2,
 }
 
@@ -616,7 +617,7 @@ impl Ratchet {
             }
             MoveState::AirDash => {
                 self.air_time += dt;
-                if self.try_grab_ledge(world, position, contact.ground_distance) {
+                if self.try_grab_ledge(world, position, contact.ground_distance, dt) {
                 } else if melee_pressed && self.can_smash(contact) {
                     self.start_smash(dt);
                 } else {
@@ -634,7 +635,7 @@ impl Ratchet {
                 }
                 self.integrate_vertical(dt, self.jump_gravity, params.terminal_velocity);
                 // Ledges come first (RiftApart.exe), on the way down.
-                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance)) || self.try_wall_stick(contact, position) {
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
                 } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -669,7 +670,7 @@ impl Ratchet {
                 self.air_time += dt;
                 self.air_steer(dt, stick);
                 self.fall_under(dt, &params);
-                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance)) || self.try_wall_stick(contact, position) {
+                if (self.velocity.y < 0.0 && self.try_grab_ledge(world, position, contact.ground_distance, dt)) || self.try_wall_stick(contact, position) {
                 } else if pressed && self.can_midair_jump(&params, position, contact) {
                     self.start_jump(dt, MoveState::DoubleJump, position);
                 } else if melee_pressed && self.can_smash(contact) {
@@ -702,7 +703,7 @@ impl Ratchet {
                 let accel = self.tuning.glide_accel;
                 self.steer(dt, stick, speeds.speed_for_stick(stick.length()), accel, accel);
                 self.integrate_vertical(dt, params.gravity(), self.glide_terminal);
-                if self.try_grab_ledge(world, position, contact.ground_distance) || self.try_wall_stick(contact, position) {
+                if self.try_grab_ledge(world, position, contact.ground_distance, dt) || self.try_wall_stick(contact, position) {
                     self.events.push(Event::GlideEnded);
                 } else if melee_pressed && self.can_smash(contact) {
                     self.events.push(Event::GlideEnded);
@@ -723,8 +724,8 @@ impl Ratchet {
                 self.ledge_hang(dt, jump_age, crouch_age, stick, world, position, contact.grounded);
             }
             MoveState::LedgeClimb => self.ledge_climb(dt, position, contact.grounded),
-            MoveState::Swing => self.swing_tick(dt, input, pressed, position),
-            MoveState::Hook => self.hook_tick(dt, input, position),
+            MoveState::Swing => self.swing_tick(dt, input, pressed, position, world),
+            MoveState::Hook => self.hook_tick(dt, input, position, world),
             MoveState::LedgeDrop => self.ledge_drop(dt, position, contact.grounded),
         }
 

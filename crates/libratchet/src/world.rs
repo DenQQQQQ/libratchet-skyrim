@@ -67,6 +67,7 @@ pub struct SwingTarget {
     /// Its own range limits, where it has them.
     pub min_range: Option<f32>,
     pub max_range: Option<f32>,
+    /// The host's id for it, one per target: the sim tells targets apart by it.
     pub id: u32,
 }
 

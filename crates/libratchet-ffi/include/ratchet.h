@@ -28,7 +28,8 @@ typedef struct RatchetInput {
                              aim-mode jumps), 2 = strafing while firing from the hip (normal speeds) */
     float aim_x, aim_z;
     float view_right_x, view_right_z; /* the camera's right on the ground plane (zero without one):
-                                         wall jumps take their side from it */
+                                         wall jumps take their side from it; the Swingshot frames
+                                         its view and pumps by it (from view_forward when zero) */
     uint8_t crouch;       /* crouch (the ledge drop button) held */
     uint8_t swingshot;    /* the Swingshot button held: pressed with a target in view, he swings on it
                              (or the Hookshot reels him in) while it's held */

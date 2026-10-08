@@ -85,11 +85,44 @@ fixing.
   - A cooked throw no longer shows its wind-up while the last throw's wait is still on,
     since letting go then threw nothing.
 
+### Fixed: ledges and the Swingshot
+- **Placed ledges:**
+  - **Behind him:** walking off a placed ledge's edge within 2.2 m of the ground grabbed it,
+    turning him 180° into the hang. The ledge must always be in front of him; only the
+    facing test is skipped near the ground (the game notes: "in front of him and facing him,
+    skip the facing test within 2.2 m").
+  - **A jump press** on a ledge without the ledge jump let go of it. Now only the drop button,
+    or jump with the stick pointing away, lets go, as in the game.
+  - **Moving to another ledge** follows the game's rules (RiftApart.exe):
+    - the candidate must take grabs (path flag 0x2), not allow moving on from it;
+    - it must face him (its normal · his forward < 0.075);
+    - it must lie in front of him on the level. A 3D direction could miss a ledge almost
+      straight above.
+  - **A placed ledge the level takes away** now drops him; he used to hang on nothing.
+- **Catching a lip:** the catch also takes a lip that passed through its height window during
+  the tick. At 30 ticks a second, falls from 10 to 20 m stepped over the window every time.
+- **The Swingshot:**
+  - **The pick without the camera's right** let almost anything ahead of the camera through.
+    The right is now worked out from the camera's forward, for the pick and the sideways pump.
+  - **The forward push** starts with the pump's strength, min(1.4·speed, 24), as the game's does
+    (RiftApart.exe); we started it at 0.
+  - **A target the level takes away** lets him go, as in the game.
+  - **Facing:** a Hookshot cable straight up no longer snaps his facing to 0.
+  - **The grace list** matches targets by the host's id. Targets need unique ids.
+
 ### Tests
 - **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
   out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.
 - **Four more tests** cover the momentum blend, the Hookshot's arrival and the rate of fire,
   each across tick rates, and no wind-up during a cooked shot's wait.
+- **Six for ledges and the Swingshot:**
+  - a catch coming down from a jump (the jump-mode search was untested);
+  - walking off a placed ledge;
+  - a jump press without the ledge jump;
+  - a ledge taken away;
+  - fast falls at 30 Hz;
+  - the pick without the camera's right.
+  - The ledge tests also note that their start counts as walking off an edge.
 
 ## 2026-10-08 (afternoon): a tick that takes no time; a fuzz test
 

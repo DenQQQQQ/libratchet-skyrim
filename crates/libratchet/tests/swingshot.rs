@@ -145,14 +145,15 @@ fn targets_out_of_view_out_of_range_or_far_below_arent_picked() {
         s.tick(false, false, Vec2::ZERO);
         assert_eq!(s.r.swing_target().is_some(), picked, "{} m below", 15.0 - y);
     }
-    // The button held from before doesn't fire: it has to be pressed.
+    // Pressed once and held, he swings; once the level takes the target away, he lets go.
     let mut s = Swinger::new(vec![target(Vec3::new(0.0, 6.0, 4.0), SwingKind::Swing, 5.0)]);
     for _ in 0..60 {
         s.tick(true, false, Vec2::ZERO);
     }
+    assert_eq!(s.r.state(), MoveState::Swing, "pressed once, swinging");
     s.world.0.clear();
     s.tick(true, false, Vec2::ZERO);
-    assert_eq!(s.r.state(), MoveState::Swing, "pressed once, swinging");
+    assert_eq!(s.r.state(), MoveState::Fall, "still swinging on a target that's gone");
 }
 
 #[test]
@@ -256,4 +257,17 @@ fn the_hookshot_arrives_at_the_same_time_at_any_tick_rate() {
     let at = [30.0, 60.0, 120.0].map(arrival);
     assert!(at.iter().all(|a| a.is_finite()), "never arrived: {at:?}");
     assert!(at.iter().all(|a| (a - at[2]).abs() <= 2.0 / 30.0), "arrived at {at:?} s (30, 60, 120 Hz)");
+}
+
+#[test]
+fn without_the_cameras_right_the_view_still_limits_the_pick() {
+    // Facing +Z, the camera looking +X: a target straight along +Z is 90° off the camera's
+    // forward, outside the frustum, whether or not the host gives the camera's right.
+    let world = Targets(vec![target(Vec3::new(0.0, 6.0, 8.0), SwingKind::Swing, 5.0)], None);
+    for right in [Vec2::new(0.0, -1.0), Vec2::ZERO] {
+        let mut r = Ratchet::new(Tuning::default());
+        let input = Input { view_forward: Vec3::new(1.0, 0.3, 0.0).normalize(), view_right: right, ..Default::default() };
+        r.step_in(DT, &input, &Contact::default(), Vec3::ZERO, &world);
+        assert_eq!(r.swing_target(), None, "picked a target 90° off the view (camera right {right:?})");
+    }
 }
