@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
+#include "Combat.h"
 #include "Jump.h"
 #include "Model.h"
 #include "RatchetDll.h"
@@ -21,6 +22,7 @@ namespace
 		switch (a_msg->type) {
 		case SKSE::MessagingInterface::kDataLoaded:
 			Jump::Install();
+			Combat::Install();
 			AutoTest::Install();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:

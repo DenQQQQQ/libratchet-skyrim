@@ -24,6 +24,24 @@ repository is unchanged.
   both, a ground dash 10.82 m (10.83), and every landing within one frame of the replay (see
   [MODLOG.md](MODLOG.md)).
 - A glide comes down softly: the height it sinks doesn't count toward fall damage.
+- **He fights:** the OmniWrench (the sim's three-swing combo with its lunges, the Hyper-Strike in
+  the air, the throw) and the Burst Pistol (hip fire and aimed, strafing). Hits are spells cast by
+  the player, so Skyrim's rules follow (the target fights back, crimes, kills, difficulty). The
+  wrench and the pistol are in his hand when he uses them.
+
+## Controls
+| | keyboard / mouse | gamepad | Skyrim control (INI) |
+|---|---|---|---|
+| jump, double jump, glide (hold) | Space | Y | Jump |
+| dash, air dash | Left Alt | LB | Sprint (`sDashControl`) |
+| wrench (press again for the combo; in the air: Hyper-Strike) | R | X | Ready Weapon (`sMeleeControl`) |
+| fire the Burst Pistol (hold) | left mouse | RT | Right Attack/Block (`sFireControl`) |
+| aim | right mouse | LT | Left Attack/Block (`sAimControl`) |
+| throw the wrench | Z | RB | Shout (`sThrowControl`) |
+| let go of a ledge | Ctrl | left stick | Sneak |
+
+On foot, Skyrim's own jump, sprint, attacks, blocks, weapon drawing and shouts are off (`bCombat
+= 0` gives the fighting back). On a horse everything is Skyrim's.
 
 ## Build
 Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, and vcpkg (`VCPKG_ROOT`, or
@@ -87,6 +105,9 @@ selected, and follows the log.
 - It moves by itself: a tap, 0.1 s, 0.15 s and a full hold, a standing jump steered forward, a
   running jump, a double jump, a glide, a ground dash and an air dash. Before each one he's moved
   back to the start, facing the heading with the most room.
+- Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
+  Hyper-Strike, the pistol from the hip and aimed, and a wrench throw. Each passes if the cow lost
+  at least the expected damage (× the save's difficulty multiplier) from enough hits.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor

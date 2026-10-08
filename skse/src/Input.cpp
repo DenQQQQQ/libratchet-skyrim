@@ -100,6 +100,12 @@ namespace Input
 		return map && map->IsJumpingControlsEnabled() && Held("Jump");
 	}
 
+	bool ControlHeld(std::string_view a_control)
+	{
+		const auto* map = RE::ControlMap::GetSingleton();
+		return map && map->IsFightingControlsEnabled() && Held(a_control);
+	}
+
 	bool SneakHeld()
 	{
 		const auto* map = RE::ControlMap::GetSingleton();

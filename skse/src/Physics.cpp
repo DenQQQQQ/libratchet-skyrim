@@ -29,7 +29,8 @@ namespace Physics
 		}
 		const float f = pick.rayOutput.hitFraction;
 		const auto& n = pick.rayOutput.normal.quad.m128_f32;
-		return Hit{ a_from + (a_to - a_from) * f, { n[0], n[1], n[2] }, f };
+		RE::TESObjectREFR* ref = pick.rayOutput.rootCollidable ? RE::TESHavokUtilities::FindCollidableRef(*pick.rayOutput.rootCollidable) : nullptr;
+		return Hit{ a_from + (a_to - a_from) * f, { n[0], n[1], n[2] }, f, ref };
 	}
 
 	std::optional<float> GroundDistance(const RE::NiPoint3& a_feet, float a_max)

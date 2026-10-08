@@ -126,6 +126,7 @@ namespace Ratchet
 			RatchetInput in{};
 			in.jump = a_recorded && a_tick.jump ? 1 : 0;
 			in.dash = a_recorded && a_tick.dash ? 1 : 0;
+			in.melee = a_recorded && a_tick.melee ? 1 : 0;
 			in.move_x = a_tick.moveX;
 			in.move_z = a_tick.moveZ;
 			return in;

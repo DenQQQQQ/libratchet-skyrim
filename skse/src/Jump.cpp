@@ -2,6 +2,7 @@
 #include "Jump.h"
 
 #include "AutoTest.h"
+#include "Combat.h"
 #include "Input.h"
 #include "Model.h"
 #include "Physics.h"
@@ -54,7 +55,7 @@ namespace Jump
 		{
 			RatchetSim*       sim = nullptr;
 			bool              ours = false;           // the sim moves him (a flight or a ground dash): we set his velocity
-			bool              groundDash = false;     // ours, dashing along the ground
+			bool              groundMove = false;     // ours on the ground: a dash, a wrench swing, the slam's landing
 			RE::NiPoint3      dashStart;              // where the ground dash started, game units
 			float             dashTime = 0.0f;
 			RatchetStepResult last{};                 // the sim's last step
@@ -156,7 +157,7 @@ namespace Jump
 				a_ctrl->acrobatics = g.savedAcrobatics;
 			}
 			g.ours = false;
-			g.groundDash = false;
+			g.groundMove = false;
 			g.falling = false;
 		}
 
@@ -241,7 +242,7 @@ namespace Jump
 		void Launch(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl, const RatchetVec3& a_velocity, bool a_fromGround, const char* a_event)
 		{
 			TakeControl(a_ctrl);
-			g.groundDash = false;
+			g.groundMove = false;
 			g.falling = false;
 			a_ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
 			a_ctrl->flags.set(RE::CHARACTER_FLAGS::kJumping);
@@ -303,18 +304,26 @@ namespace Jump
 			return false;
 		}
 
-		// The sim's ground dash starts. Skyrim's on-ground state moves him by its own locomotion,
-		// whatever velocity it's given; its in-air state keeps the one it's given. So for the
-		// dash he's put in the air state every frame, with the sim's velocity, which presses him
-		// down onto the ground at 2 m/s (× scale): the ground holds him up.
-		void StartDash(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl)
+		// The sim moves him along the ground: a dash, a wrench swing's lunge, the slam's landing.
+		// Skyrim's on-ground state moves him by its own locomotion, whatever velocity it's
+		// given; its in-air state keeps the one it's given. So he's put in the air state every
+		// frame, with the sim's velocity, which presses him down onto the ground at 2 m/s
+		// (× scale): the ground holds him up.
+		bool GroundMove(std::uint32_t a_state)
+		{
+			return a_state == RATCHET_STATE_DASH || a_state == RATCHET_STATE_MELEE || a_state == RATCHET_STATE_SMASH_LAND;
+		}
+
+		void StartGroundMove(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl, bool a_dash)
 		{
 			TakeControl(a_ctrl);
-			g.groundDash = true;
-			g.dashStart = a_player->GetPosition();
-			g.dashTime = 0.0f;
-			g.ticks.clear();
-			g.startVelocity = ControllerVelocity(a_ctrl);
+			g.groundMove = true;
+			if (a_dash) {
+				g.dashStart = a_player->GetPosition();
+				g.dashTime = 0.0f;
+				g.ticks.clear();
+				g.startVelocity = ControllerVelocity(a_ctrl);
+			}
 		}
 
 		void ReportDash(const RE::NiPoint3& a_end)
@@ -402,9 +411,9 @@ namespace Jump
 			const RE::NiPoint3 feet = a_player->GetPosition();
 			// How far down the ground is: the sim's jumps, double jump, glide and falls ask.
 			const auto ground = Physics::GroundDistance(feet, 20.0f);
-			// Skyrim's controller says whether he stands. Dashing, it's kept in its air state, and
-			// then the ground right under his feet is what holds him up.
-			const bool grounded = Grounded(ctrl) || (g.groundDash && ground && *ground < kDashGroundReach);
+			// Skyrim's controller says whether he stands. In a ground move it's kept in its air
+			// state, and then the ground right under his feet is what holds him up.
+			const bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach);
 			// The buttons as they are: the sim makes the jump, double jump, glide and dashes of them.
 			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours);
 			RatchetInput in{};
@@ -421,6 +430,8 @@ namespace Jump
 			in.move_z = -wy;
 			in.view_right_x = view.flatRight.x;
 			in.view_right_z = -view.flatRight.y;
+			// The wrench and aiming (the gun fires after the step).
+			Combat::Fill(in, RE::NiPoint2{ view.flatForward.x, view.flatForward.y }, g.last.state, a_dt);
 			in.view_forward_x = view.forward.x;
 			in.view_forward_y = view.forward.z;
 			in.view_forward_z = -view.forward.y;
@@ -433,7 +444,7 @@ namespace Jump
 			// The wall beside him: the sim sticks to walls in the air. Skyrim marks none for wall
 			// jumps, so every wall is a plain one (one wall jump per jump) and there are no
 			// wall-jump zones.
-			if (!grounded || (g.ours && !g.groundDash)) {
+			if (!grounded || (g.ours && !g.groundMove)) {
 				const float s = Settings::Get().scale;
 				std::optional<RE::NiPoint2> prefer;
 				if (g.last.state == RATCHET_STATE_WALL_STICK) {
@@ -458,7 +469,7 @@ namespace Jump
 				const RatchetVec3 v = ControllerVelocity(ctrl);
 				ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
 			}
-			if (g.ours && !g.groundDash) {
+			if (g.ours && !g.groundMove) {
 				// Going up, he rose less than a quarter of what the sim asked for: something's above.
 				const float asked = g.last.velocity.y * g.lastDt;
 				const float rose = (z - g.lastZ) / UnitsPerMetre();
@@ -471,36 +482,44 @@ namespace Jump
 			}
 
 			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(feet));
-			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0 };
+			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0, in.melee != 0 };
 
-			// A flight ended (a new jump can start in the same step).
-			if (g.ours && !g.groundDash && (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND)) {
+			// A flight ended (a new jump can start in the same step); the slam lands into its
+			// ground move.
+			if (g.ours && !g.groundMove &&
+				(r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND || r.state == RATCHET_STATE_SMASH_LAND)) {
 				ReportLanding(feet, a_dt);
 				Land(a_player, ctrl);
 			}
-			// The ground dash ended: back on his feet, off a ledge, or jumping out of it.
-			const bool wasDashing = g.groundDash;
-			if (g.groundDash && r.state != RATCHET_STATE_DASH) {
+			const bool wasGroundMove = g.groundMove;
+			// The dash is over (into a swing, back on his feet, off a ledge, a jump).
+			if (g.groundMove && g.last.state == RATCHET_STATE_DASH && r.state != RATCHET_STATE_DASH) {
 				g.ticks.push_back(tick);
 				ReportDash(feet);
+			}
+			// The ground move ended: back on his feet, off a ledge, or jumping out of it.
+			if (g.groundMove && !GroundMove(r.state)) {
 				if (r.state == RATCHET_STATE_GROUND) {
-					// Skyrim's run takes over at the speed the dash ended at.
+					// Skyrim's run takes over at the speed the sim left him with.
 					EndOurs(ctrl);
 				} else if (!(r.events & RATCHET_EVENT_JUMPED)) {
-					// Off a ledge: a fall at the dash's speed.
+					// Off a ledge: a fall at the speed he had.
 					Launch(a_player, ctrl, r.velocity, false, "JumpFall");
 				}
 			}
 			bool started = true;
 			if (r.events & RATCHET_EVENT_JUMPED) {
 				g.startVelocity = ControllerVelocity(ctrl);
-				// Out of a dash it keeps the dash's speed, which a replay from standing can't.
-				Launch(a_player, ctrl, r.velocity, !wasDashing, TakeoffEvent(ctrl));
+				// Out of a dash or swing it keeps their speed, which a replay from standing can't.
+				Launch(a_player, ctrl, r.velocity, !wasGroundMove, TakeoffEvent(ctrl));
 				AutoTest::OnTakeoff();
-			} else if (r.events & RATCHET_EVENT_DASHED && r.state == RATCHET_STATE_DASH) {
-				StartDash(a_player, ctrl);
-				AutoTest::OnTakeoff();
-				AutoTest::OnMove("dash");
+			} else if (GroundMove(r.state) && (!g.groundMove || (r.events & RATCHET_EVENT_DASHED))) {
+				// A dash or a swing from his feet (or a dash out of a swing), or the slam's landing.
+				StartGroundMove(a_player, ctrl, r.state == RATCHET_STATE_DASH);
+				if (r.state == RATCHET_STATE_DASH) {
+					AutoTest::OnTakeoff();
+					AutoTest::OnMove("dash");
+				}
 			} else if (!g.ours && r.state != RATCHET_STATE_GROUND &&
 					   r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED | RATCHET_EVENT_AIR_DASHED | RATCHET_EVENT_WALL_STUCK |
 								   RATCHET_EVENT_LEDGE_GRABBED)) {
@@ -511,8 +530,8 @@ namespace Jump
 				started = false;
 			}
 
-			if (g.groundDash) {
-				// In the air state with the sim's velocity (see StartDash). Bumps along the way
+			if (g.groundMove) {
+				// In the air state with the sim's velocity (see StartGroundMove). Bumps along the way
 				// aren't falls.
 				ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
 				SetVelocity(ctrl, r.velocity);
@@ -552,9 +571,10 @@ namespace Jump
 				// The whole velocity is the sim's in the air: up and across.
 				SetVelocity(ctrl, r.velocity);
 				if (r.state == RATCHET_STATE_GLIDE || r.state == RATCHET_STATE_WALL_STICK || r.state == RATCHET_STATE_LEDGE_HANG ||
-					r.state == RATCHET_STATE_LEDGE_CLIMB) {
+					r.state == RATCHET_STATE_LEDGE_CLIMB || r.state == RATCHET_STATE_SMASH) {
 					// A glide comes down softly, and so does a slide down a wall; hanging from a
-					// ledge he's held. The height they sink doesn't count as a fall.
+					// ledge he's held; the Hyper-Strike's slam never hurts him. The height they
+					// sink doesn't count as a fall.
 					ctrl->fallStartHeight = z;
 					ctrl->fallTime = 0.0f;
 				}
@@ -566,9 +586,11 @@ namespace Jump
 				KeepFalling(a_player, a_dt);
 			}
 
-			if (g.groundDash) {
-				g.ticks.push_back(tick);
-				g.dashTime += a_dt;
+			if (g.groundMove) {
+				if (r.state == RATCHET_STATE_DASH) {
+					g.ticks.push_back(tick);
+					g.dashTime += a_dt;
+				}
 			} else if (g.ours) {
 				g.ticks.push_back(tick);
 				g.m.time += a_dt;
@@ -580,6 +602,14 @@ namespace Jump
 					}
 				}
 			}
+			if (r.events & RATCHET_EVENT_SMASH_STARTED) {
+				AutoTest::OnMove("smash");
+			}
+			if (r.events & RATCHET_EVENT_MELEE_SWING) {
+				AutoTest::OnMove(std::format("swing{}", r.melee_swing + 1));
+			}
+			// The wrench's hits, the slam, the gun.
+			Combat::Step(a_player, g.sim, r, a_dt);
 			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {
 				SKSE::log::info(
 					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} z {:.1f} ctrl {}",
@@ -594,7 +624,7 @@ namespace Jump
 		// After Skyrim moved him this frame: the apex so far.
 		void Observe(RE::PlayerCharacter* a_player)
 		{
-			if (!g.ours || g.groundDash) {
+			if (!g.ours || g.groundMove) {
 				return;
 			}
 			const float z = a_player->GetPositionZ();
@@ -661,9 +691,20 @@ namespace Jump
 				if (running) {
 					// Ratchet's pose follows the move Skyrim has just made.
 					const auto* ctrl = a_this->GetCharController();
+					// Strafing: the way he moves, from where he faces (the sim's facing, on Skyrim's
+					// ground plane: ahead (sin f, -cos f), right (-cos f, -sin f)).
+					float strafeAngle = 0.0f;
+					if (ctrl) {
+						RE::hkVector4 v;
+						ctrl->GetLinearVelocityImpl(v);
+						const float vx = v.quad.m128_f32[0], vy = v.quad.m128_f32[1];
+						const float f = g.last.facing_yaw;
+						strafeAngle = std::atan2(vx * -std::cos(f) + vy * -std::sin(f), vx * std::sin(f) + vy * -std::cos(f));
+					}
 					Model::Update(a_this, dt, { .simJump = g.ours, .simState = g.last.state, .events = g.last.events,
 												  .grounded = !ctrl || Grounded(ctrl), .wallRight = g.last.wall_right != 0,
 												  .ledgeMove = g.last.ledge_move, .verticalSpeed = g.last.velocity.y,
+												  .meleeSwing = g.last.melee_swing, .strafing = Combat::Strafing(), .strafeAngle = strafeAngle,
 												  .hasFacing = true, .facingYaw = g.last.facing_yaw });
 				}
 			}
@@ -695,6 +736,13 @@ namespace Jump
 			Settings::Get().dashControl.empty() ? "" :
 			DashOnSprint()                      ? "; Sprint dashes (Skyrim's sprint is off on foot)" :
 			                                      std::format("; {} dashes", Settings::Get().dashControl));
+	}
+
+	bool OnFoot()
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* ctrl = player ? player->GetCharController() : nullptr;
+		return g.sim && ctrl && OnFootInControl(player, ctrl);
 	}
 
 	void Reset()

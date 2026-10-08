@@ -17,6 +17,16 @@ struct Settings
 	// The Skyrim control (user event) that dashes, on the ground and in the air. Sprint's own
 	// sprint is off on foot then (Rift Apart has none). Empty: no dash.
 	std::string dashControl = "Sprint";
+	// Ratchet's combat: the OmniWrench and his gun on these Skyrim controls (Rift Apart's
+	// controller layout: R2 fires, L2 aims, Square swings, R1 throws). Skyrim's own attacks,
+	// blocks, weapon drawing and shouts are off on foot then.
+	bool        combat = true;
+	std::string fireControl = "Right Attack/Block";
+	std::string aimControl = "Left Attack/Block";
+	std::string meleeControl = "Ready Weapon";
+	std::string throwControl = "Shout";
+	// Rift Apart's damage numbers times this, on Skyrim's health.
+	float damageMult = 1.0f;
 	// One log line per jump (takeoff, apex, landing) and its expected numbers.
 	bool logJumps = true;
 	// Per-frame trace while a jump is active (big logs).

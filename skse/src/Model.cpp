@@ -2,6 +2,7 @@
 #include "Model.h"
 
 #include "Anim.h"
+#include "Combat.h"
 #include "Settings.h"
 
 namespace Model
@@ -76,8 +77,13 @@ namespace Model
 
 		bool Looping(std::string_view a_clip)
 		{
+			if (a_clip.starts_with("strafe_") && !a_clip.starts_with("strafe_jump") && !a_clip.starts_with("strafe_land") &&
+				!a_clip.starts_with("strafe_double")) {
+				return true;
+			}
 			return a_clip == "idle" || a_clip == "run" || a_clip == "walk" || a_clip == "fall" || a_clip == "glide" ||
-			       a_clip == "wall_slide_left" || a_clip == "wall_slide_right" || a_clip == "ledge_idle";
+			       a_clip == "wall_slide_left" || a_clip == "wall_slide_right" || a_clip == "ledge_idle" || a_clip == "aim_idle" ||
+			       a_clip == "pistol_idle" || a_clip == "pistol_run";
 		}
 
 		void Play(std::string_view a_name, float a_fade)
@@ -190,6 +196,113 @@ namespace Model
 			}
 		}
 
+		// His OmniWrench and Burst Pistol (skse\tools\ratchet_to_skyrim.py --name wrench /
+		// burstpistol): hung on his gun hand (igLoc_RT_gunAttach, as the sandbox and the game hang
+		// them), in the same glTF space as his joints, so with no offset.
+		struct Weapon
+		{
+			const char*               path;
+			RE::NiPointer<RE::NiNode> node;
+			bool                      failed = false;
+		};
+		Weapon g_wrench{ "RatchetMovement\\wrench.nif" };
+		Weapon g_pistol{ "RatchetMovement\\burstpistol.nif" };
+
+		bool Load(Weapon& a_weapon)
+		{
+			if (!a_weapon.node && !a_weapon.failed) {
+				RE::NiPointer<RE::NiNode> loaded;
+				const RE::BSModelDB::DBTraits::ArgsType args{};
+				const auto err = RE::BSModelDB::Demand(a_weapon.path, loaded, args);
+				if (err != RE::BSResource::ErrorCode::kNone || !loaded) {
+					SKSE::log::warn("ratchet model: no meshes\\{} (error {}): he fights without it in his hand", a_weapon.path, static_cast<int>(err));
+					a_weapon.failed = true;
+					return false;
+				}
+				a_weapon.node = loaded;
+			}
+			return a_weapon.node != nullptr;
+		}
+
+		void Hang(Weapon& a_weapon, RE::NiNode* a_hand, bool a_show)
+		{
+			if (!Load(a_weapon)) {
+				return;
+			}
+			if (a_weapon.node->parent != a_hand) {
+				if (a_weapon.node->parent) {
+					a_weapon.node->parent->DetachChild(a_weapon.node.get());
+				}
+				a_hand->AttachChild(a_weapon.node.get(), true);
+			}
+			if (a_weapon.node->GetAppCulled() == a_show) {
+				a_weapon.node->SetAppCulled(!a_show);
+			}
+		}
+
+		// The thrown wrench: under the player's root, where the sim has it, laid flat and spun
+		// about the up axis, at his size.
+		void Throw(Weapon& a_weapon, RE::NiNode* a_root, const RE::NiPoint3& a_at, float a_spin)
+		{
+			if (!Load(a_weapon) || !a_root) {
+				return;
+			}
+			if (a_weapon.node->parent != a_root) {
+				if (a_weapon.node->parent) {
+					a_weapon.node->parent->DetachChild(a_weapon.node.get());
+				}
+				a_root->AttachChild(a_weapon.node.get(), true);
+			}
+			// glTF to Skyrim (Orientation's M), the handle (glTF +Y, Skyrim up after M) laid along
+			// the ground (90° about x), then the spin about up.
+			RE::NiMatrix3 flat;  // identity, made a turn of 90° about x
+			flat.entry[1][1] = 0.0f;
+			flat.entry[1][2] = -1.0f;
+			flat.entry[2][1] = 1.0f;
+			flat.entry[2][2] = 0.0f;
+			RE::NiMatrix3 spin;
+			const float c = std::cos(a_spin), sn = std::sin(a_spin);
+			spin.entry[0][0] = c;
+			spin.entry[0][1] = -sn;
+			spin.entry[1][0] = sn;
+			spin.entry[1][1] = c;
+			spin.entry[2][2] = 1.0f;
+			const RE::NiMatrix3 world = spin * flat * Orientation(0.0f);
+			const auto& parent = a_root->world;
+			const RE::NiMatrix3 back = parent.rotate.Transpose();
+			a_weapon.node->local.translate = (back * (a_at - parent.translate)) / parent.scale;
+			a_weapon.node->local.rotate = back * world;
+			a_weapon.node->local.scale = UnitsPerMetre() * Settings::Get().scale / parent.scale;
+			if (a_weapon.node->GetAppCulled()) {
+				a_weapon.node->SetAppCulled(false);
+			}
+		}
+
+		void HoldWeapons(RE::PlayerCharacter* a_player)
+		{
+			static RE::NiNode* hand = nullptr;
+			static RE::NiNode* handOf = nullptr;
+			if (handOf != s.model.get()) {
+				handOf = s.model.get();
+				auto* found = s.model->GetObjectByName(RE::BSFixedString("RC_igLoc_RT_gunAttach"));
+				hand = found ? found->AsNode() : nullptr;
+				if (!hand) {
+					SKSE::log::warn("ratchet model: no RC_igLoc_RT_gunAttach node: no weapons in his hand");
+				}
+			}
+			if (!hand) {
+				return;
+			}
+			const auto held = Combat::InHand();
+			if (const auto thrown = Combat::ThrownWrench()) {
+				auto* root = a_player->Get3D(false) ? a_player->Get3D(false)->AsNode() : nullptr;
+				Throw(g_wrench, root, thrown->first, thrown->second);
+			} else {
+				Hang(g_wrench, hand, held == Combat::Hand::kWrench);
+			}
+			Hang(g_pistol, hand, held == Combat::Hand::kPistol);
+		}
+
 		void PickClip(const Drive& a_drive, float a_speed, float a_vy, float a_dt)
 		{
 			const bool air = a_drive.simJump ? a_drive.simState != RATCHET_STATE_GROUND : !a_drive.grounded;
@@ -234,6 +347,19 @@ namespace Model
 				case RATCHET_STATE_LEDGE_CLIMB:
 					want = "ledge_jump";
 					break;
+				// The wrench: the combo's three swings, the Hyper-Strike's hop and slam.
+				case RATCHET_STATE_MELEE:
+					{
+						static constexpr std::string_view kSwings[] = { "melee_1", "melee_2", "melee_3" };
+						want = kSwings[std::min<std::uint32_t>(a_drive.meleeSwing, 2)];
+					}
+					break;
+				case RATCHET_STATE_SMASH:
+					want = "smash_intro";
+					break;
+				case RATCHET_STATE_SMASH_LAND:
+					want = "smash";
+					break;
 				default:
 					want = "fall";
 					break;
@@ -241,6 +367,16 @@ namespace Model
 			} else if (air && s.airTime > 0.15f) {
 				// Skyrim's own fall (off a ledge).
 				want = "fall";
+			} else if (a_drive.strafing) {
+				// Aiming or firing: he faces the aim and strafes, the clip by the way he moves
+				// (n ahead, e to his right).
+				static constexpr std::string_view kStrafe[] = { "strafe_n", "strafe_ne", "strafe_e", "strafe_se", "strafe_s", "strafe_sw", "strafe_w", "strafe_nw" };
+				if (a_speed > kMoving) {
+					const int sector = static_cast<int>(std::floor(a_drive.strafeAngle / (3.14159265f / 4.0f) + 0.5f));
+					want = kStrafe[((sector % 8) + 8) % 8];
+				} else {
+					want = "aim_idle";
+				}
 			} else if (s.landTimer > 0.0f && a_speed > kWalkToRun) {
 				want = "land_run";
 			} else if (s.landTimer > 0.0f && a_speed > kMoving) {
@@ -264,7 +400,9 @@ namespace Model
 			if (s.cur.clip) {
 				const auto& n = s.cur.clip->name;
 				const float authored = s.cur.clip->AuthoredSpeed();
-				if ((n == "walk" || n == "run" || n == "land_walk" || n == "land_run") && authored > 0.1f) {
+				const bool strafeRun = n.starts_with("strafe_") && !n.starts_with("strafe_jump") && !n.starts_with("strafe_land") &&
+				                       !n.starts_with("strafe_double");
+				if ((n == "walk" || n == "run" || n == "land_walk" || n == "land_run" || strafeRun) && authored > 0.1f) {
 					const bool land = n.starts_with("land");
 					s.cur.rate = std::clamp(a_speed / authored, land ? 0.7f : 0.5f, land ? 1.3f : 1.5f);
 				} else {
@@ -286,6 +424,26 @@ namespace Model
 	bool Enabled() { return s.enabled && !s.failed; }
 
 	std::string_view CurrentClip() { return s.clipName; }
+
+	std::optional<RE::NiPoint3> GunHand()
+	{
+		if (!s.model || !s.model->parent) {
+			return std::nullopt;
+		}
+		static RE::NiAVObject* hand = nullptr;
+		static RE::NiNode*     handOf = nullptr;
+		if (handOf != s.model.get()) {
+			handOf = s.model.get();
+			hand = s.model->GetObjectByName(RE::BSFixedString("RC_igLoc_RT_gunAttach"));
+			if (!hand) {
+				hand = s.model->GetObjectByName(RE::BSFixedString("RC_RT_handle_bound"));
+			}
+		}
+		if (!hand) {
+			return std::nullopt;
+		}
+		return hand->world.translate;
+	}
 
 	void SetAttachAllowed(bool a_allowed) { s.attachAllowed = a_allowed; }
 
@@ -376,7 +534,12 @@ namespace Model
 		s.model->local.translate = {};
 		s.model->local.rotate = Orientation(s.yaw);
 		s.model->local.scale = UnitsPerMetre() * scale;
+		HoldWeapons(a_player);
 		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 		s.model->Update(update);
+		if (const auto thrown = Combat::ThrownWrench(); thrown && g_wrench.node && g_wrench.node->parent != s.model.get()) {
+			// Not under his model: it needs its own update.
+			g_wrench.node->Update(update);
+		}
 	}
 }

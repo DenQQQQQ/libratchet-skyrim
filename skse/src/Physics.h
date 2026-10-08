@@ -6,9 +6,10 @@ namespace Physics
 {
 	struct Hit
 	{
-		RE::NiPoint3 point;   // game units
-		RE::NiPoint3 normal;
-		float        fraction;  // along the ray, 0..1
+		RE::NiPoint3       point;   // game units
+		RE::NiPoint3       normal;
+		float              fraction;  // along the ray, 0..1
+		RE::TESObjectREFR* ref = nullptr;  // what was hit, if it's a reference (an actor, a door...)
 	};
 
 	// The first thing the ray hits that the player would collide with (his own body ignored).

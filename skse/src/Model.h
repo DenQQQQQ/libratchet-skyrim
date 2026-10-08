@@ -16,6 +16,9 @@ namespace Model
 		bool          wallRight = false;  // on a wall or in a wall jump: the right-hand clips fit
 		std::uint8_t  ledgeMove = 0;    // the move onto a ledge (RatchetStepResult::ledge_move)
 		float         verticalSpeed = 0.0f;  // the sim's, m/s (sliding down a wall: below 0)
+		std::uint32_t meleeSwing = 0;   // the wrench combo's swing (0 = first)
+		bool          strafing = false; // aiming or firing: facing the aim
+		float         strafeAngle = 0.0f;  // the way he moves from where he faces, radians (0 ahead, pi/2 right)
 		// The sim's facing (radians, atan2(x, z) in its axes): he turns the way Rift Apart turns him.
 		bool          hasFacing = false;
 		float         facingYaw = 0.0f;
@@ -28,6 +31,8 @@ namespace Model
 	void Update(RE::PlayerCharacter* a_player, float a_dt, const Drive& a_drive);
 	// What clip plays (for logs and tests).
 	std::string_view CurrentClip();
+	// Where his gun hand is (his igLoc_RT_gunAttach, game units), once his model is posed.
+	std::optional<RE::NiPoint3> GunHand();
 
 	// Tests: hold off attaching him, and show some of his shapes only (-1 all, -2 none, else that
 	// one).

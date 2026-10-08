@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Combat.h"
 #include "Input.h"
 #include "Model.h"
+#include "Settings.h"
 #include "Physics.h"
 #include "RatchetDll.h"
 #include "TestWindow.h"
@@ -20,10 +22,24 @@ namespace AutoTest
 			float       again = 0.0f;   // seconds after the first press that it's pressed again (0: not)
 			float       againHold = 0.0f;  // and held (until the landing at most)
 			float       dashAt = -1.0f; // seconds after the start that the dash is pressed (one frame); < 0: not
+			// A fight: it lasts this long (s), against a target standing targetAt metres ahead,
+			// which then has to have lost at least minDamage health (× fDamageMult), from at
+			// least minHits wrench hits.
+			float       duration = 0.0f;
+			float       targetAt = 0.0f;
+			float       melee[3] = { -1.0f, -1.0f, -1.0f };  // wrench presses (one frame each), s from the start
+			float       fireFrom = -1.0f;  // the trigger held from here to fireTo (s)
+			float       fireTo = -1.0f;
+			bool        aim = false;       // and the aim button with it
+			float       minDamage = 0.0f;
+			int         minHits = 0;
+			float       throwAt = -1.0f;   // the wrench thrown (one frame), s from the start
 		};
 		// At Dragonborn scale with the owner's configs (the sandbox, flat floor): a press again
 		// at 0.4 s double-jumps at 0.42 s (peak 4.34 m), and held on he glides from 0.93 s. A
-		// ground dash goes 10.9 m in 0.53 s; an air dash flies flat at 10.85 m/s for 0.6 s.
+		// ground dash goes 10.9 m in 0.53 s; an air dash flies flat at 10.85 m/s for 0.6 s. The
+		// wrench's swings do 20 each (wpn_wrench_melee.json), the Hyper-Strike 50, a Burst Pistol
+		// shot 11.36 at 6 shots/s from the hip and 3 aimed.
 		constexpr Case kCases[] = {
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
@@ -35,6 +51,11 @@ namespace AutoTest
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
+			{ .name = "wrench combo", .hold = -1.0f, .duration = 2.5f, .targetAt = 1.8f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
+			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 2.0f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
+			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
+			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
+			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -88,6 +109,10 @@ namespace AutoTest
 			bool  launched = false;
 			bool  landed = false;
 			std::vector<std::string> shotsThisCase;  // moments already shot (a second apex gets "2")
+			// The fights' target: a cow (EncCow) with its AI off and plenty of health.
+			RE::ActorHandle target;
+			bool            targetPlaced = false;
+			float           targetHealth = 0.0f;  // as the fight began
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -268,6 +293,8 @@ namespace AutoTest
 		void NextCase()
 		{
 			Input::SetTestStick(std::nullopt);
+			Combat::SetTestButtons(std::nullopt);
+			Combat::SetTestAim(std::nullopt);
 			s.returnPending = true;
 			s.running = 0.0f;
 			s.pressed = -1.0f;
@@ -275,8 +302,89 @@ namespace AutoTest
 			s.launched = false;
 			s.landed = false;
 			s.dashPressed = false;
+			s.targetPlaced = false;
 			s.shotsThisCase.clear();
 			++s.index;
+		}
+
+		float Units() { return RE::bhkWorld::GetWorldScaleInverse(); }
+
+		RE::Actor* Target() { return s.target.get().get(); }
+
+		float TargetHealth()
+		{
+			auto* target = Target();
+			return target ? target->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
+		}
+
+		// The fight's target, a_metres ahead of the start, its AI off (it stands still) and
+		// with plenty of health (it lasts every fight). Placed while he settles, so it's loaded
+		// when the fight starts.
+		void PlaceTarget(float a_metres)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player || !s.startPos) {
+				return;
+			}
+			RE::Actor* target = Target();
+			if (!target || target->IsDead()) {
+				auto* cow = RE::TESForm::LookupByID<RE::TESNPC>(0x00023A90);  // EncCow
+				const auto placed = cow ? player->PlaceObjectAtMe(cow, false) : nullptr;
+				target = placed ? placed->As<RE::Actor>() : nullptr;
+				if (!target) {
+					SKSE::log::info("autotest: couldn't place the target");
+					return;
+				}
+				s.target = target->GetHandle();
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			target->SetPosition(*s.startPos + ahead * (a_metres * Units()) + RE::NiPoint3{ 0.0f, 0.0f, 0.2f * Units() }, true);
+			target->EnableAI(false);
+			auto* av = target->AsActorValueOwner();
+			av->SetBaseActorValue(RE::ActorValue::kHealth, 1000.0f);
+			av->RestoreActorValue(RE::ActorValue::kHealth, 10000.0f);
+		}
+
+		// What Skyrim multiplies the player's damage by at the save's difficulty (Master: 0.5).
+		float DifficultyMult()
+		{
+			static constexpr const char* kSettings[] = { "fDiffMultHPByPCVE", "fDiffMultHPByPCE", "fDiffMultHPByPCN",
+				"fDiffMultHPByPCH", "fDiffMultHPByPCVH", "fDiffMultHPByPCL" };
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			const int difficulty = player ? std::clamp<int>(player->GetGameStatsData().difficulty, 0, 5) : 2;
+			auto* settings = RE::GameSettingCollection::GetSingleton();
+			auto* setting = settings ? settings->GetSetting(kSettings[difficulty]) : nullptr;
+			return setting ? setting->GetFloat() : 1.0f;
+		}
+
+		// A fight is over: what the target lost against what it should have.
+		void JudgeFight(const Case& a_case)
+		{
+			const float lost = s.targetHealth - TargetHealth();
+			const Combat::Tally tally = Combat::TakeTally();
+			// Skyrim's difficulty scales the player's damage, Ratchet's too.
+			const float minDamage = a_case.minDamage * Settings::Get().damageMult * DifficultyMult();
+			std::string bad;
+			if (!Target()) {
+				bad += " no-target";
+			}
+			if (lost < minDamage) {
+				bad += " damage";
+			}
+			if (tally.hits < a_case.minHits) {
+				bad += " hits";
+			}
+			if (bad.empty()) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			SKSE::log::info("autotest: {} {}: the target lost {:.1f} health (at least {:.1f} at difficulty x{:.2f}), {} wrench hits (at least {}), {} shots, {} throws{}",
+				bad.empty() ? "PASS" : "FAIL", a_case.name, lost, minDamage, DifficultyMult(), tally.hits, a_case.minHits, tally.shots,
+				tally.throws, bad.empty() ? "" : " - off:" + bad);
+			if (a_case.throwAt >= 0.0f && Combat::ThrownWrench()) {
+				SKSE::log::info("autotest: {}: the wrench is still out after {:.1f} s", a_case.name, a_case.duration);
+			}
 		}
 
 		void RunConsole(const std::string& a_command)
@@ -483,6 +591,11 @@ namespace AutoTest
 				ThirdPerson();
 				SKSE::log::info("autotest: third person");
 			}
+			// A fight's target, in place while he settles.
+			if (c.targetAt > 0.0f && s.startPos && !s.targetPlaced && s.settle > 0.0f) {
+				s.targetPlaced = true;
+				PlaceTarget(c.targetAt);
+			}
 			if (s.settle < kSettle) {
 				return {};
 			}
@@ -507,16 +620,44 @@ namespace AutoTest
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
-			SKSE::log::info("autotest: {} ({}{}{}{})", c.name,
+			if (c.duration > 0.0f) {
+				Combat::TakeTally();
+				s.targetHealth = TargetHealth();
+				if (auto* target = Target(); target && c.fireFrom >= 0.0f) {
+					// The shots go for its middle.
+					Combat::SetTestAim(target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() });
+				}
+			}
+			SKSE::log::info("autotest: {} ({}{}{}{}{})", c.name,
 				c.hold >= 0.0f ? std::format("jump held {:.2f} s", c.hold) : "no jump",
 				c.again > 0.0f ? std::format(", again at {:.2f} s for {:.2f} s", c.again, c.againHold) : "",
 				c.dashAt >= 0.0f ? std::format(", dash at {:.2f} s", c.dashAt) : "",
-				c.airStick ? ", the stick forward" : "");
+				c.airStick ? ", the stick forward" : "",
+				c.duration > 0.0f ? std::format(", a fight against a target {:.1f} m ahead", c.targetAt) : "");
 		}
 
 		s.elapsed += a_dt;
 		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
+		if (c.duration > 0.0f) {
+			// A fight: the wrench presses and the trigger on their times, then the verdict.
+			Combat::TestButtons fight;
+			for (const float at : c.melee) {
+				fight.melee = fight.melee || (at >= 0.0f && t >= at && t < at + a_dt);
+			}
+			fight.fire = c.fireFrom >= 0.0f && t >= c.fireFrom && t < c.fireTo;
+			fight.aim = c.aim && fight.fire;
+			fight.throwWrench = c.throwAt >= 0.0f && t >= c.throwAt && t < c.throwAt + a_dt;
+			Combat::SetTestButtons(fight);
+			if (t >= c.duration && (!a_busy || t >= c.duration + 3.0f)) {
+				JudgeFight(c);
+				NextCase();
+				return {};
+			}
+			Buttons jump;
+			jump.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
+			return jump;
+		}
 		Buttons b;
 		b.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
 		// The second press: a double jump, and held on, a glide.
@@ -570,6 +711,11 @@ namespace AutoTest
 			return;
 		}
 		s.landed = true;
+		if (kCases[s.index].duration > 0.0f) {
+			// A fight's jump (the Hyper-Strike): the fight's verdict covers it.
+			SKSE::log::info("autotest: {}: landed after {:.3f} s, {:.2f} m across", kCases[s.index].name, a_jump.airTime, a_jump.distance);
+			return;
+		}
 		if (!a_jump.replayed) {
 			// A wall or ledge took part (or it started out of Skyrim's fall): nothing to compare.
 			++s.failed;
@@ -609,7 +755,7 @@ namespace AutoTest
 
 	void OnDashed(const Dash& a_dash)
 	{
-		if (!s.active || s.done || s.index >= static_cast<int>(std::size(kCases))) {
+		if (!s.active || s.done || s.index >= static_cast<int>(std::size(kCases)) || kCases[s.index].duration > 0.0f) {
 			return;
 		}
 		s.landed = true;

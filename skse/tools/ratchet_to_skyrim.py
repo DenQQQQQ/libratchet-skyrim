@@ -31,14 +31,17 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nif as N  # noqa: E402
 
+# Set from --name and --prefix: Ratchet's are the defaults; his weapons get their own.
 PREFIX = "RC_"
 MESH_PATH = "RatchetMovement\\ratchet.nif"           # under Data\meshes
 TEXTURE_DIR = "RatchetMovement\\ratchet"             # under Data\textures
+ROOT_NAME = "RatchetRoot"
 MAX_BONES_PER_PARTITION = 60                          # Skyrim's shaders take up to 80
 MAX_TEXTURE = 1024  # uncompressed for now: 4 MB each at 1024
 
-# Weapon and aim clips stay out of the plugin's file for now (it plays the moves).
-SKIP_CLIPS = re.compile(r"^(wrench_|pistol|aim_|melee|throw|grenade|glove|fire_|smash|glide_intro_pistol|glide_pistol|glide_intro_wrench|glide_intro_glove)")
+# Every clip goes in, the wrench's and the guns' too (the plugin fights with them now). A pattern
+# here would leave matching clips out.
+SKIP_CLIPS = re.compile(r"^$")
 
 COMPONENT = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
 WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
@@ -214,7 +217,7 @@ def convert_model(gl, out_dir, manifest):
                 "translation": [float(x) for x in t], "rotation": [float(x) for x in r.reshape(9)], "scale": float(s),
                 "collision": -1, "children": [], "effects": []}
 
-    root = nf.add(node_block("RatchetRoot", np.eye(3), np.zeros(3), 1.0))
+    root = nf.add(node_block(ROOT_NAME, np.eye(3), np.zeros(3), 1.0))
     nf.blocks[root]["flags"] = 0x8000E
     block_of_node = {}
 
@@ -499,12 +502,21 @@ def main():
     ap.add_argument("--glb", required=True)
     ap.add_argument("--json", help="the extractor's ratchet.json (clip speeds); default: next to the glb")
     ap.add_argument("--out", required=True, help="folder laid out like Skyrim's Data folder")
+    ap.add_argument("--name", default="ratchet", help="meshes\\RatchetMovement\\<name>.nif and textures\\RatchetMovement\\<name>")
+    ap.add_argument("--prefix", default="RC_", help="put before every node name (keeps the models' nodes apart in one scene)")
+    ap.add_argument("--no-clips", action="store_true", help="the model only (his weapons: their own clips aren't played)")
     a = ap.parse_args()
+    global PREFIX, MESH_PATH, TEXTURE_DIR, ROOT_NAME
+    PREFIX = a.prefix
+    MESH_PATH = f"RatchetMovement\\{a.name}.nif"
+    TEXTURE_DIR = f"RatchetMovement\\{a.name}"
+    ROOT_NAME = "RatchetRoot" if a.name == "ratchet" else f"RatchetRoot_{a.name}"
     manifest_path = a.json or os.path.splitext(a.glb)[0] + ".json"
     manifest = json.load(open(manifest_path)) if os.path.exists(manifest_path) else None
     gl = Gltf(a.glb)
     convert_model(gl, a.out, manifest)
-    convert_clips(gl, a.out, manifest)
+    if not a.no_clips:
+        convert_clips(gl, a.out, manifest)
 
 
 if __name__ == "__main__":

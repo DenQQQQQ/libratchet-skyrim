@@ -12,6 +12,9 @@ namespace Input
 	bool DashHeld();
 	// Sneak is held (the sim's crouch: it lets go of a ledge).
 	bool SneakHeld();
+	// A fighting control (by Skyrim's name, e.g. "Right Attack/Block") is held, and fighting is
+	// allowed.
+	bool ControlHeld(std::string_view a_control);
 	// The movement stick (keys or left stick) as Skyrim reads it: x right, y forward, in the
 	// camera's frame, length up to 1; zero when movement is switched off.
 	RE::NiPoint2 MoveStick();

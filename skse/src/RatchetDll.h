@@ -32,6 +32,7 @@ namespace Ratchet
 		float moveX = 0.0f;  // the stick in the world (sim axes)
 		float moveZ = 0.0f;
 		bool  dash = false;
+		bool  melee = false;
 	};
 	struct Replayed
 	{

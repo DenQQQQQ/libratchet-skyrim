@@ -292,3 +292,57 @@ Probed offline through `ratchet.dll` before writing the tests:
   (0.046 s late). Its frames ran 38-62 ms there, and the apex can only be seen at a frame's end. The
   time checks now allow the frame the apex or landing was seen in, plus 0.015 s / 0.02 s.
 - No wall or ledge test yet: the test spot in Whiterun has no tall wall in reach.
+
+## 2026-10-08: the OmniWrench and the Burst Pistol (the owner: "I want guns and wrench")
+
+### What there was to build on
+A survey of the repo found:
+- **The wrench** is all in the C API: the three-swing combo (lunges, timing, `MELEE_HIT`), the
+  Hyper-Strike, `ratchet_swing_info` (20 damage a swing, knockback 2.5 / 2 / 4 m), and
+  `ratchet_smash_info` (50 within 3 m). The thrown wrench is `ratchet_wrench_throw`/`_step`.
+- **Guns** live in `crates/libarsenal`, which has no C API. Until it gets one (the second request
+  in `PROPOSAL-clip-choice-api.md`), the plugin has a small C++ stand-in for the Burst Pistol's
+  trigger, with its game numbers (wpn_burstpistol_weapon.json, as the sandbox reads it): 11.36 a
+  shot, 6 shots/s from the hip and 3 aimed, a spread that grows.
+- **The models:** `wrench.glb` and `burstpistol.glb`, each skinned to its own small skeleton like
+  Ratchet. Both go on his `igLoc_RT_gunAttach` with no offset, as in the sandbox and the game.
+- **The clips:** the converter had left out every weapon clip; it keeps them all now (170).
+
+### How it works in Skyrim
+- **Buttons** (INI `[Combat]`, Rift Apart's controller layout on Skyrim's controls): fire on
+  Right Attack (LMB / RT = R2), aim on Left Attack (RMB / LT = L2), the wrench on Ready Weapon
+  (R / X = Square), the throw on Shout (Z / RB = R1). On foot, Skyrim's own attacks, blocks,
+  weapon drawing and shouts are switched off (their handlers' `CanProcess`).
+- **Hits are spells cast by the player**, so Skyrim's rules follow: the target fights back, crimes
+  count, kills are his, and the difficulty scales the damage. They're built at run time from
+  vanilla records:
+  - `AlchDamageHealth` (`0003EB42`), copied without resistance or skill: health damage, its size
+    set per cast;
+  - `StaggerAttackFFContact` (`0007809B`): a stagger;
+  - `FireboltProjectile01` (`00012E84`): the bolt a shot rides (36 m/s; the game's is 80 m/s ×
+    scale).
+
+  The forms only live for the session. Every effect is instant, so nothing of them is saved.
+- **Swings:** the sim's state 7 (and the slam's landing, 9) move him like the ground dash does,
+  so the lunges are the sim's. On `MELEE_HIT`, everyone within 1.8 m × scale and in front (the
+  sandbox's reach and cone) takes the swing's damage and a stagger (full on the third swing).
+- **Hyper-Strike:** melee in the air. Its hop and slam are a flight; the height it falls doesn't
+  count toward fall damage. On `SMASH_IMPACT`, everyone within 3 m × scale takes 50.
+- **The pistol:** the bolt leaves his gun hand for the point the camera looks at (a ray up to
+  45 m × scale), scattered by the spread. While aiming or firing he strafes (the sim's
+  `aiming` 1 or 2, facing the camera's flat forward): the strafe clips play by the way he moves.
+  No firing while dashing, swinging, on walls or ledges.
+- **The throw:** 0.068 s after the press the wrench leaves his hand, flat along the camera's
+  look. The sim flies it out and back. Walls turn it back (a ray each frame). Anyone within
+  0.5 m × scale of its path takes 30, once per throw. His model shows it flying (laid flat,
+  spinning), and it's back in his hand on the catch. No swings or shots while it's out.
+- His model holds the wrench while swinging (and just after) and the pistol while aiming or
+  firing (and 2 s after).
+
+### Tests (fights against a cow with its AI off and 1000 health)
+- First run: every hit landed (3 swings, the slam, 6 of 6 hip shots and 3 of 3 aimed shots at
+  8 m), but each did half its damage: 10 a swing, 25 for the slam, 5.68 a shot. That's
+  Skyrim's difficulty scaling of the player's damage (Master: ×0.5, `fDiffMultHPByPCVH`). It
+  stays (Skyrim's rule), and the tests now expect damage × the save's difficulty multiplier.
+- The owner played the first combat build right after: dozens of Hyper-Strikes ("slam hits 1,
+  50 damage within 4.6 m") and swings in the log, nothing wrong.
