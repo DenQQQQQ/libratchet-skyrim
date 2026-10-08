@@ -35,6 +35,31 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (afternoon): captioned demo videos, and a turns demo
+
+Videos to watch away from the desk: the parts today's fixes changed, with a line of text
+saying what each run shows.
+
+- **`--demo-part turns`:** the same run along +X three times, filmed from above, with the stick
+  swung to −Z 0.2 s into a single jump, 0.2 s into a double jump and 0.1 s into a dash; then
+  the whole path from higher up. Shots `100_turn_single_jump`, `101_turn_double_jump`,
+  `102_dash_bends`. Seen:
+  - the single jump's path turns a sharp corner, and he faces the new way at once;
+  - the double jump's corner is rounder, and he comes round over about half a second;
+  - the dash bends in a wide arc: about 0.4 s of it is left at 180°/s, so up to 72°, and the
+    run finishes the turn.
+- **Demo acts:**
+  - `Act::Caption`: a line of text at the bottom of the picture. The walljump, ledges,
+    swingshot and turns parts use it.
+  - `Act::Trail { shown, flat }`: the trail, and the stick's direction as a black arrow under
+    him, in a clean recording. `flat` draws the trail on the floor: seen from above at an
+    angle, his height bends the line (the double jump's rise and fall looked like a hook).
+  - Gizmo lines are 3 px wide in demos, to read in a video.
+- **Docs:** `--record` saves every other frame (30 fps), as it always has; the usage said
+  every frame (60 fps).
+- **Recorded** (not in the repo): `recordings/turns.mp4`, `wall_jumps.mp4`, `ledges.mp4`,
+  `swingshot.mp4`.
+
 ## 2026-10-08 (evening): turning in the air and in dashes, from the game
 
 His turn in the air was ours: toward where he was going, at 14 rad/s. A research agent read

@@ -7,10 +7,10 @@
 //!                     $RIFTAPART_CONFIGS, else ./riftapart-configs, else ../riftapart-decomp/configs)
 //!   --scale <s>       start at this character scale (1 = Ratchet-sized)
 //!   --demo            play a scripted run, save screenshots to ./screenshots, then quit
-//!   --record <dir>    with --demo: also save every frame (60 fps) as PNG for a video
+//!   --record <dir>    with --demo: also save every other frame (30 fps) as PNG for a video
 //!   --demo-part <part> with --demo: only that section (wrench, weapons, moves, combat, face,
 //!                     sounds, carry, dashjump, throwswitch, strafejump, walljump, ledges,
-//!                     swingshot)
+//!                     swingshot, turns)
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;
@@ -178,6 +178,19 @@ impl CameraRig {
 pub struct Trail {
     points: VecDeque<(Vec3, MoveState)>,
     apexes: Vec<(Vec3, f32)>,
+    /// Drawn even with the debug overlay hidden (a demo's clean recording).
+    pub shown: bool,
+    /// Drawn flat on the floor (y = 0) under where he went, so a path seen from above isn't
+    /// bent by his height (a demo on the open floor).
+    pub flat: bool,
+}
+
+impl Trail {
+    /// Starts it over (whether it's shown stays).
+    pub fn clear(&mut self) {
+        self.points.clear();
+        self.apexes.clear();
+    }
 }
 
 /// Input from the demo script; overrides the keyboard when set.
@@ -671,7 +684,7 @@ fn hotkeys(
         p.sim.set_tuning(t);
     }
     if keys.just_pressed(KeyCode::KeyT) {
-        *trail = Trail::default();
+        trail.clear();
     }
     if keys.just_pressed(KeyCode::Backspace) {
         respawn(&mut p, spots::SPAWN, &level, settings.scale);
@@ -941,18 +954,22 @@ fn set_fov(projection: &mut Projection, horizontal: f32) {
 }
 
 fn draw_trail(trail: Res<Trail>, overlay: Res<DebugOverlay>, mut gizmos: Gizmos) {
-    if !overlay.0 {
+    if !overlay.0 && !trail.shown {
         return;
     }
     let lift = Vec3::Y * 0.05;
+    let place = |p: Vec3| if trail.flat { p.with_y(0.0) } else { p } + lift;
     // (The ring buffer's two halves, and the step between them.)
     let (first, second) = trail.points.as_slices();
     let seam = first.last().zip(second.first()).map(|(a, b)| [*a, *b]);
     for pair in first.windows(2).chain(seam.as_ref().map(|s| &s[..])).chain(second.windows(2)) {
         let ((a, _), (b, state)) = (pair[0], pair[1]);
         if a.distance(b) < 2.0 {
-            gizmos.line(a + lift, b + lift, state_color(state));
+            gizmos.line(place(a), place(b), state_color(state));
         }
+    }
+    if trail.flat {
+        return;
     }
     for (peak, height) in &trail.apexes {
         let base = *peak - Vec3::Y * *height;

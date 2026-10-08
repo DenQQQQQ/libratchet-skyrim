@@ -23,6 +23,11 @@ enum Act {
     Gun { trigger: bool, aim: bool },
     Teleport(Vec3),
     ClearTrail,
+    /// Draw the trail, and the stick's direction under him, even in a clean recording (from
+    /// here on); `flat`: on the floor under where he went, to read a path from above.
+    Trail { shown: bool, flat: bool },
+    /// A line of text at the bottom of the picture from here on ("" for none).
+    Caption(&'static str),
     Scale(f32),
     /// Follow-camera angles (also where guns aim, and back from `Watch`).
     Follow { yaw: f32, pitch: f32, distance: f32 },
@@ -72,6 +77,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("walljump") => [vec![hold(1.5, Vec2::ZERO, false)], wall_jumps()].concat(),
         Some("ledges") => [vec![hold(1.5, Vec2::ZERO, false)], ledges()].concat(),
         Some("swingshot") => [vec![hold(1.5, Vec2::ZERO, false)], swingshot()].concat(),
+        Some("turns") => [vec![hold(1.5, Vec2::ZERO, false)], turns()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -80,8 +86,51 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         app.insert_resource(crate::sound::SoundLog(log));
     }
     app.insert_resource(Demo { acts, index: 0, elapsed: 0.0, shot_taken: false, out, record, frame: 0, finished_for: 0.0, pending_shot: None })
+        .add_systems(Startup, setup)
         .add_systems(FixedUpdate, run_script.before(simulate))
-        .add_systems(Update, record_frames);
+        .add_systems(Update, (record_frames, draw_stick.after(crate::update_visuals)));
+}
+
+/// The caption line (`Act::Caption`).
+#[derive(Component)]
+struct Caption;
+
+fn setup(mut commands: Commands, mut gizmos: ResMut<GizmoConfigStore>) {
+    // Lines a little thicker than at the desk, to read in a video.
+    gizmos.config_mut::<DefaultGizmoConfigGroup>().0.line.width = 3.0;
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            bottom: px(28.0),
+            left: px(0.0),
+            right: px(0.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_child((
+            Caption,
+            Text::new(""),
+            TextFont::from_font_size(24.0),
+            TextColor(Color::WHITE),
+            TextLayout::justify(Justify::Center),
+            TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.0, 0.0, 0.85) },
+        ));
+}
+
+/// With the trail shown, the stick's direction from under him (black): what the script
+/// pushes.
+fn draw_stick(trail: Res<Trail>, scripted: Res<ScriptedInput>, players: Query<&Transform, With<Player>>, mut gizmos: Gizmos) {
+    if !trail.shown {
+        return;
+    }
+    let (Some(input), Ok(tf)) = (scripted.0.as_ref(), players.single()) else { return };
+    let dir = input.move_dir;
+    if dir.length() < 1e-3 {
+        return;
+    }
+    let from = tf.translation + Vec3::Y * 0.08;
+    let to = from + Vec3::new(dir.x, 0.0, dir.y) * 1.6 * tf.scale.x;
+    gizmos.arrow(from, to, Color::srgb(0.06, 0.06, 0.1)).with_tip_length(0.35 * tf.scale.x);
 }
 
 fn hold(secs: f32, dir: Vec2, jump: bool) -> Act {
@@ -674,6 +723,7 @@ fn ledges() -> Vec<Act> {
     let side = Act::Follow { yaw: std::f32::consts::PI, pitch: 0.2, distance: 7.0 };
     vec![
         Act::ClearTrail,
+        Act::Caption("Off a block, short of a platform: he catches its lip and hangs on"),
         // Off a 3 m block at a 5 m platform 3 m away: he falls short, catches the lip, hangs
         // on, and a jump climbs up.
         Act::Teleport(l + Vec3::new(-8.6, 3.0, 0.0)),
@@ -687,12 +737,14 @@ fn ledges() -> Vec<Act> {
         Act::Shot("80_ledge_catch"),
         hold(0.8, Vec2::ZERO, false),
         Act::Shot("81_ledge_hang"),
+        Act::Caption("Jump: he climbs up"),
         hold(0.05, Vec2::ZERO, true),
         hold(0.3, Vec2::ZERO, false),
         Act::Shot("82_ledge_climb"),
         hold(1.2, Vec2::ZERO, false),
         // The wall's placed ledges (yellow): up at the one at 3 m, grabbed on the way down; a
         // jump to the one along the top, and the ledge jump up over it.
+        Act::Caption("Placed ledges (yellow): a jump, and he grabs one on the way down"),
         Act::Teleport(l + Vec3::new(5.0, 0.0, 0.0)),
         hold(0.12, x, false),
         side.clone(),
@@ -701,25 +753,30 @@ fn ledges() -> Vec<Act> {
         hold(0.6, Vec2::ZERO, false),
         Act::Shot("83_ledge_grab"),
         hold(0.5, Vec2::ZERO, false),
+        Act::Caption("Jump: up to the next one"),
         hold(0.05, Vec2::ZERO, true),
         hold(0.4, Vec2::ZERO, false),
         Act::Shot("84_ledge_up"),
         hold(0.8, Vec2::ZERO, false),
+        Act::Caption("Jump at the top: the ledge jump, up over it"),
         hold(0.05, Vec2::ZERO, true),
         hold(0.3, Vec2::ZERO, false),
         Act::Shot("85_ledge_jump"),
         hold(1.2, Vec2::ZERO, false),
         // Letting go of the lower one: the turn, then the fall.
+        Act::Caption("Hanging on the lower ledge..."),
         Act::Teleport(l + Vec3::new(5.0, 0.0, 0.0)),
         hold(0.12, x, false),
         side,
         hold(0.5, Vec2::ZERO, false),
         hold(0.25, Vec2::ZERO, true),
         hold(1.1, Vec2::ZERO, false),
+        Act::Caption("...crouch lets go"),
         crouch(0.05),
         hold(0.25, Vec2::ZERO, false),
         Act::Shot("86_ledge_drop"),
         hold(1.2, Vec2::ZERO, false),
+        Act::Caption(""),
     ]
 }
 
@@ -739,6 +796,11 @@ fn swingshot() -> Vec<Act> {
             // Looking along the course, level, as a player would to find the first target.
             Act::Follow { yaw: std::f32::consts::PI, pitch: 0.0, distance: 4.65 },
         ]);
+        acts.push(Act::Caption(if pass == 0 {
+            "Swingshot, through his camera: three targets, off each with a jump"
+        } else {
+            "The same run from the side"
+        }));
         if pass == 1 {
             acts.push(Act::Film { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.12, distance: 13.0 });
         }
@@ -766,6 +828,7 @@ fn swingshot() -> Vec<Act> {
             acts.extend([Act::Shot("92_swing_landed"), hold(0.1, Vec2::ZERO, false)]);
         }
         // The Hookshot up onto the block.
+        acts.push(Act::Caption("Hookshot: reeled up onto the block"));
         acts.push(swinging(1.2, Vec2::ZERO));
         if pass == 0 {
             acts.push(Act::Shot("93_hookshot"));
@@ -775,6 +838,53 @@ fn swingshot() -> Vec<Act> {
             acts.extend([Act::Shot("94_hookshot_top"), hold(0.5, Vec2::ZERO, false)]);
         }
     }
+    acts.push(Act::Caption(""));
+    acts
+}
+
+/// Turning in the air and in a dash, filmed from above with the trail (flat on the floor) and
+/// the stick (black arrow) drawn: the same run along +X three times, the stick swung to −Z
+/// (up the screen) partway into a single jump, a double jump and a dash, then the whole path
+/// from higher up.
+/// A single jump keeps almost none of its momentum, so where he goes and where he faces swing
+/// round at once; a double jump keeps more, so its path rounds the corner and he comes round
+/// to face it lazily; a dash bends toward the stick at up to 180°/s.
+fn turns() -> Vec<Act> {
+    let x = Vec2::X;
+    let up = Vec2::NEG_Y;
+    let lane = spots::DEMO_LANE;
+    let start = |caption: &'static str| {
+        vec![
+            Act::Caption(caption),
+            Act::Teleport(lane),
+            Act::ClearTrail,
+            hold(0.12, x, false),
+            Act::Follow { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.2, distance: 5.0 },
+            Act::Film { yaw: 0.0, pitch: 0.95, distance: 10.0 },
+            hold(0.5, Vec2::ZERO, false),
+            hold(0.8, x, false),
+        ]
+    };
+    let overview = |shot: &'static str| {
+        [
+            hold(0.6, Vec2::ZERO, false),
+            Act::Watch { focus: lane + Vec3::new(4.5, 0.0, -2.2), yaw: 0.0, pitch: 1.2, distance: 13.0 },
+            hold(0.3, Vec2::ZERO, false),
+            Act::Shot(shot),
+            hold(1.5, Vec2::ZERO, false),
+        ]
+    };
+    let mut acts = vec![Act::Trail { shown: true, flat: true }];
+    acts.extend(start("Single jump, stick swung up the screen 0.2 s in: he turns at once"));
+    acts.extend([hold(0.2, x, true), hold(0.6, up, false)]);
+    acts.extend(overview("100_turn_single_jump"));
+    acts.extend(start("Double jump, the same swing: it keeps more momentum, so he comes round lazily"));
+    acts.extend([hold(0.2, x, true), hold(0.1, x, false), hold(0.2, x, true), hold(0.6, up, false)]);
+    acts.extend(overview("101_turn_double_jump"));
+    acts.extend(start("Dash, stick swung up 0.1 s in: the dash bends toward it, at up to 180 degrees a second"));
+    acts.extend([dash(x), hold(0.1 - 2.0 * TICK, x, false), hold(0.6, up, false)]);
+    acts.extend(overview("102_dash_bends"));
+    acts.extend([Act::Trail { shown: false, flat: false }, Act::Caption("")]);
     acts
 }
 
@@ -798,6 +908,7 @@ fn wall_jumps() -> Vec<Act> {
     let z = Vec2::Y;
     let mut acts = vec![
         Act::ClearTrail,
+        Act::Caption("Wall-jump shaft: a running jump onto one wall, then back and forth up it"),
         // He runs into the shaft from its open +X end, the camera behind him and off to the side.
         // The shaft's wall-jump zone turns it to look straight along the shaft, a little down,
         // and pulls it back.
@@ -827,11 +938,13 @@ fn wall_jumps() -> Vec<Act> {
     }
     acts.extend([
         // On the ledge.
+        Act::Caption("...and out over the top"),
         hold(1.0, Vec2::ZERO, false),
         Act::Shot("73_wall_shaft_top"),
         hold(0.6, Vec2::ZERO, false),
         // Left on the wall: a double jump onto it, held until he slides down to a metre above
         // the floor and lets go.
+        Act::Caption("Left on the wall: he slides down and lets go a metre above the floor"),
         Act::Teleport(shaft + Vec3::new(0.0, 0.0, -1.2)),
         hold(0.12, z, false),
         hold(0.5, Vec2::ZERO, false),
@@ -844,6 +957,7 @@ fn wall_jumps() -> Vec<Act> {
         hold(1.3, Vec2::ZERO, false),
         // Plain walls (grey): he sticks to one only once per air time, so between two of them he
         // jumps across, bumps into the other and drops.
+        Act::Caption("Plain walls (grey) take one wall jump per air time: across, a bump, a drop"),
         Act::Teleport(shaft + Vec3::new(-13.3, 0.0, 0.0)),
         hold(0.12, Vec2::X, false),
         Act::Watch { focus: shaft + Vec3::new(-12.1, 2.5, 0.0), yaw: 0.0, pitch: 0.12, distance: 11.0 },
@@ -858,6 +972,7 @@ fn wall_jumps() -> Vec<Act> {
         Act::Shot("75_plain_wall_no_second_stick"),
         hold(1.3, Vec2::ZERO, false),
         // Pushing the stick into a plain wall jumps up it instead, with his double jump.
+        Act::Caption("Stick pushed into a plain wall: up it with the double jump"),
         hold(0.1, Vec2::X, false),
         hold(0.25, Vec2::X, true),
         hold(0.35, Vec2::X, false),
@@ -865,6 +980,7 @@ fn wall_jumps() -> Vec<Act> {
         hold(0.3, Vec2::X, false),
         Act::Shot("76_plain_wall_jump_up"),
         hold(1.5, Vec2::ZERO, false),
+        Act::Caption(""),
     ]);
     acts
 }
@@ -1023,6 +1139,7 @@ fn run_script(
     mut trail: ResMut<Trail>,
     mut exit: MessageWriter<AppExit>,
     level: Res<crate::level::Level>,
+    mut captions: Query<&mut Text, With<Caption>>,
 ) {
     let dt = time.delta_secs();
     let Ok(mut p) = players.single_mut() else { return };
@@ -1038,7 +1155,16 @@ fn run_script(
         };
         match act {
             Act::Teleport(at) => respawn(&mut p, at, &level, settings.scale),
-            Act::ClearTrail => *trail = Trail::default(),
+            Act::ClearTrail => trail.clear(),
+            Act::Trail { shown, flat } => {
+                trail.shown = shown;
+                trail.flat = flat;
+            }
+            Act::Caption(line) => {
+                for mut text in &mut captions {
+                    text.0 = line.to_string();
+                }
+            }
             Act::Scale(s) => {
                 settings.scale = s;
                 let t = settings.base.scaled(s);
