@@ -35,11 +35,13 @@ namespace AutoTest
 			int         minHits = 0;
 			float       throwAt = -1.0f;   // the wrench thrown (one frame), s from the start
 		};
-		// At Dragonborn scale with the owner's configs (the sandbox, flat floor): a press again
-		// at 0.4 s double-jumps at 0.42 s (peak 4.34 m), and held on he glides from 0.93 s. A
-		// ground dash goes 10.9 m in 0.53 s; an air dash flies flat at 10.85 m/s for 0.6 s. The
-		// wrench's swings do 20 each (wpn_wrench_melee.json), the Hyper-Strike 50, a Burst Pistol
-		// shot 11.36 at 6 shots/s from the hip and 3 aimed.
+		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
+		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
+		// scale 1, 4.34 m at 1.55), and held on he glides from 0.93 s. A ground dash goes 7 m (×
+		// scale) in 0.53 s; an air dash flies flat for 0.6 s. The wrench's swings do 20 each
+		// (wpn_wrench_melee.json) within 1.8 m (× scale), the Hyper-Strike 50 within 3 m, a Burst
+		// Pistol shot 11.36 at 6 shots/s from the hip and 3 aimed. The targets stand where every
+		// scale from 1 reaches.
 		constexpr Case kCases[] = {
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
@@ -51,8 +53,8 @@ namespace AutoTest
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
-			{ .name = "wrench combo", .hold = -1.0f, .duration = 2.5f, .targetAt = 1.8f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
-			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 2.0f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
+			{ .name = "wrench combo", .hold = -1.0f, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
+			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 1.5f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },

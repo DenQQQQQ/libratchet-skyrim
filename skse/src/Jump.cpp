@@ -8,6 +8,7 @@
 #include "Physics.h"
 #include "RatchetDll.h"
 #include "Settings.h"
+#include "Sounds.h"
 
 namespace Jump
 {
@@ -266,6 +267,57 @@ namespace Jump
 		const char* TakeoffEvent(const RE::bhkCharacterController* a_ctrl)
 		{
 			return Moving(a_ctrl) ? "JumpDirectionalStart" : "JumpStandingStart";
+		}
+
+		// Rift Apart's sounds for this step's moves (the game's own events for them).
+		void MoveSounds(RE::PlayerCharacter* a_player, const RatchetStepResult& a_r, std::uint32_t a_before)
+		{
+			const RE::NiPoint3 at = a_player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * UnitsPerMetre() };
+			const auto e = a_r.events;
+			if (e & (RATCHET_EVENT_JUMPED | RATCHET_EVENT_WALL_JUMPED | RATCHET_EVENT_LEDGE_JUMPED)) {
+				Sounds::Play("jump", at);
+				Sounds::Play("jump_swish", at);
+				Sounds::Play("footstep_jump", at);
+				Sounds::Play("voice_jump", at);
+			}
+			if (e & RATCHET_EVENT_DOUBLE_JUMPED) {
+				Sounds::Play("double_jump", at);
+			}
+			if (e & RATCHET_EVENT_LANDED) {
+				Sounds::Play("land", at);
+				Sounds::Play("footstep_land", at);
+				Sounds::Play("voice_land", at);
+			}
+			if (e & RATCHET_EVENT_DASHED) {
+				Sounds::Play("phantom_dash", at);
+			} else if (a_before == RATCHET_STATE_DASH && a_r.state != RATCHET_STATE_DASH) {
+				Sounds::Play("phantom_dash_end", at);
+			}
+			if (e & RATCHET_EVENT_AIR_DASHED) {
+				Sounds::Play("air_dash", at);
+			}
+			if (e & RATCHET_EVENT_GLIDE_STARTED) {
+				Sounds::Play("heli_extend", at);
+			}
+			if (a_r.state == RATCHET_STATE_GLIDE) {
+				Sounds::Loop("heli_loop", at);
+			} else if (a_before == RATCHET_STATE_GLIDE) {
+				Sounds::Stop("heli_loop");
+				Sounds::Play("heli_retract", at);
+			}
+			if (e & RATCHET_EVENT_MELEE_SWING) {
+				Sounds::Play("wrench_swing", at);
+				Sounds::Play("swing_foley", at);
+				Sounds::Play(a_r.melee_swing >= 2 ? "voice_melee_heavy" : "voice_melee", at);
+			}
+			if (e & RATCHET_EVENT_SMASH_STARTED) {
+				Sounds::Play("voice_melee_heavy", at);
+			}
+			if (e & RATCHET_EVENT_SMASH_IMPACT) {
+				Sounds::Play("wrench_slam", at);
+				Sounds::Play("wrench_slam_base", at);
+				Sounds::Play("wrench_slam_sweetener", at);
+			}
 		}
 
 		// The sim's rays into Skyrim's world (it catches ledges with them): sim axes, metres.
@@ -608,6 +660,7 @@ namespace Jump
 			if (r.events & RATCHET_EVENT_MELEE_SWING) {
 				AutoTest::OnMove(std::format("swing{}", r.melee_swing + 1));
 			}
+			MoveSounds(a_player, r, g.last.state);
 			// The wrench's hits, the slam, the gun.
 			Combat::Step(a_player, g.sim, r, a_dt);
 			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {
@@ -685,6 +738,7 @@ namespace Jump
 				const bool running = dt > 0.0f && !RE::UI::GetSingleton()->GameIsPaused();
 				if (running) {
 					Step(a_this, dt);
+					Sounds::Update(dt);
 				}
 				_Update(a_this, a_delta);
 				Observe(a_this);

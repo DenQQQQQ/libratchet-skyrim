@@ -5,8 +5,9 @@
 struct Settings
 {
 	bool enabled = true;
-	// 1 = Ratchet-sized; 1.55 = Dragonborn-sized (the plan's default).
-	float scale = 1.55f;
+	// 1 = Ratchet-sized (the owner's choice: lore size is more fun); 1.55 = Dragonborn-sized (the
+	// plan's first default).
+	float scale = 1.0f;
 	// Rift Apart configs extracted by tools/extract_riftapart_configs.py; relative paths are from
 	// the plugin's folder. Empty or missing: libratchet's built-in tuning.
 	std::string configsDir = "RatchetMovement";
@@ -27,6 +28,9 @@ struct Settings
 	std::string throwControl = "Shout";
 	// Rift Apart's damage numbers times this, on Skyrim's health.
 	float damageMult = 1.0f;
+	// Rift Apart's sounds on his moves (skse/tools/ratchet_sounds_to_skyrim.py), and how loud.
+	bool  sounds = true;
+	float soundVolume = 1.0f;
 	// One log line per jump (takeoff, apex, landing) and its expected numbers.
 	bool logJumps = true;
 	// Per-frame trace while a jump is active (big logs).

@@ -116,13 +116,36 @@ if ($Install) {
                 if ($LASTEXITCODE -ne 0) { throw "converting $($w.Name) failed" }
             }
         }
+        # His sounds (skse\tools\ratchet_sounds_to_skyrim.py): WAV files and sounds.txt, converted
+        # again when the extraction's manifest or the tool is newer.
+        $soundsSrc = Join-Path (Split-Path $glb) "sounds"
+        $soundsOut = Join-Path $here "..\target\skse\sounds"
+        $soundsTxt = Join-Path $soundsOut "SKSE\Plugins\RatchetMovement\sounds.txt"
+        if (Test-Path (Join-Path $soundsSrc "sounds.json")) {
+            $sstale = -not (Test-Path $soundsTxt)
+            if (-not $sstale) {
+                $made = (Get-Item $soundsTxt).LastWriteTime
+                $sstale = (Get-Item (Join-Path $soundsSrc "sounds.json")).LastWriteTime -gt $made -or (Get-Item (Join-Path $tools "ratchet_sounds_to_skyrim.py")).LastWriteTime -gt $made
+            }
+            if ($sstale) {
+                Write-Host "Converting his sounds from $soundsSrc..."
+                uv run --python 3.12 --with numpy --with soundfile (Join-Path $tools "ratchet_sounds_to_skyrim.py") --sounds $soundsSrc --out $soundsOut | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "converting the sounds failed" }
+            }
+        } else {
+            Write-Warning "No $soundsSrc\sounds.json: he'll be silent (tools\extract_riftapart_sounds.py makes it)"
+        }
         # No stale files from an older conversion.
-        foreach ($old in "meshes\RatchetMovement", "textures\RatchetMovement") {
+        foreach ($old in "meshes\RatchetMovement", "textures\RatchetMovement", "Sound\FX\RatchetMovement") {
             $p = Join-Path $ModDir $old
             if (Test-Path $p) { Remove-Item -Recurse -Force $p }
         }
         Copy-Item -Recurse -Force (Join-Path $converted "*") $ModDir
         Write-Host "Ratchet's model from $converted"
+        if (Test-Path $soundsTxt) {
+            Copy-Item -Recurse -Force (Join-Path $soundsOut "*") $ModDir
+            Write-Host "His sounds from $soundsOut"
+        }
     } else {
         Write-Warning "No riftapart-assets\ratchet.glb: no Ratchet model (tools\extract_riftapart_ratchet.py makes it)"
     }

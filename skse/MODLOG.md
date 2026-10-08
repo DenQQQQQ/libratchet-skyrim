@@ -346,3 +346,21 @@ A survey of the repo found:
   stays (Skyrim's rule), and the tests now expect damage × the save's difficulty multiplier.
 - The owner played the first combat build right after: dozens of Hyper-Strikes ("slam hits 1,
   50 damage within 4.6 m") and swings in the log, nothing wrong.
+
+## 2026-10-09: his sounds, his weapons in hand, and his own size
+
+- **Ratchet-sized by default (`fScale = 1.0`).** The owner: he "feels too big", lore size would
+  be more fun. At scale 1 his model is about 1.2 m tall, and the sim uses Rift Apart's own
+  numbers (a 1.5 m full jump, 2.8 m with the double jump, a 7 m dash). Skyrim's collision
+  capsule and camera stay the Dragonborn's. Shrinking the player actor too is open.
+- **Sounds:** `skse/tools/ratchet_sounds_to_skyrim.py` turns the owner's extracted sounds
+  (`riftapart-assets/sounds`, 38 moments) into mono 16-bit WAV under `Data\Sound\FX\
+  RatchetMovement` (881 files, 54 MB) and `sounds.txt`. The plugin plays a moment's layers like
+  the game: one random file each, at its volume, after its delay, at a random pitch in its
+  range, with the moment's chance. It uses Skyrim's own audio (`GetSoundHandleByFile`). Moments
+  played: jump (+ swish, footstep, voice), double jump, landing (+ footstep, voice), Phantom
+  Dash and its end, air dash, the glide's heli-pack (extend, loop, retract), swings (+ foley,
+  voice), the slam, each wrench hit, the throw (+ voice), its whir while it flies, the catch,
+  pistol shots, and the bolt's impact when it would arrive. Levels: 15 dB is full volume (ours).
+- **The wrench and the pistol are in his hand** (the converted NIFs on igLoc_RT_gunAttach), and
+  the thrown wrench flies as its own model. Built and installed, not yet seen in game.

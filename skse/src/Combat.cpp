@@ -6,6 +6,7 @@
 #include "Model.h"
 #include "Physics.h"
 #include "Settings.h"
+#include "Sounds.h"
 #include "Spells.h"
 
 namespace Combat
@@ -122,6 +123,7 @@ namespace Combat
 		{
 			const float damage = a_damage * Settings::Get().damageMult;
 			Spells::Hit(a_target, damage, a_stagger);
+			Sounds::Play("wrench_hit", a_target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, a_target->GetHeight() * 0.5f });
 			++c.tally.hits;
 			c.tally.damage += damage;
 		}
@@ -176,23 +178,24 @@ namespace Combat
 			SKSE::log::info("combat: slam hits {} ({:.1f} damage within {:.1f} m)", hits, damage * Settings::Get().damageMult, radius);
 		}
 
-		// Where the camera looks, as far as kRange × scale: the point the shot goes for.
-		RE::NiPoint3 AimPoint()
+		// Where the camera looks, as far as kRange × scale: the point the shot goes for, and
+		// whether something is there.
+		std::pair<RE::NiPoint3, bool> AimPoint()
 		{
 			if (c.testAim) {
-				return *c.testAim;
+				return { *c.testAim, true };
 			}
 			const float reach = kRange * Settings::Get().scale * Units();
 			auto* camera = RE::PlayerCamera::GetSingleton();
 			if (!camera || !camera->cameraRoot) {
 				auto* player = RE::PlayerCharacter::GetSingleton();
 				const float yaw = player->GetAngleZ();
-				return player->GetPosition() + RE::NiPoint3{ std::sin(yaw), std::cos(yaw), 0.0f } * reach;
+				return { player->GetPosition() + RE::NiPoint3{ std::sin(yaw), std::cos(yaw), 0.0f } * reach, false };
 			}
 			const RE::NiPoint3 from = camera->cameraRoot->world.translate;
 			const RE::NiPoint3 to = from + camera->cameraRoot->world.rotate.GetVectorY() * reach;
 			const auto hit = Physics::Ray(from, to);
-			return hit ? hit->point : to;
+			return hit ? std::pair{ hit->point, true } : std::pair{ to, false };
 		}
 
 		// A direction within a_degrees of a_dir, uniformly over the cone's disc.
@@ -230,6 +233,8 @@ namespace Combat
 			c.blocked = 0;
 			c.struck.clear();
 			++c.tally.throws;
+			Sounds::Play("wrench_throw", hand);
+			Sounds::Play("voice_throw", hand);
 		}
 
 		// Everyone within reach of its path from a_from to a_to takes the throw's hit, once.
@@ -279,6 +284,10 @@ namespace Combat
 				ratchet_wrench_free(c.thrown);
 				c.thrown = nullptr;
 				c.struck.clear();
+				Sounds::Stop("wrench_throw_loop");
+				Sounds::Play("wrench_catch", now);
+			} else {
+				Sounds::Loop("wrench_throw_loop", now);
 			}
 		}
 
@@ -300,12 +309,19 @@ namespace Combat
 			}
 			c.spread = std::clamp(c.spread, spread.min, spread.max);
 			const RE::NiPoint3 muzzle = HandAt(a_player);
-			RE::NiPoint3       dir = AimPoint() - muzzle;
-			if (dir.Length() < 1.0f) {
+			const auto [aim, something] = AimPoint();
+			RE::NiPoint3 dir = aim - muzzle;
+			const float  distance = dir.Length();
+			if (distance < 1.0f) {
 				return;
 			}
 			dir.Unitize();
 			Spells::Shoot(muzzle, Scatter(dir, c.spread), kShotDamage * Settings::Get().damageMult);
+			Sounds::Play("pistol_shot", muzzle);
+			if (something) {
+				// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
+				Sounds::Play("bolt_impact", aim, distance / 2500.0f);
+			}
 			c.sinceShot = 0.0f;
 			++c.tally.shots;
 		}

@@ -47,7 +47,7 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	enabled = ReadBool(a_ini, L"General", L"bEnabled", enabled);
 	scale = ReadFloat(a_ini, L"General", L"fScale", scale);
 	if (!(scale > 0.0f)) {
-		scale = 1.55f;
+		scale = 1.0f;
 	}
 	configsDir = Narrow(ReadString(a_ini, L"General", L"sConfigsDir", L"RatchetMovement"));
 	animations = ReadBool(a_ini, L"General", L"bAnimations", animations);
@@ -59,6 +59,8 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	meleeControl = Narrow(ReadString(a_ini, L"Combat", L"sMeleeControl", L"Ready Weapon"));
 	throwControl = Narrow(ReadString(a_ini, L"Combat", L"sThrowControl", L"Shout"));
 	damageMult = ReadFloat(a_ini, L"Combat", L"fDamageMult", damageMult);
+	sounds = ReadBool(a_ini, L"General", L"bSounds", sounds);
+	soundVolume = ReadFloat(a_ini, L"General", L"fSoundVolume", soundVolume);
 	logJumps = ReadBool(a_ini, L"Debug", L"bLogJumps", logJumps);
 	traceJumps = ReadBool(a_ini, L"Debug", L"bTraceJumps", traceJumps);
 }
