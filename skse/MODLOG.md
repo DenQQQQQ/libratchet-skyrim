@@ -63,7 +63,15 @@ The plugin's own log, kept in `skse/` while it's built on the `skse` branch (the
   `hit_ceiling`.
 - Skyrim's jump animations are sent with the sim's jumps (`JumpStandingStart` or
   `JumpDirectionalStart` at the takeoff, `JumpFall` at the apex, `JumpLand` on landing), as
-  ALYSLC does (INI `bAnimations`). Not checked in game yet.
+  ALYSLC does (INI `bAnimations`).
+
+### Second playtest (the fixes, with the animations)
+- 15 jumps, no deaths: the fall start follows him up and never drops below the takeoff.
+- Full holds still peak at 2.325 m. The jump animation's own takeoff doesn't disturb the speed:
+  in flight, the height Skyrim moved him matches the sim's speed within 0.2 m/s every frame
+  (the takeoff frame within 1.8 m/s, frame-time jitter). The last 2-3 frames before the
+  controller reports the landing are the ground stopping him.
+- The owner sees Skyrim's jump animation on the sim's jumps.
 
 ### Choices (assumptions, not from the game)
 - Jump only: a press counts if it began on the ground, and the sim stops seeing the button once
