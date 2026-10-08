@@ -2,6 +2,7 @@
 #include "TestWindow.h"
 
 #include <d3d11.h>
+#include <deque>
 #include <dxgi.h>
 #include <wincodec.h>
 
@@ -18,7 +19,7 @@ namespace TestWindow
 		bool                  g_haveRect = false;
 		std::filesystem::path g_folder;
 		std::mutex            g_lock;
-		std::string           g_pending;  // a shot asked for, not yet copied
+		std::deque<std::string> g_pending;  // shots asked for, not yet copied (one a frame, in order)
 		std::uint64_t         g_frame = 0;       // frames presented
 		std::uint64_t         g_frameCalls = 0;  // watched Map calls this frame
 
@@ -156,7 +157,10 @@ namespace TestWindow
 			std::string name;
 			if (ctx && !g_readback) {
 				std::lock_guard l(g_lock);
-				name.swap(g_pending);
+				if (!g_pending.empty()) {
+					name = std::move(g_pending.front());
+					g_pending.pop_front();
+				}
 			}
 			if (!name.empty() && !g_folder.empty()) {
 				ID3D11Texture2D* back = nullptr;
@@ -296,7 +300,7 @@ namespace TestWindow
 	void Shot(std::string_view a_name)
 	{
 		std::lock_guard l(g_lock);
-		g_pending = a_name;
+		g_pending.emplace_back(a_name);
 	}
 
 	void SetFolder(const std::filesystem::path& a_folder) { g_folder = a_folder; }

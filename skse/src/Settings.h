@@ -14,6 +14,9 @@ struct Settings
 	bool animations = true;
 	// Ratchet's own model and clips instead of the Dragonborn (needs the converted files).
 	bool ratchetModel = true;
+	// The Skyrim control (user event) that dashes, on the ground and in the air. Sprint's own
+	// sprint is off on foot then (Rift Apart has none). Empty: no dash.
+	std::string dashControl = "Sprint";
 	// One log line per jump (takeoff, apex, landing) and its expected numbers.
 	bool logJumps = true;
 	// Per-frame trace while a jump is active (big logs).

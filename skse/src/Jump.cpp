@@ -16,6 +16,10 @@ namespace Jump
 		// 0.0142875 game units -> Havok units (about 70 units to the metre).
 		float UnitsPerMetre() { return RE::bhkWorld::GetWorldScaleInverse(); }
 
+		// Dashing, ground this close under his feet still holds him (metres): he's pressed down
+		// onto it, but a slope going down falls away a little each frame.
+		constexpr float kDashGroundReach = 0.3f;
+
 		// libratchet is Y-up metres (right-handed, like Bevy); Skyrim is Z-up (x east, y north).
 		// East stays +x, up is +y, and north is -z (Bevy's forward), which keeps the handedness,
 		// so turns don't come out mirrored.
@@ -41,7 +45,10 @@ namespace Jump
 		struct Host
 		{
 			RatchetSim*       sim = nullptr;
-			bool              ours = false;           // in the sim's flight: we set his velocity
+			bool              ours = false;           // the sim moves him (a flight or a ground dash): we set his velocity
+			bool              groundDash = false;     // ours, dashing along the ground
+			RE::NiPoint3      dashStart;              // where the ground dash started, game units
+			float             dashTime = 0.0f;
 			RatchetStepResult last{};                 // the sim's last step
 			float             lastDt = 0.0f;
 			float             lastZ = 0.0f;           // his height when the sim last stepped, game units
@@ -51,8 +58,8 @@ namespace Jump
 			float             savedGravity = 1.0f;    // the controller's own gravity, set to 0 while ours
 			float             savedAcrobatics = 1.0f; // its air control, 0 while ours
 			Measure           m;
-			std::vector<Ratchet::Tick> ticks;         // this jump's frames, for the sandbox replay
-			RatchetVec3       startVelocity{};        // his velocity as the jump started (sim axes)
+			std::vector<Ratchet::Tick> ticks;         // this jump's (or dash's) frames, for the sandbox replay
+			RatchetVec3       startVelocity{};        // his velocity as it started (sim axes)
 		};
 		Host g;
 
@@ -120,6 +127,20 @@ namespace Jump
 			}
 		}
 
+		// The controller follows the sim's velocity from here. Its own gravity would add to the
+		// sim's speed, and its air control ("acrobatics", 1 in vanilla) pulls the speed across
+		// the ground toward Skyrim's locomotion: both off.
+		void TakeControl(RE::bhkCharacterController* a_ctrl)
+		{
+			if (!g.ours) {
+				g.savedGravity = a_ctrl->gravity;
+				g.savedAcrobatics = a_ctrl->acrobatics;
+			}
+			a_ctrl->gravity = 0.0f;
+			a_ctrl->acrobatics = 0.0f;
+			g.ours = true;
+		}
+
 		void EndOurs(RE::bhkCharacterController* a_ctrl)
 		{
 			if (g.ours && a_ctrl) {
@@ -127,6 +148,7 @@ namespace Jump
 				a_ctrl->acrobatics = g.savedAcrobatics;
 			}
 			g.ours = false;
+			g.groundDash = false;
 			g.falling = false;
 		}
 
@@ -205,19 +227,14 @@ namespace Jump
 			}
 		}
 
-		// The sim's flight starts: a jump from the ground, or a double jump or glide out of a fall
-		// Skyrim started (off a ledge). a_event goes to the behaviour graph.
+		// The sim's flight starts: a jump from the ground, or a double jump, glide or air dash out
+		// of a fall Skyrim started (off a ledge), or a ground dash going off one. a_event goes to
+		// the behaviour graph.
 		void Launch(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl, const RatchetVec3& a_velocity, bool a_fromGround, const char* a_event)
 		{
-			g.ours = true;
+			TakeControl(a_ctrl);
+			g.groundDash = false;
 			g.falling = false;
-			g.savedGravity = a_ctrl->gravity;
-			g.savedAcrobatics = a_ctrl->acrobatics;
-			// Skyrim's in-air state would add its own gravity to the sim's speed, and pull the
-			// speed across the ground toward its own locomotion ("acrobatics" is that pull, 1 in
-			// vanilla).
-			a_ctrl->gravity = 0.0f;
-			a_ctrl->acrobatics = 0.0f;
 			a_ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
 			a_ctrl->flags.set(RE::CHARACTER_FLAGS::kJumping);
 			SetVelocity(a_ctrl, a_velocity);
@@ -240,6 +257,37 @@ namespace Jump
 		const char* TakeoffEvent(const RE::bhkCharacterController* a_ctrl)
 		{
 			return Moving(a_ctrl) ? "JumpDirectionalStart" : "JumpStandingStart";
+		}
+
+		// The sim's ground dash starts. Skyrim's on-ground state moves him by its own locomotion,
+		// whatever velocity it's given; its in-air state keeps the one it's given. So for the
+		// dash he's put in the air state every frame, with the sim's velocity, which presses him
+		// down onto the ground at 2 m/s (× scale): the ground holds him up.
+		void StartDash(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl)
+		{
+			TakeControl(a_ctrl);
+			g.groundDash = true;
+			g.dashStart = a_player->GetPosition();
+			g.dashTime = 0.0f;
+			g.ticks.clear();
+			g.startVelocity = ControllerVelocity(a_ctrl);
+		}
+
+		void ReportDash(const RE::NiPoint3& a_end)
+		{
+			const float k = 1.0f / UnitsPerMetre();
+			const float dx = a_end.x - g.dashStart.x, dy = a_end.y - g.dashStart.y;
+			const AutoTest::Dash dash{
+				.distance = std::sqrt(dx * dx + dy * dy) * k,
+				.time = g.dashTime,
+				.climb = (a_end.z - g.dashStart.z) * k,
+				.sandbox = Ratchet::ReplayDash(g.ticks, g.startVelocity),
+			};
+			AutoTest::OnDashed(dash);
+			if (Settings::Get().logJumps && !AutoTest::Active()) {
+				SKSE::log::info("dash: {:.2f} m in {:.3f} s, {:+.2f} m up (sandbox {:.2f} m in {:.3f} s for these frames)",
+					dash.distance, dash.time, dash.climb, dash.sandbox.distance, dash.sandbox.time);
+			}
 		}
 
 		void Land(RE::PlayerCharacter* a_player, RE::bhkCharacterController* a_ctrl)
@@ -302,10 +350,17 @@ namespace Jump
 			}
 
 			const float z = a_player->GetPositionZ();
-			const bool grounded = Grounded(ctrl);
-			// The button as it is: the sim makes the jump, the double jump and the glide of it.
+			const RE::NiPoint3 feet = a_player->GetPosition();
+			// How far down the ground is: the sim's jumps, double jump, glide and falls ask.
+			const auto ground = Physics::GroundDistance(feet, 20.0f);
+			// Skyrim's controller says whether he stands. Dashing, it's kept in its air state, and
+			// then the ground right under his feet is what holds him up.
+			const bool grounded = Grounded(ctrl) || (g.groundDash && ground && *ground < kDashGroundReach);
+			// The buttons as they are: the sim makes the jump, double jump, glide and dashes of them.
+			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours);
 			RatchetInput in{};
-			in.jump = AutoTest::JumpButton(a_dt, grounded, g.ours) || Input::JumpHeld() ? 1 : 0;
+			in.jump = test.jump || Input::JumpHeld() ? 1 : 0;
+			in.dash = test.dash || Input::DashHeld() ? 1 : 0;
 			// The stick, turned by the camera: Rift Apart's controls are camera-relative.
 			const View view = CameraView();
 			const RE::NiPoint2 stick = Input::MoveStick();
@@ -320,8 +375,7 @@ namespace Jump
 			in.view_forward_z = -view.forward.y;
 			RatchetContact contact{};
 			contact.grounded = grounded ? 1 : 0;
-			// How far down the ground is: the sim's jumps, double jump, glide and falls ask.
-			if (const auto ground = Physics::GroundDistance(a_player->GetPosition(), 20.0f)) {
+			if (ground) {
 				contact.has_ground_distance = 1;
 				contact.ground_distance = std::max(0.0f, *ground);
 			}
@@ -333,7 +387,7 @@ namespace Jump
 				const RatchetVec3 v = ControllerVelocity(ctrl);
 				ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
 			}
-			if (g.ours) {
+			if (g.ours && !g.groundDash) {
 				// Going up, he rose less than a quarter of what the sim asked for: something's above.
 				const float asked = g.last.velocity.y * g.lastDt;
 				const float rose = (z - g.lastZ) / UnitsPerMetre();
@@ -345,22 +399,57 @@ namespace Jump
 				}
 			}
 
-			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(a_player->GetPosition()));
+			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(feet));
+			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0 };
 
-			// The flight ended (a new jump can start in the same step).
-			if (g.ours && (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND)) {
-				ReportLanding(a_player->GetPosition());
+			// A flight ended (a new jump can start in the same step).
+			if (g.ours && !g.groundDash && (r.events & RATCHET_EVENT_LANDED || r.state == RATCHET_STATE_GROUND)) {
+				ReportLanding(feet);
 				Land(a_player, ctrl);
 			}
+			// The ground dash ended: back on his feet, off a ledge, or jumping out of it.
+			const bool wasDashing = g.groundDash;
+			if (g.groundDash && r.state != RATCHET_STATE_DASH) {
+				g.ticks.push_back(tick);
+				ReportDash(feet);
+				if (r.state == RATCHET_STATE_GROUND) {
+					// Skyrim's run takes over at the speed the dash ended at.
+					EndOurs(ctrl);
+				} else if (!(r.events & RATCHET_EVENT_JUMPED)) {
+					// Off a ledge: a fall at the dash's speed.
+					Launch(a_player, ctrl, r.velocity, false, "JumpFall");
+				}
+			}
+			bool started = true;
 			if (r.events & RATCHET_EVENT_JUMPED) {
 				g.startVelocity = ControllerVelocity(ctrl);
-				Launch(a_player, ctrl, r.velocity, true, TakeoffEvent(ctrl));
+				// Out of a dash it keeps the dash's speed, which a replay from standing can't.
+				Launch(a_player, ctrl, r.velocity, !wasDashing, TakeoffEvent(ctrl));
 				AutoTest::OnTakeoff();
-			} else if (!g.ours && r.state != RATCHET_STATE_GROUND && r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED)) {
+			} else if (r.events & RATCHET_EVENT_DASHED && r.state == RATCHET_STATE_DASH) {
+				StartDash(a_player, ctrl);
+				AutoTest::OnTakeoff();
+				AutoTest::OnMove("dash");
+			} else if (!g.ours && r.state != RATCHET_STATE_GROUND &&
+					   r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED | RATCHET_EVENT_AIR_DASHED)) {
 				// Out of a fall Skyrim started (off a ledge): the sim's from here.
 				g.startVelocity = ControllerVelocity(ctrl);
 				Launch(a_player, ctrl, r.velocity, false, r.events & RATCHET_EVENT_DOUBLE_JUMPED ? TakeoffEvent(ctrl) : "JumpFall");
-			} else if (g.ours) {
+			} else {
+				started = false;
+			}
+
+			if (g.groundDash) {
+				// In the air state with the sim's velocity (see StartDash). Bumps along the way
+				// aren't falls.
+				ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
+				SetVelocity(ctrl, r.velocity);
+				ctrl->fallStartHeight = z;
+				ctrl->fallTime = 0.0f;
+			} else if (g.ours && !started) {
+				if (r.events & RATCHET_EVENT_AIR_DASHED) {
+					AutoTest::OnMove("air_dash");
+				}
 				if (r.events & RATCHET_EVENT_DOUBLE_JUMPED) {
 					// The takeoff animation again, and falls count from this jump on.
 					g.falling = false;
@@ -387,8 +476,11 @@ namespace Jump
 				KeepFalling(a_player, a_dt);
 			}
 
-			if (g.ours) {
-				g.ticks.push_back({ a_dt, in.jump != 0, in.move_x, in.move_z });
+			if (g.groundDash) {
+				g.ticks.push_back(tick);
+				g.dashTime += a_dt;
+			} else if (g.ours) {
+				g.ticks.push_back(tick);
 				g.m.time += a_dt;
 				if (!g.m.released) {
 					if (in.jump) {
@@ -398,10 +490,10 @@ namespace Jump
 					}
 				}
 			}
-			if (Settings::Get().traceJumps && (g.ours || in.jump || r.events || AutoTest::Active())) {
+			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {
 				SKSE::log::info(
-					"trace: dt {:.4f} held {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} z {:.1f} ctrl {}",
-					a_dt, in.jump, contact.grounded, contact.has_ground_distance ? "" : "none ", contact.ground_distance, contact.hit_ceiling,
+					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} z {:.1f} ctrl {}",
+					a_dt, in.jump, in.dash, contact.grounded, contact.has_ground_distance ? "" : "none ", contact.ground_distance, contact.hit_ceiling,
 					in.move_x, in.move_z, r.state, r.events, r.velocity.x, r.velocity.y, r.velocity.z, z, static_cast<int>(ctrl->context.currentState));
 			}
 			g.last = r;
@@ -412,7 +504,7 @@ namespace Jump
 		// After Skyrim moved him this frame: the apex so far.
 		void Observe(RE::PlayerCharacter* a_player)
 		{
-			if (!g.ours) {
+			if (!g.ours || g.groundDash) {
 				return;
 			}
 			const float z = a_player->GetPositionZ();
@@ -440,7 +532,29 @@ namespace Jump
 			static inline REL::Relocation<decltype(CanProcess)> _CanProcess;
 		};
 
-		// Once a frame, before Skyrim moves the player: the sim steps and sets his vertical speed,
+		// Skyrim's sprint, when its button is the dash's: switched off on foot (Rift Apart has no
+		// sprint). On a horse it stays the horse's gallop.
+		struct SprintHandlerHook
+		{
+			static bool CanProcess(RE::SprintHandler* a_this, RE::InputEvent* a_event)
+			{
+				auto* player = RE::PlayerCharacter::GetSingleton();
+				const auto* ctrl = player ? player->GetCharController() : nullptr;
+				if (g.sim && ctrl && OnFootInControl(player, ctrl)) {
+					return false;
+				}
+				return _CanProcess(a_this, a_event);
+			}
+			static inline REL::Relocation<decltype(CanProcess)> _CanProcess;
+		};
+
+		bool DashOnSprint()
+		{
+			const auto& control = Settings::Get().dashControl;
+			return control.size() == 6 && _strnicmp(control.c_str(), "Sprint", 6) == 0;
+		}
+
+		// Once a frame, before Skyrim moves the player: the sim steps and sets his velocity,
 		// which Skyrim's controller then follows (checked in the traces: it does, frame by frame).
 		struct PlayerUpdateHook
 		{
@@ -473,10 +587,18 @@ namespace Jump
 		REL::Relocation<std::uintptr_t> jumpVtbl{ RE::VTABLE_JumpHandler[0] };
 		JumpHandlerHook::_CanProcess = jumpVtbl.write_vfunc(0x1, JumpHandlerHook::CanProcess);
 
+		if (DashOnSprint()) {
+			REL::Relocation<std::uintptr_t> sprintVtbl{ RE::VTABLE_SprintHandler[0] };
+			SprintHandlerHook::_CanProcess = sprintVtbl.write_vfunc(0x1, SprintHandlerHook::CanProcess);
+		}
+
 		REL::Relocation<std::uintptr_t> playerVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		PlayerUpdateHook::_Update = playerVtbl.write_vfunc(0xAD, PlayerUpdateHook::Update);
 
-		SKSE::log::info("jump: Skyrim's jump is off, libratchet's is on");
+		SKSE::log::info("jump: Skyrim's jump is off, libratchet's is on{}",
+			Settings::Get().dashControl.empty() ? "" :
+			DashOnSprint()                      ? "; Sprint dashes (Skyrim's sprint is off on foot)" :
+			                                      std::format("; {} dashes", Settings::Get().dashControl));
 	}
 
 	void Reset()

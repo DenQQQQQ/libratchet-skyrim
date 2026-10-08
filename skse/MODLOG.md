@@ -230,3 +230,44 @@ Probed offline through `ratchet.dll` before writing the tests:
 - The six earlier cases still pass with the button unmasked (full hold now held 0.5 s through
   its top: 2.325 m, the same).
 - Screenshots show his double-jump clip at the second takeoff and the glide clip starting.
+
+## 2026-10-08: dash and air dash
+
+### The button
+- The dash is on Skyrim's **Sprint** control (Left Alt, gamepad LB), polled like the jump. INI
+  `sDashControl` names another control, or is empty for no dash. Rift Apart has no sprint, so
+  Skyrim's sprint is off on foot (`SprintHandler::CanProcess`, vfunc 1, says no). On a horse it's
+  still the gallop.
+
+### Driving him along the ground
+- On the ground Skyrim's controller moves him by its own locomotion, whatever velocity it's
+  given. Its in-air state keeps the velocity it's given (the jump relies on that). So during the
+  sim's ground dash the plugin puts the controller in `kInAir` every frame, with gravity and air
+  control off, and gives it the sim's velocity. That velocity presses down at 2 m/s × scale, and
+  the ground holds him up: Havok slides the capsule along it.
+- **The controller stays `kInAir` all through the dash** (the traces read state 2 every frame),
+  so Skyrim never says he stands. The ground under his feet does: a ray, and within 0.3 m counts
+  as standing. Further than that (a slope falling away faster, or a ledge), the sim sees no
+  ground, and the dash becomes a fall at the dash's speed, as in the sim.
+- The dash ends on the sim's own clock (back on his feet at run speed): Skyrim's run takes over at
+  that speed. No fall counts during the dash (the fall height follows him), and none of Skyrim's
+  jump events go to the behaviour graph.
+- **Air dash:** in the air the sim already has the controller. An air dash out of Skyrim's own
+  fall (off a ledge) takes over like a double jump or glide.
+- A jump out of a ground dash keeps the dash's speed. It isn't replayed, because a replay from
+  standing can't start with that speed. A dash off a ledge isn't either.
+
+### What the sim does at Dragonborn scale (owner's configs, flat floor, 1/100 s)
+- Ground dash with the stick forward: 10.92 m in 0.53 s, ending at 8.9 m/s (run speed). Without
+  the stick it goes where he faces.
+- Air dash early in a jump (0.2 s): flat at 10.85 m/s for 0.6 s, then a fall at 9.3 m/s. He lands
+  15.4 m out.
+
+### Tests: 10/10 pass in Whiterun
+- New cases: "dash" (one press, the stick forward) and "air dash" (jump 0.3 s, dash at 0.35 s, the
+  stick forward). Ground dashes are checked against a replay of the same frames on a flat floor:
+  distance within 0.25 m, time the same. The room the test looks for is 18 m now (it found 15 m).
+  - dash: **10.82 m (replay 10.83) in 0.497 s (0.497)**, following the bridge 0.99 m down;
+  - air dash: 17.90 m across (17.87), landed 1.08 m lower after 1.388 s (1.380).
+- A screenshot asked for in the same frame as another used to replace it (the air dash and its
+  "apex" come on the same step). Shots now queue, one a frame.

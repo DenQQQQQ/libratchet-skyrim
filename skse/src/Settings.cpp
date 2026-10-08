@@ -52,6 +52,7 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	configsDir = Narrow(ReadString(a_ini, L"General", L"sConfigsDir", L"RatchetMovement"));
 	animations = ReadBool(a_ini, L"General", L"bAnimations", animations);
 	ratchetModel = ReadBool(a_ini, L"General", L"bRatchet", ratchetModel);
+	dashControl = Narrow(ReadString(a_ini, L"General", L"sDashControl", L"Sprint"));
 	logJumps = ReadBool(a_ini, L"Debug", L"bLogJumps", logJumps);
 	traceJumps = ReadBool(a_ini, L"Debug", L"bTraceJumps", traceJumps);
 }

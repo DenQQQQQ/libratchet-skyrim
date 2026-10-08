@@ -112,9 +112,29 @@ namespace Ratchet
 		return { tap.height, tap.time, full.height, full.time, full.airTime };
 	}
 
+	namespace
+	{
+		// The replays' own sim (made once: loading the configs reads files).
+		RatchetSim* ReplaySim()
+		{
+			static RatchetSim* sim = NewSim();
+			return sim;
+		}
+
+		RatchetInput Recorded(const Tick& a_tick, bool a_recorded)
+		{
+			RatchetInput in{};
+			in.jump = a_recorded && a_tick.jump ? 1 : 0;
+			in.dash = a_recorded && a_tick.dash ? 1 : 0;
+			in.move_x = a_tick.moveX;
+			in.move_z = a_tick.moveZ;
+			return in;
+		}
+	}
+
 	Replayed ReplayFlat(const std::vector<Tick>& a_ticks, const RatchetVec3& a_velocity, float a_landing)
 	{
-		static RatchetSim* sim = NewSim();
+		RatchetSim* sim = ReplaySim();
 		ratchet_reset(sim);
 		ratchet_set_velocity(sim, a_velocity);
 		RatchetVec3 feet{ 0.0f, 0.0f, 0.0f };
@@ -128,11 +148,7 @@ namespace Ratchet
 		for (std::size_t i = 0; i < a_ticks.size() + 2000; ++i) {
 			const bool recorded = i < a_ticks.size();
 			const Tick& tick = recorded ? a_ticks[i] : last;
-			RatchetInput in{};
-			in.jump = recorded && tick.jump ? 1 : 0;
-			in.move_x = tick.moveX;
-			in.move_z = tick.moveZ;
-			const RatchetStepResult r = ratchet_step(sim, tick.dt, in, contact, feet);
+			const RatchetStepResult r = ratchet_step(sim, tick.dt, Recorded(tick, recorded), contact, feet);
 			const float dt = tick.dt;
 			// The game's frame moves him by this frame's speed (the controller integrates it).
 			feet.x += r.velocity.x * dt;
@@ -154,6 +170,35 @@ namespace Ratchet
 				break;
 			}
 		}
+		return out;
+	}
+
+	DashReplayed ReplayDash(const std::vector<Tick>& a_ticks, const RatchetVec3& a_velocity)
+	{
+		RatchetSim* sim = ReplaySim();
+		ratchet_reset(sim);
+		ratchet_set_velocity(sim, a_velocity);
+		RatchetVec3 feet{ 0.0f, 0.0f, 0.0f };
+		RatchetContact contact{};
+		contact.grounded = 1;
+		contact.has_ground_distance = 1;
+		DashReplayed out;
+		bool dashed = false;
+		const Tick last = a_ticks.empty() ? Tick{ 1.0f / 60.0f, false } : a_ticks.back();
+		for (std::size_t i = 0; i < a_ticks.size() + 2000; ++i) {
+			const bool recorded = i < a_ticks.size();
+			const Tick& tick = recorded ? a_ticks[i] : last;
+			const RatchetStepResult r = ratchet_step(sim, tick.dt, Recorded(tick, recorded), contact, feet);
+			dashed = dashed || r.state == RATCHET_STATE_DASH;
+			// Over: the game hands him back to Skyrim on this frame, before it moves him.
+			if (dashed && r.state != RATCHET_STATE_DASH) {
+				break;
+			}
+			feet.x += r.velocity.x * tick.dt;
+			feet.z += r.velocity.z * tick.dt;
+			out.time += tick.dt;
+		}
+		out.distance = std::sqrt(feet.x * feet.x + feet.z * feet.z);
 		return out;
 	}
 

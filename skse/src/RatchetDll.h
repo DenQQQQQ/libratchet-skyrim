@@ -31,6 +31,7 @@ namespace Ratchet
 		bool  jump;
 		float moveX = 0.0f;  // the stick in the world (sim axes)
 		float moveZ = 0.0f;
+		bool  dash = false;
 	};
 	struct Replayed
 	{
@@ -44,4 +45,13 @@ namespace Ratchet
 	// frames, the button stays up and the stick where it last was). Coming down, the floor is
 	// a_landing metres above the takeoff's (where the game's ground caught him).
 	Replayed ReplayFlat(const std::vector<Tick>& a_ticks, const RatchetVec3& a_velocity = {}, float a_landing = 0.0f);
+
+	struct DashReplayed
+	{
+		float distance = 0.0f;  // metres across the ground
+		float time = 0.0f;      // seconds until the dash is over
+	};
+	// A ground dash's frames, from its press on, through a fresh sim on a flat floor: how far
+	// and how long it goes before he's back on his feet.
+	DashReplayed ReplayDash(const std::vector<Tick>& a_ticks, const RatchetVec3& a_velocity = {});
 }

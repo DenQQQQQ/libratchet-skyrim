@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Input.h"
 
+#include "Settings.h"
+
 namespace Input
 {
 	namespace
 	{
 		constexpr std::uint32_t kUnmapped = 0xFF;
 
-		std::uint32_t MappedKey(RE::INPUT_DEVICE a_device)
+		std::uint32_t MappedKey(std::string_view a_control, RE::INPUT_DEVICE a_device)
 		{
 			const auto* map = RE::ControlMap::GetSingleton();
-			const auto* events = RE::UserEvents::GetSingleton();
-			if (!map || !events) {
+			if (!map || a_control.empty()) {
 				return kUnmapped;
 			}
-			return map->GetMappedKey(events->jump, a_device);
+			return map->GetMappedKey(a_control, a_device);
 		}
 
 		// The keyboard's DirectInput state, read directly: CommonLib's BSWin32KeyboardDevice::IsPressed
@@ -28,12 +29,34 @@ namespace Input
 		{
 			return a_device && a_key != kUnmapped && a_device->IsPressed(a_key);
 		}
+
+		// Polled rather than taken from button events, so a release can't be missed while a menu
+		// or a script had the controls.
+		bool Held(std::string_view a_control)
+		{
+			auto* devices = RE::BSInputDeviceManager::GetSingleton();
+			if (!devices || a_control.empty()) {
+				return false;
+			}
+			return Down(devices->GetKeyboard(), MappedKey(a_control, RE::INPUT_DEVICE::kKeyboard)) ||
+			       Down(devices->GetMouse(), MappedKey(a_control, RE::INPUT_DEVICE::kMouse)) ||
+			       (devices->IsGamepadEnabled() && Down(devices->GetGamepad(), MappedKey(a_control, RE::INPUT_DEVICE::kGamepad)));
+		}
+
+		void LogBinding(std::string_view a_control, std::string_view a_use)
+		{
+			SKSE::log::info("{} ({}) is bound to keyboard {:#x}, mouse {:#x}, gamepad {:#x}", a_control, a_use,
+				MappedKey(a_control, RE::INPUT_DEVICE::kKeyboard), MappedKey(a_control, RE::INPUT_DEVICE::kMouse),
+				MappedKey(a_control, RE::INPUT_DEVICE::kGamepad));
+		}
 	}
 
 	void LogBindings()
 	{
-		SKSE::log::info("Jump is bound to keyboard {:#x}, mouse {:#x}, gamepad {:#x}",
-			MappedKey(RE::INPUT_DEVICE::kKeyboard), MappedKey(RE::INPUT_DEVICE::kMouse), MappedKey(RE::INPUT_DEVICE::kGamepad));
+		LogBinding("Jump", "jump");
+		if (!Settings::Get().dashControl.empty()) {
+			LogBinding(Settings::Get().dashControl, "dash");
+		}
 	}
 
 	namespace
@@ -74,14 +97,12 @@ namespace Input
 	bool JumpHeld()
 	{
 		const auto* map = RE::ControlMap::GetSingleton();
-		auto*       devices = RE::BSInputDeviceManager::GetSingleton();
-		if (!map || !devices || !map->IsJumpingControlsEnabled()) {
-			return false;
-		}
-		// Polled rather than taken from button events, so a release can't be missed while a
-		// menu or a script had the controls.
-		return Down(devices->GetKeyboard(), MappedKey(RE::INPUT_DEVICE::kKeyboard)) ||
-		       Down(devices->GetMouse(), MappedKey(RE::INPUT_DEVICE::kMouse)) ||
-		       (devices->IsGamepadEnabled() && Down(devices->GetGamepad(), MappedKey(RE::INPUT_DEVICE::kGamepad)));
+		return map && map->IsJumpingControlsEnabled() && Held("Jump");
+	}
+
+	bool DashHeld()
+	{
+		const auto* map = RE::ControlMap::GetSingleton();
+		return map && map->IsMovementControlsEnabled() && Held(Settings::Get().dashControl);
 	}
 }

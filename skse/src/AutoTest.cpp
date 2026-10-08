@@ -14,14 +14,16 @@ namespace AutoTest
 		struct Case
 		{
 			const char* name;
-			float       hold;           // seconds the button is held; 0: one frame
+			float       hold;           // seconds the jump button is held; 0: one frame; < 0: no jump
 			float       run = 0.0f;     // seconds of stick forward before the press (a run-up)
-			bool        airStick = false;  // the stick forward in the air too
+			bool        airStick = false;  // the stick forward from the press on
 			float       again = 0.0f;   // seconds after the first press that it's pressed again (0: not)
 			float       againHold = 0.0f;  // and held (until the landing at most)
+			float       dashAt = -1.0f; // seconds after the start that the dash is pressed (one frame); < 0: not
 		};
-		// At Dragonborn scale with the owner's configs, a press again at 0.4 s double-jumps at
-		// 0.42 s (peak 4.34 m); held on, he glides from 0.93 s (the sandbox, flat floor).
+		// At Dragonborn scale with the owner's configs (the sandbox, flat floor): a press again
+		// at 0.4 s double-jumps at 0.42 s (peak 4.34 m), and held on he glides from 0.93 s. A
+		// ground dash goes 10.9 m in 0.53 s; an air dash flies flat at 10.85 m/s for 0.6 s.
 		constexpr Case kCases[] = {
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
@@ -31,6 +33,8 @@ namespace AutoTest
 			{ "running jump", 0.5f, 0.8f, true },
 			{ "double jump", 0.3f, 0.0f, false, 0.4f, 0.1f },
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
+			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
+			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -40,6 +44,9 @@ namespace AutoTest
 		constexpr float kAirTimeTolerance = 0.03f;   // seconds
 		// Across the ground: a frame of his speed either way at the landing.
 		constexpr float kDistanceTolerance = 0.2f;   // metres
+		// A ground dash ends on the sim's own clock, so only the ground (slopes, bumps) can
+		// make it go less far than the replay.
+		constexpr float kDashTolerance = 0.25f;      // metres
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
 		constexpr float kTimeout = 90.0f;            // seconds in game for the whole run
@@ -67,7 +74,8 @@ namespace AutoTest
 
 			int   index = 0;
 			float settle = 0.0f;
-			float pressed = -1.0f;  // how long this case's press has been held; < 0 not pressed yet
+			float pressed = -1.0f;  // since this case's start (its first press); < 0 not started yet
+			bool  dashPressed = false;
 			float running = 0.0f;   // this case's run-up so far
 			// Every case starts where the first one did, facing the same way (runs and steered
 			// jumps would otherwise carry him into the room's furniture).
@@ -145,7 +153,7 @@ namespace AutoTest
 		float ClearHeading(const RE::NiPoint3& a_feet, float a_current)
 		{
 			const float units = RE::bhkWorld::GetWorldScaleInverse();
-			constexpr float kAhead = 12.0f;  // metres
+			constexpr float kAhead = 18.0f;  // metres: an early air dash carries him about 15 m
 			float best = a_current;
 			float bestRoom = -1.0f;
 			for (int i = 0; i < 16; ++i) {
@@ -264,6 +272,7 @@ namespace AutoTest
 			s.settle = 0.0f;
 			s.launched = false;
 			s.landed = false;
+			s.dashPressed = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -417,24 +426,24 @@ namespace AutoTest
 		RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
 	}
 
-	bool JumpButton(float a_dt, bool a_grounded, bool a_inJump)
+	Buttons Press(float a_dt, bool a_grounded, bool a_busy)
 	{
 		if (!s.active || s.done) {
-			return false;
+			return {};
 		}
 		TestWindow::Keep();
-		if (Diagnose(a_dt, a_grounded && !a_inJump)) {
-			return false;
+		if (Diagnose(a_dt, a_grounded && !a_busy)) {
+			return {};
 		}
 		s.total += a_dt;
 		if (s.total > kTimeout + s.holdEnd) {
 			Fail(std::format("the run took over {:.0f} s", kTimeout));
 			Finish();
-			return false;
+			return {};
 		}
 		if (s.index >= static_cast<int>(std::size(kCases))) {
 			// Stand still a moment, so the last landing's damage (if any) has been dealt.
-			s.settle = a_grounded && !a_inJump ? s.settle + a_dt : 0.0f;
+			s.settle = a_grounded && !a_busy ? s.settle + a_dt : 0.0f;
 			if (s.settle >= kSettle && s.held == 0.0f) {
 				CheckHealthAfter(s.index - 1);
 				TestWindow::Shot("end");
@@ -446,20 +455,20 @@ namespace AutoTest
 					Finish();
 				}
 			}
-			return false;
+			return {};
 		}
 		const Case& c = kCases[s.index];
 
 		if (s.pressed < 0.0f) {
 			auto* player = RE::PlayerCharacter::GetSingleton();
-			if (s.returnPending && s.startPos && player && a_grounded && !a_inJump) {
+			if (s.returnPending && s.startPos && player && a_grounded && !a_busy) {
 				s.returnPending = false;
 				player->SetPosition(*s.startPos, true);
 				player->SetHeading(s.startHeading);
 				s.settle = 0.0f;
-				return false;
+				return {};
 			}
-			s.settle = a_grounded && !a_inJump ? s.settle + a_dt : 0.0f;
+			s.settle = a_grounded && !a_busy ? s.settle + a_dt : 0.0f;
 			if (!s.startPos && player && s.settle > 1.0f) {
 				s.startPos = player->GetPosition();
 				s.startHeading = ClearHeading(player->GetPosition(), player->GetAngleZ());
@@ -473,7 +482,7 @@ namespace AutoTest
 				SKSE::log::info("autotest: third person");
 			}
 			if (s.settle < kSettle) {
-				return false;
+				return {};
 			}
 			// Standing still (before the second jump: right after a load the screen is still
 			// fading in).
@@ -487,7 +496,7 @@ namespace AutoTest
 				}
 				Input::SetTestStick(RE::NiPoint2{ 0.0f, 1.0f });
 				s.running += a_dt;
-				return false;
+				return {};
 			}
 			if (s.index > 0) {
 				CheckHealthAfter(s.index - 1);
@@ -496,31 +505,39 @@ namespace AutoTest
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
-			SKSE::log::info("autotest: {} (the button held {:.2f} s{}{})", c.name, c.hold,
+			SKSE::log::info("autotest: {} ({}{}{}{})", c.name,
+				c.hold >= 0.0f ? std::format("jump held {:.2f} s", c.hold) : "no jump",
 				c.again > 0.0f ? std::format(", again at {:.2f} s for {:.2f} s", c.again, c.againHold) : "",
+				c.dashAt >= 0.0f ? std::format(", dash at {:.2f} s", c.dashAt) : "",
 				c.airStick ? ", the stick forward" : "");
 		}
 
 		s.elapsed += a_dt;
-		const float t = s.pressed;  // since the first press
+		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
-		if (t == 0.0f || t < c.hold) {
-			return true;
+		Buttons b;
+		b.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
+		// The second press: a double jump, and held on, a glide.
+		b.jump = b.jump || (c.again > 0.0f && t >= c.again && t < c.again + c.againHold && !s.landed);
+		if (c.dashAt >= 0.0f && t >= c.dashAt && !s.dashPressed) {
+			s.dashPressed = true;
+			b.dash = true;
 		}
-		if (s.landed || (!s.launched && a_grounded && !a_inJump)) {
+		if (b.jump || b.dash) {
+			return b;
+		}
+		if (s.landed || (!s.launched && a_grounded && !a_busy)) {
 			if (!s.launched) {
 				Fail("didn't take off");
 			}
 			NextCase();
-			return false;
+			return {};
 		}
 		if (s.elapsed > 5.0f) {
 			Fail("hasn't landed after 5 s");
 			NextCase();
-			return false;
 		}
-		// The second press: a double jump, and held on, a glide.
-		return c.again > 0.0f && t >= c.again && t < c.again + c.againHold;
+		return {};
 	}
 
 	void OnTakeoff()
@@ -579,6 +596,30 @@ namespace AutoTest
 			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
 			a_jump.hold, a_jump.distance, a_jump.sandboxDistance, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime,
 			bad.empty() ? "" : " - off:" + bad);
+	}
+
+	void OnDashed(const Dash& a_dash)
+	{
+		if (!s.active || s.done || s.index >= static_cast<int>(std::size(kCases))) {
+			return;
+		}
+		s.landed = true;
+		// The sandbox replayed the same frames (time steps, buttons and stick) on a flat floor.
+		std::string bad;
+		if (std::abs(a_dash.distance - a_dash.sandbox.distance) > kDashTolerance) {
+			bad += " distance";
+		}
+		if (std::abs(a_dash.time - a_dash.sandbox.time) > 0.001f) {
+			bad += " time";
+		}
+		if (bad.empty()) {
+			++s.passed;
+		} else {
+			++s.failed;
+		}
+		SKSE::log::info("autotest: {} {}: {:.2f} m (sandbox {:.2f}) in {:.3f} s ({:.3f}), {:+.2f} m up{}",
+			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_dash.distance, a_dash.sandbox.distance, a_dash.time, a_dash.sandbox.time,
+			a_dash.climb, bad.empty() ? "" : " - off:" + bad);
 	}
 
 	void OnHandedBack(const char* a_why)

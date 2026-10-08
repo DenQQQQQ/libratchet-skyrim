@@ -4,10 +4,12 @@
 // The player's buttons, read from the devices each frame through Skyrim's own key bindings.
 namespace Input
 {
-	// Logs what Jump is bound to (once the control map exists).
+	// Logs what Jump and the dash control are bound to (once the control map exists).
 	void LogBindings();
 	// Jump is held now, on any device it's bound to, and Skyrim lets the player jump.
 	bool JumpHeld();
+	// The dash control (INI sDashControl, Sprint by default) is held, and movement is allowed.
+	bool DashHeld();
 	// The movement stick (keys or left stick) as Skyrim reads it: x right, y forward, in the
 	// camera's frame, length up to 1; zero when movement is switched off.
 	RE::NiPoint2 MoveStick();

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "RatchetDll.h"
+
 // Tests in the real game with nobody at the keyboard (skse/test/ingame.ps1 runs them).
 //
 // A test run starts when SKSE/Plugins/RatchetMovement/autotest.ini exists at game start (the
@@ -17,8 +19,14 @@ namespace AutoTest
 	// After the game's data loaded: autosaves off (in memory only), and the main menu starts the test.
 	void Install();
 
-	// Each frame the jump code runs: the button the test holds now.
-	bool JumpButton(float a_dt, bool a_grounded, bool a_inJump);
+	// Each frame the jump code runs: the buttons the test holds now. a_busy: the sim is moving
+	// him (a flight or a dash).
+	struct Buttons
+	{
+		bool jump = false;
+		bool dash = false;
+	};
+	Buttons Press(float a_dt, bool a_grounded, bool a_busy);
 
 	struct Jump
 	{
@@ -34,10 +42,21 @@ namespace AutoTest
 		float sandboxAirTime;
 		float sandboxDistance;
 	};
+	struct Dash
+	{
+		float distance;  // metres across the ground, start to end
+		float time;      // seconds
+		float climb;     // end height - start height, metres
+		Ratchet::DashReplayed sandbox;  // the sandbox's dash for the same frames on a flat floor
+	};
+	// The sim took over: a jump or a ground dash started.
 	void OnTakeoff();
-	// A moment in the flight ("apex", "double_jump", "glide"): a screenshot of his pose.
+	// A moment in the move ("apex", "double_jump", "glide", "dash", "air_dash"): a screenshot of
+	// his pose.
 	void OnMove(std::string_view a_what);
 	void OnLanded(const Jump& a_jump);
+	// A ground dash is over.
+	void OnDashed(const Dash& a_dash);
 	// The jump code gave the player back to Skyrim in the air (he died, was ragdolled...).
 	void OnHandedBack(const char* a_why);
 }
