@@ -1129,3 +1129,90 @@ fn sliding_down_near_the_ground_lets_go() {
     assert_eq!(h.r.state(), MoveState::Fall);
     assert!(h.pos.y < t.wall_stick.min_ground_height && h.pos.y > t.wall_stick.min_ground_height - 0.2, "let go at {:.2} m", h.pos.y);
 }
+
+#[test]
+fn walking_off_an_edge_falls_from_rest() {
+    // On the ground he's pressed down to keep contact; that isn't a speed the fall should keep.
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    for _ in 0..30 {
+        h.tick(false, Vec2::new(0.0, 1.0));
+    }
+    h.floor = false;
+    while h.r.state() == MoveState::Ground && h.time < 2.0 {
+        h.tick(false, Vec2::new(0.0, 1.0));
+    }
+    assert_eq!(h.r.state(), MoveState::Fall);
+    let vy = h.r.velocity().y;
+    assert!(close(vy, -t.fall.gravity() * DT, 1e-3), "the fall starts at {vy} m/s");
+}
+
+#[test]
+fn a_jump_still_coming_down_after_its_no_fall_time_becomes_a_fall() {
+    let t = Tuning::default();
+    let mut h = Flat::new(t.clone());
+    h.tick(true, Vec2::ZERO);
+    // Off a cliff: no floor below any more.
+    h.floor = false;
+    let start = h.time - DT;
+    while h.r.state() == MoveState::Jump && h.time - start < 3.0 {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert_eq!(h.r.state(), MoveState::Fall);
+    let took = h.time - start;
+    assert!(close(took, t.single_jump.no_fall_time, 0.02), "a fall after {took:.3} s");
+}
+
+#[test]
+fn a_double_jump_with_almost_no_room_left_does_not_float_down() {
+    // A chain cap 1 cm above a tap jump's top leaves the double jump 1 cm, so its gravity is
+    // tiny; NoFallTime hands it over to a normal fall.
+    let mut t = Tuning::default();
+    t.double_jump.max_total_jump = Some(t.single_jump.height_min + 0.01);
+    let mut h = Flat::new(t.clone());
+    h.rise(false);
+    h.floor = false;
+    h.tick(true, Vec2::ZERO);
+    assert_eq!(h.r.state(), MoveState::DoubleJump);
+    let start = h.time - DT;
+    while h.time - start < t.double_jump.no_fall_time + 0.3 {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert_eq!(h.r.state(), MoveState::Fall);
+    assert!(h.r.velocity().y < -5.0, "still floating at {} m/s", h.r.velocity().y);
+}
+
+#[test]
+fn an_air_dash_out_of_a_fast_fall_starts_level() {
+    let mut h = Flat::falling(Tuning::default());
+    for _ in 0..120 {
+        h.tick(false, Vec2::ZERO);
+    }
+    assert!(h.r.velocity().y < -20.0);
+    let y = h.pos.y;
+    h.tick_with(Input { dash: true, move_dir: Vec2::new(0.0, 1.0), ..Default::default() });
+    assert_eq!(h.r.state(), MoveState::AirDash);
+    assert!(close(h.pos.y, y, 1e-4), "dropped {:.3} m on the dash's first tick", y - h.pos.y);
+}
+
+#[test]
+fn a_jump_pressed_as_the_hyper_strike_landing_lets_go_is_not_lost() {
+    // With the stick held, the landing lets go at its early exit. A jump pressed on that tick
+    // jumps; pressing on alternate ticks, one of the two runs presses on it.
+    let mut jumped = false;
+    for parity in 0..2 {
+        let mut h = Flat::new(Tuning::default());
+        h.rise(true);
+        h.tick_with(melee_press());
+        while h.r.state() != MoveState::SmashLand && h.time < 5.0 {
+            h.tick(false, Vec2::ZERO);
+        }
+        let mut n = 0;
+        while h.r.state() == MoveState::SmashLand && h.time < 8.0 {
+            h.tick(n % 2 == parity, Vec2::new(0.0, 1.0));
+            n += 1;
+        }
+        jumped |= h.r.state() == MoveState::Jump;
+    }
+    assert!(jumped, "the press on the tick the landing ended was lost");
+}

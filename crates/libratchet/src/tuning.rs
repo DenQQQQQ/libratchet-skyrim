@@ -32,6 +32,9 @@ pub struct JumpParams {
     pub terminal_velocity: f32,
     /// Seconds after this jump starts before holding jump can turn into a glide.
     pub no_glide_time: f32,
+    /// Seconds into this jump after which, coming down more than 0.5 m above the ground, it
+    /// hands over to a fall (NoFallTime).
+    pub no_fall_time: f32,
     /// Seconds after this jump starts before a mid-air jump is allowed.
     pub double_jump_time_start: f32,
     /// Height above the take-off point (or above the ground, when falling) needed before a
@@ -63,6 +66,7 @@ impl JumpParams {
         button_max_hold: 0.0,
         terminal_velocity: 50.0,
         no_glide_time: 0.0,
+        no_fall_time: f32::INFINITY,
         double_jump_time_start: 0.0,
         double_jump_height_min: 0.0,
         max_total_jump: None,
@@ -343,6 +347,7 @@ impl Default for SwingshotParams {
                 button_max_hold: 0.2,
                 terminal_velocity: 50.0,
                 no_glide_time: 0.3,
+                no_fall_time: 0.85,
                 double_jump_time_start: 0.1,
                 momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
@@ -900,6 +905,7 @@ impl Default for Tuning {
                 button_min_hold: 0.02,
                 button_max_hold: 0.2,
                 no_glide_time: 0.6,
+                no_fall_time: 0.75,
                 double_jump_time_start: 0.1,
                 double_jump_height_min: 0.25,
                 // The game's single-jump momentum weights.
@@ -913,6 +919,7 @@ impl Default for Tuning {
                 time_to_peak: 0.3,
                 button_max_hold: 0.2,
                 no_glide_time: 0.5,
+                no_fall_time: 0.85,
                 max_total_jump: Some(2.8),
                 momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
@@ -945,6 +952,7 @@ impl Default for Tuning {
                 height_max: 0.9,
                 time_to_peak: 0.3,
                 no_glide_time: 0.7,
+                no_fall_time: 0.75,
                 double_jump_time_start: 0.1,
                 double_jump_height_min: 0.25,
                 momentum_weight_min: 1.0,
@@ -956,6 +964,7 @@ impl Default for Tuning {
                 height_max: 0.9,
                 time_to_peak: 0.28,
                 no_glide_time: 0.5,
+                no_fall_time: 0.85,
                 max_total_jump: Some(1.7),
                 momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
@@ -969,6 +978,7 @@ impl Default for Tuning {
                 button_max_hold: 0.2,
                 terminal_velocity: 50.0,
                 no_glide_time: 0.75,
+                no_fall_time: 0.75,
                 double_jump_time_start: 0.2,
                 double_jump_height_min: 1.3,
                 momentum_weight_max: 1.4,
@@ -993,6 +1003,7 @@ impl Default for Tuning {
                 button_min_hold: 0.05,
                 button_max_hold: 0.2,
                 no_glide_time: 0.7,
+                no_fall_time: 1.2,
                 double_jump_time_start: 0.7,
                 momentum_weight_max: 0.1,
                 no_input_time: 0.7,
@@ -1123,6 +1134,7 @@ fn jump_from(v: &Value) -> Result<JumpParams, String> {
         button_max_hold: f(v, "ButtonMaxHoldTime").unwrap_or(d.button_max_hold).max(0.0),
         terminal_velocity: f(v, "TerminalVelocity").unwrap_or(d.terminal_velocity),
         no_glide_time: f(v, "NoGlideTime").unwrap_or(d.no_glide_time),
+        no_fall_time: f(v, "NoFallTime").unwrap_or(d.no_fall_time),
         double_jump_time_start: f(v, "DoubleJumpTimeStart").unwrap_or(d.double_jump_time_start),
         double_jump_height_min: f(v, "DoubleJumpHeightMin").unwrap_or(d.double_jump_height_min),
         max_total_jump: f(v, "MaxTotalJump"),

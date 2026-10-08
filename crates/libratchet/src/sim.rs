@@ -198,6 +198,9 @@ const MOVING_TURN: (f32, f32, f32) = (-4.0, -25.0, 26.18);
 const STANDING_TURN: (f32, f32, f32) = (-15.0, -8.0, 43.63);
 /// Closer than this (radians), the turn snaps onto its target (RiftApart.exe).
 const TURN_SNAP: f32 = 0.005;
+/// A jump coming down after its NoFallTime only becomes a fall more than this far above the
+/// ground (RiftApart.exe).
+const NO_FALL_GROUND: f32 = 0.5;
 /// A dash on the ground can be jumped out of from this long after it starts (RiftApart.exe).
 const DASH_JUMP_AFTER: f32 = 0.1;
 /// Stuck to a wall, he's pressed into it at this speed so the host keeps reporting the wall
@@ -327,7 +330,7 @@ pub struct Ratchet {
     turn_omega: f32,
     events: Vec<Event>,
     /// Vertical speed to move by this tick, when it differs from the end-of-tick velocity.
-    move_vy: Option<f32>,
+    move_vy: Option<(f32, f32)>,
 }
 
 impl Ratchet {
@@ -525,6 +528,9 @@ impl Ratchet {
                 if self.state == MoveState::Ground {
                     self.arm_walk_off();
                 }
+                // The ground states press him down to keep contact; the fall starts from the
+                // vertical speed he really had, none.
+                self.velocity.y = 0.0;
                 self.enter_fall();
                 self.events.push(Event::LeftGround);
             }
@@ -648,6 +654,15 @@ impl Ratchet {
                 if self.state == MoveState::SwingJump && self.velocity.y < 0.0 {
                     self.enter_fall();
                 }
+                // Any jump still coming down after its NoFallTime does too, unless he's within
+                // 0.5 m of the ground (RiftApart.exe).
+                if matches!(self.state, MoveState::Jump | MoveState::DoubleJump | MoveState::WallJump | MoveState::LedgeJump)
+                    && self.velocity.y < 0.0
+                    && self.air_time >= params.no_fall_time
+                    && contact.ground_distance.is_none_or(|d| d.abs() > NO_FALL_GROUND * self.tuning.scale)
+                {
+                    self.enter_fall();
+                }
             }
             MoveState::Fall => {
                 let params = self.tuning.fall.clone();
@@ -714,7 +729,12 @@ impl Ratchet {
         }
 
         self.turn(dt);
-        let vy = self.move_vy.take().unwrap_or(self.velocity.y);
+        // The tick's average vertical speed, unless a move started after it was worked out
+        // (an air dash, a wall stick or a ledge grab set their own).
+        let vy = match self.move_vy.take() {
+            Some((after, average)) if after == self.velocity.y => average,
+            _ => self.velocity.y,
+        };
         Vec3::new(self.velocity.x, vy, self.velocity.z)
     }
 
@@ -871,11 +891,12 @@ impl Ratchet {
         self.velocity = Vec3::new(0.0, -STICK_DOWN_SPEED * self.tuning.scale, 0.0);
         let m = &self.tuning.melee;
         let can_cut = self.swing_time >= m.smash_land_early_exit;
-        if self.swing_time >= m.smash_land_time || (can_cut && stick.length() > MOVE_STICK) {
-            self.state = MoveState::Ground;
-        } else if can_cut && jump_pressed {
+        // A jump first, so a press on the tick it ends isn't lost.
+        if can_cut && jump_pressed {
             self.state = MoveState::Ground;
             self.start_jump(dt, MoveState::Jump, position);
+        } else if self.swing_time >= m.smash_land_time || (can_cut && stick.length() > MOVE_STICK) {
+            self.state = MoveState::Ground;
         } else if can_cut && self.melee_wanted() && self.start_swing(0, stick) {
             self.swing(dt, false, stick, position);
         }
@@ -1074,7 +1095,7 @@ impl Ratchet {
     fn integrate_vertical(&mut self, dt: f32, gravity: f32, terminal: f32) {
         let before = self.velocity.y;
         self.velocity.y = (before - gravity * dt).max(-terminal);
-        self.move_vy = Some((before + self.velocity.y) * 0.5);
+        self.move_vy = Some((self.velocity.y, (before + self.velocity.y) * 0.5));
     }
 
     fn can_midair_jump(&self, params: &JumpParams, position: Vec3, contact: &Contact) -> bool {
@@ -1176,7 +1197,7 @@ impl Ratchet {
             self.start_wall_jump(dt, position);
             return;
         }
-        if let Some(cap) = self.params(MoveState::DoubleJump).max_total_jump {
+        if let Some(cap) = self.tuning.double_jump.max_total_jump {
             let gain = self.tuning.wall_stick.up_min_height_gain;
             let used = self.chain_origin_y.map_or(0.0, |o| (position.y - o).max(0.0)).min((cap - gain).max(0.0));
             self.chain_origin_y = Some(position.y - used);
@@ -1242,14 +1263,13 @@ impl Ratchet {
         self.wall_right
     }
 
+    /// A fall with the velocity he has, upward speed too: the game's fall takes the measured
+    /// velocity (RiftApart.exe).
     fn enter_fall(&mut self) {
         self.state = MoveState::Fall;
         self.air_time = 0.0;
         self.extending = false;
         self.chain_origin_y = None;
-        if self.velocity.y > 0.0 {
-            self.velocity.y = 0.0;
-        }
     }
 
     fn land(&mut self) {

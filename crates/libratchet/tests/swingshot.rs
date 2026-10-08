@@ -211,3 +211,19 @@ fn the_hookshot_reels_him_in_then_drops_him() {
     // Top speed on the way: about the Hookshot's.
     assert!(s.time - start < 1.5);
 }
+
+#[test]
+fn letting_go_of_the_hookshot_mid_reel_keeps_his_upward_speed() {
+    let hook = Vec3::new(0.0, 12.0, 6.0);
+    let mut s = Swinger::new(vec![target(hook, SwingKind::Hook, 0.0)]);
+    s.tick(false, false, Vec2::ZERO);
+    for _ in 0..30 {
+        s.tick(true, false, Vec2::ZERO);
+    }
+    assert_eq!(s.r.state(), MoveState::Hook);
+    let rising = s.r.velocity().y;
+    assert!(rising > 3.0, "reeling up at only {rising} m/s");
+    s.tick(false, false, Vec2::ZERO);
+    assert_eq!(s.r.state(), MoveState::Fall);
+    assert!(s.r.velocity().y > rising * 0.8, "dropped to {} m/s on letting go", s.r.velocity().y);
+}

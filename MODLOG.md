@@ -35,6 +35,38 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (afternoon): code review fixes
+
+Three review agents read the sim, the ledges/Swingshot code with the C API and libarsenal,
+and the sandbox. Each finding was checked against the code (and the game notes) before
+fixing.
+
+### Read from RiftApart.exe
+- **A jump hands over to a fall** once it has come down for longer than its NoFallTime
+  (single 0.75 s, double 0.85, wall 1.2, ledge 0.75), unless he's within 0.5 m of the ground.
+  The fall takes the measured velocity.
+
+### Fixed: falls and vertical speed
+- **Falls keep upward speed:**
+  - Every fall used to start no faster than level. The game's fall takes the measured
+    velocity.
+  - Letting go of the Hookshot mid-reel stopped him dead in the air; now he carries on
+    rising.
+- **Walking off an edge** started the fall at the ground's stick-down speed (−2 m/s), so
+  small drops landed early and a glide off an edge started too fast. It starts from rest now.
+- **The first tick of an air dash, wall stick or ledge grab** moved him by the old fall
+  speed: up to 0.8 m down on a dash that should be level.
+- **A double jump with almost no room left under the chain's cap** got almost no gravity and
+  floated down for seconds. NoFallTime now hands it to a normal fall.
+- **A jump pressed on the tick the Hyper-Strike landing lets go** was lost to the stick's
+  exit.
+- **The wall jump-up's height cap** followed the previous jump's aim mode; it's always
+  DoubleJumpConfig's.
+
+### Tests
+- **Six new tests** cover: walking off an edge, NoFallTime, the cramped double jump, an air dash
+  out of a fast fall, the Hyper-Strike landing's jump, and letting go of the Hookshot.
+
 ## 2026-10-08 (afternoon): a tick that takes no time; a fuzz test
 
 The user asked for the code to be reviewed and refined. A new test drives the sim with random
