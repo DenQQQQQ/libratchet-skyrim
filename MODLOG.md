@@ -35,6 +35,25 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-08 (morning): the wall jump goes at 5 m/s after all
+
+The ledge research found how a jump picks its speeds. The jump state overrides the speed set by
+its jump kind (RiftApart.exe):
+- the ledge jump takes LedgeJumpSpeeds;
+- the wall jump takes WallJumpSpeeds;
+- the vault jump takes VaultJumpSpeeds;
+- the wall-run jump takes WallRunJumpSpeeds;
+- two glide kinds take GlideSpeeds;
+- every other jump takes the normal JumpSpeedConfig.
+
+So the wall jump leaves at 5 m/s, not 6, and its steering after NoInputTime tops out at 5 too.
+
+- **libratchet:** `Tuning::wall_jump_speeds` is back, loaded from WallJumpSpeeds, and the wall
+  jump steers by it. The tests check 5 m/s.
+- **Sandbox:** at 5 m/s he reaches the shaft's other wall 0.55 s after the jump, just past the
+  0.5 s block. Each jump climbs about 1.9 m, so the shaft, its ledge and the grey walls are now
+  12.5 m. The sixth jump still clears the top.
+
 ## 2026-10-08 (morning): plain walls, and the wall jump's flight
 
 The user played it. The jump off the wall felt "a bit static". They also pointed out that the game
@@ -160,7 +179,8 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   Accel 300, Decel 500 and MaxSpeedYaw 300.
 - **JumpConfigs.WallJumpConfig:** a fixed 2.18 m height, TimeToPeak 0.41, NoInputTime 0.7,
   NoGlideTime 0.7, DoubleJumpTimeStart 0.7, NoFallTime 1.2, momentum weights 0–0.1.
-- **WallJumpSpeeds** says 5 m/s, but nothing in the exe reads it (below).
+- **WallJumpSpeeds:** 5 m/s. The wall jump reads it by its jump kind. This entry first said it
+  wasn't read; the ledge research corrected that (2026-10-08).
 - **Animset:** Wall_Jump_Stick (`wall_jump_transition_stick_left/right`, 0.43 s), Wall_Jump_Slide
   (`wall_jump_stick_slide_left/right`, 0.67 s) and Wall_Jump_InAir (`wall_jump_in_air_left/right`,
   0.2 s). The in-air clip ends exactly in the stick clip's first pose.
@@ -181,9 +201,9 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   - Once he slides below WallStickMinGroundHeight, he lets go and falls.
   - The weapon is put away on the wall and drawn again after (not between the stick and its jump).
 - **The jump off:**
-  - He goes straight out along the wall's normal at the jump run speed (hero_shared's
-    JumpSpeedConfig RunSpeedMax, 6), as if the stick were pushed all the way. WallJumpSpeeds isn't
-    read.
+  - He goes straight out along the wall's normal at WallJumpSpeeds' run speed, 5 m/s, as if the
+    stick were pushed all the way. At first we read this as the normal jump run speed (6); the
+    jump state picks WallJumpSpeeds by its kind.
   - NoInputTime (0.7 s) holds that velocity. After it, he blends with momentum weights 0–1.4,
     fixed in the exe; the config's 0–0.1 apply in wall-jump zones (the entry above).
 - **The side:**
@@ -201,8 +221,8 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
     its 0.5 s block. Gliding into a wall sticks too.
   - **The camera:** `Input::view_right` (C: `view_right_x/z`) is the camera's right;
     `wall_right()` (C: `wall_right` in the step result) says which clips fit.
-  - **Tuning:** loads WallStickConfig and WallJumpConfig, with the game's values as defaults. The
-    unused WallJumpSpeeds is gone.
+  - **Tuning:** loads WallStickConfig and WallJumpConfig, with the game's values as defaults.
+    WallJumpSpeeds was dropped here and came back on 2026-10-08.
   - **Tests:** 41 pass. New ones cover the block, sticking whichever way he faces, plain walls,
     letting go near the ground, and turning off the wall toward the camera.
 - **Sandbox:**
@@ -214,8 +234,8 @@ the wall stick and wall jump states in RiftApart.exe, and the second round repla
   - **The weapons:** the pistol and glove are put away on the wall, with no firing or throwing,
     and drawn again after.
 - **Demo (`--demo-part walljump`):**
-  - Six wall jumps up the shaft onto the ledge, one press every 0.7 s, about 2 m each. He reaches
-    the other wall in 0.43 s but can't take it before 0.5 s.
+  - Six wall jumps up the shaft onto the ledge, one press every 0.7 s, about 2 m each. (At 6 m/s
+    he reached the other wall in 0.43 s but couldn't take it before 0.5 s; at 5 m/s it's 0.55 s.)
   - Then a stick, slide and let-go, and the plain wall.
   - Shots `71_wall_stick` … `74_ordinary_wall` and `73b_wall_slide`; video
     `recordings/wall_jumps.mp4`.

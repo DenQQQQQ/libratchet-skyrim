@@ -6,7 +6,7 @@
 //!
 //! Coordinates: Y up, metres. Facing yaw is `atan2(x, z)`, so yaw 0 faces +Z.
 
-use crate::tuning::{DashParams, JumpParams, SwingParams, Tuning};
+use crate::tuning::{DashParams, JumpParams, SpeedParams, SwingParams, Tuning};
 use glam::{Vec2, Vec3};
 
 /// What the player is asking for this tick.
@@ -734,6 +734,15 @@ impl Ratchet {
         }
     }
 
+    /// The speeds a jump steers by: its kind's own set where the game gives it one (the wall
+    /// jump's WallJumpSpeeds), else the jump speeds (RiftApart.exe).
+    fn jump_speeds(&self) -> &SpeedParams {
+        match self.state {
+            MoveState::WallJump => &self.tuning.wall_jump_speeds,
+            _ => &self.tuning.air_speeds,
+        }
+    }
+
     /// Ground speed for the stick: the normal speeds (also when strafing while firing), or in
     /// aim mode the aim speeds, slower when backing away from the aim direction.
     fn ground_speed_for(&self, stick: Vec2) -> f32 {
@@ -1023,8 +1032,8 @@ impl Ratchet {
         self.velocity = Vec3::new(push.x, vy, push.y);
     }
 
-    /// The jump off a wall: the WallJumpConfig jump, straight away from the wall at the jump run
-    /// speed, which it keeps for NoInputTime. It starts a new jump, so his double jump and air
+    /// The jump off a wall: the WallJumpConfig jump, straight away from the wall at the
+    /// WallJumpSpeeds run speed, which it keeps for NoInputTime. It starts a new jump, so his double jump and air
     /// dash are back (ours: the game starts a fresh jump state; how it counts air moves across
     /// it isn't read).
     fn start_wall_jump(&mut self, dt: f32, position: Vec3) {
@@ -1131,7 +1140,7 @@ impl Ratchet {
             (stick.length().min(1.0), stick.normalize_or_zero())
         };
         let dir = if push < 0.01 { if self.jump_carry { self.jump_dir } else { Vec2::new(self.facing_yaw.sin(), self.facing_yaw.cos()) } } else { dir };
-        let speeds = self.tuning.air_speeds.clone();
+        let speeds = self.jump_speeds().clone();
         let (m, speed) = if push <= MOVE_STICK {
             (1.0, if self.jump_carry { v_last.length().min(speeds.run_max) } else { 0.0 })
         } else {

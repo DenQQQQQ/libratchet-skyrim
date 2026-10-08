@@ -443,11 +443,16 @@ pub struct Tuning {
     pub aim_back_speed: f32,
     pub aim_single_jump: JumpParams,
     pub aim_double_jump: JumpParams,
-    /// Wall jumps: sticking to the wall and the jump off it (the game's WallStickConfig and
-    /// WallJumpConfig). The jump off goes at the normal jump speeds: hero_traversal's
-    /// WallJumpSpeeds is never read (RiftApart.exe).
+    /// The jump up off a ledge he hangs from, over its lip (the game's LedgeJumpConfig, with
+    /// LedgeJumpSpeeds).
+    pub ledge_jump: JumpParams,
+    pub ledge_jump_speeds: SpeedParams,
+    /// Wall jumps: sticking to the wall, the jump off it, and its speeds (the game's
+    /// WallStickConfig, WallJumpConfig and WallJumpSpeeds, which the wall jump picks by its
+    /// jump kind).
     pub wall_stick: WallStickParams,
     pub wall_jump: JumpParams,
+    pub wall_jump_speeds: SpeedParams,
     /// Size multiplier applied by `scaled`; 1.0 means Ratchet-sized.
     pub scale: f32,
     /// Where these values came from, for display.
@@ -530,6 +535,22 @@ impl Default for Tuning {
                 momentum_weight_max: 1.4,
                 ..JumpParams::FALLBACK
             },
+            // The game's ledge jump (hero_traversal), as defaults.
+            ledge_jump: JumpParams {
+                height_min: 2.0,
+                height_max: 2.5,
+                time_to_peak: 0.35,
+                button_min_hold: 0.02,
+                button_max_hold: 0.2,
+                terminal_velocity: 50.0,
+                no_glide_time: 0.75,
+                double_jump_time_start: 0.2,
+                double_jump_height_min: 1.3,
+                momentum_weight_max: 1.4,
+                ..JumpParams::FALLBACK
+            },
+            ledge_jump_speeds: SpeedParams { walk_min: 1.0, walk_max: 1.0, run_min: 1.0, run_max: 2.0, walk_run_threshold: 0.98 },
+            wall_jump_speeds: SpeedParams { walk_min: 5.0, walk_max: 5.0, run_min: 5.0, run_max: 5.0, walk_run_threshold: 0.5 },
             // The game's wall-jump values (hero_traversal), as defaults.
             // WallJumpUpMinHeightGain isn't in the asset; 0.5 is the exe's default for it.
             wall_stick: WallStickParams {
@@ -591,8 +612,11 @@ impl Tuning {
             aim_back_speed: f(&speeds["AimSpeedConfig"], "RunSpeedBackwardMax").unwrap_or(base.aim_back_speed),
             aim_single_jump: jump_from(&jumps["AimModeSingleJumpConfig"]).unwrap_or(base.aim_single_jump),
             aim_double_jump: jump_from(&jumps["AimModeDoubleJumpConfig"]).unwrap_or(base.aim_double_jump),
+            ledge_jump: jump_from(&jumps["LedgeJumpConfig"]).unwrap_or(base.ledge_jump),
+            ledge_jump_speeds: speeds_from(&traversal["LedgeJumpSpeeds"], &base.ledge_jump_speeds),
             wall_stick: wall_stick_from(&traversal["WallStickConfig"], &base.wall_stick),
             wall_jump: jump_from(&jumps["WallJumpConfig"]).unwrap_or(base.wall_jump),
+            wall_jump_speeds: speeds_from(&traversal["WallJumpSpeeds"], &base.wall_jump_speeds),
             source: format!("Rift Apart configs ({})", dir.display()),
             ..base
         })
@@ -620,8 +644,11 @@ impl Tuning {
             aim_back_speed: self.aim_back_speed * s,
             aim_single_jump: self.aim_single_jump.scaled(s),
             aim_double_jump: self.aim_double_jump.scaled(s),
+            ledge_jump: self.ledge_jump.scaled(s),
+            ledge_jump_speeds: self.ledge_jump_speeds.scaled(s),
             wall_stick: self.wall_stick.scaled(s),
             wall_jump: self.wall_jump.scaled(s),
+            wall_jump_speeds: self.wall_jump_speeds.scaled(s),
             scale: self.scale * s,
             ..self.clone()
         }

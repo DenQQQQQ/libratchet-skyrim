@@ -818,7 +818,7 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     }
     assert!(h.pos.y < stuck_at - 0.05, "didn't slide");
     assert_eq!(h.r.state(), MoveState::WallStick);
-    // The jump goes straight away from the wall at the jump run speed, and the stick can't
+    // The jump goes straight away from the wall at its own run speed, and the stick can't
     // steer it back for NoInputTime.
     let take_off = h.pos;
     h.tick(true, toward);
@@ -828,7 +828,7 @@ fn sticks_to_a_wall_jump_wall_then_jumps_straight_off_it() {
     while h.time - start < t.wall_jump.no_input_time - 2.0 * DT {
         h.tick(true, toward);
         peak = peak.max(h.pos.y);
-        assert!(close(h.r.velocity().x, -t.air_speeds.run_max, 0.05), "x speed {} at {:.2} s", h.r.velocity().x, h.time - start);
+        assert!(close(h.r.velocity().x, -t.wall_jump_speeds.run_max, 0.05), "x speed {} at {:.2} s", h.r.velocity().x, h.time - start);
     }
     assert!(close(peak - take_off.y, t.wall_jump.height_min, 0.08), "peaked {:.2} m up", peak - take_off.y);
     assert!(h.pos.x < take_off.x - 3.0, "only {:.2} m from the wall", take_off.x - h.pos.x);
@@ -892,7 +892,7 @@ fn in_a_wall_jump_zone_the_jump_keeps_its_line() {
     let outside = sideways(false);
     let inside = sideways(true);
     assert!(outside.z > 1.0, "outside a zone the stick steers it: {outside:?}");
-    assert!(inside.z.abs() < 1e-3 && close(inside.x, -t.air_speeds.run_max, 0.01), "in a zone it keeps its line: {inside:?}");
+    assert!(inside.z.abs() < 1e-3 && close(inside.x, -t.wall_jump_speeds.run_max, 0.01), "in a zone it keeps its line: {inside:?}");
 }
 
 #[test]

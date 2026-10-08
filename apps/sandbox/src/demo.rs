@@ -687,10 +687,10 @@ fn wall_jumps() -> Vec<Act> {
         hold(0.15, z, false),
         Act::Shot("71_wall_stick"),
     ];
-    // Each jump presses about 0.2 s after landing on the wall (before it starts sliding). He
-    // reaches the other wall in about 0.43 s but can't take it until the jump-off's 0.5 s block
-    // is over, so the next press comes 0.7 s after this one, about 2 m higher. The sixth clears
-    // the top onto the ledge.
+    // Each jump presses about 0.15 s after landing on the wall (before it starts sliding). At
+    // 5 m/s he reaches the other wall 0.55 s after the jump, just past the jump-off's 0.5 s
+    // block, so the next press comes 0.7 s after this one, about 1.9 m higher. The sixth
+    // clears the top onto the ledge.
     for i in 0..6 {
         acts.extend([hold(0.15, Vec2::ZERO, false), hold(0.05, Vec2::ZERO, true), hold(0.3, Vec2::ZERO, false)]);
         if i == 1 {
