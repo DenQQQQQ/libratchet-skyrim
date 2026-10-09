@@ -30,6 +30,8 @@ namespace Combat
 	// After the game's data has loaded: the hit spells, and Skyrim's own attacks, blocks and
 	// weapon drawing switched off on foot.
 	void Install();
+	// A save loads or a new game starts: bombs in the air and a throw winding up are dropped.
+	void Reset();
 
 	// Before the sim steps: the wrench button and aiming into its input. a_view: the camera's
 	// forward on the ground (Skyrim's x, y, unit); a_state: the sim's state at its last step.

@@ -30,9 +30,11 @@ namespace
 		case SKSE::MessagingInterface::kPreLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
 			Jump::Reset();
+			Combat::Reset();
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			Jump::Reset();
+			Combat::Reset();
 			AutoTest::OnGameLoaded();
 			break;
 		default:

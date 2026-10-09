@@ -730,6 +730,14 @@ namespace Combat
 		c.aimAt = Strafing() ? std::optional(AimPoint().first) : std::nullopt;
 	}
 
+	void Reset()
+	{
+		c.bombs.clear();
+		c.bombIn = -1.0f;
+		c.bombTrigger = false;
+		c.cooking = false;
+	}
+
 	Gun Selected() { return c.gun; }
 
 	void Select(Gun a_gun) { Pick(a_gun); }
