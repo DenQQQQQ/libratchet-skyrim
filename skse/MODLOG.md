@@ -493,5 +493,10 @@ The owner asked for Clank on his back.
   and stood on the ledge (+2.12 m)**. Screenshots show him reaching for the lip, then hanging by
   both hands. **21/21 pass.**
 - Test tools: `ingame.ps1 -Only <name>` runs only the cases whose names contain it (about 40 s
-  for one). With `[Debug] bTraceJumps`, the ledge case logs every ray the sim casts into the
-  world, relative to his feet, and the trace shows his facing.
+  for one). Test runs trace every frame on their own now (`autotest.ini` turns `bTraceJumps`
+  on, `-NoTrace` doesn't), and the ledge case logs every ray the sim casts into the world,
+  relative to his feet. The trace shows his facing.
+- The INI installed in the MO2 mod was still the first milestone's: `bTraceJumps = 1` (every
+  jump traced frame by frame in the owner's own games) and none of the newer options listed.
+  It's the current template now, with the owner's values (all the same as its defaults,
+  `fScale = 1.0` among them) and tracing off.

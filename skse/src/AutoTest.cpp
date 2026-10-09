@@ -769,6 +769,10 @@ namespace AutoTest
 		TestWindow::SetFolder(shots);
 		s.shots = GetPrivateProfileIntW(L"AutoTest", L"bShots", 1, trigger.c_str()) != 0;
 		s.watchMap = GetPrivateProfileIntW(L"AutoTest", L"bWatchMap", 0, trigger.c_str()) != 0;
+		// Every frame traced in a test run, whatever the INI says.
+		if (GetPrivateProfileIntW(L"AutoTest", L"bTraceJumps", 0, trigger.c_str()) != 0) {
+			Settings::Get().traceJumps = true;
+		}
 		GetPrivateProfileStringW(L"AutoTest", L"sOnly", L"", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
 		s.only.clear();
 		for (const wchar_t* c = buf; *c; ++c) {

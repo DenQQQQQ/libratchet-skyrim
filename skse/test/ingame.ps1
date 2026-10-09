@@ -27,6 +27,8 @@ param(
     [switch]$NoShots,
     # Only the cases whose names contain this ("ledge", "wall"...).
     [string]$Only = "",
+    # No per-frame trace in the log (on by default for test runs).
+    [switch]$NoTrace,
     # Ratchet casts no shadows (bisecting the renderer hang).
     [switch]$NoShadows,
     # Log the engine's Map calls from the site the renderer hang sits in.
@@ -54,7 +56,7 @@ $flat = if ($Start -match "qasmoke") { 1 } else { 0 }
 # The plugin's screenshots of this run (idle, each jump's top, the end).
 $shots = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path ("target\skse\shots\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force $shots | Out-Null
-[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`nfHoldEnd=$HoldEnd`r`nsShots=$shots`r`nbDiagnose=$([int][bool]$Diagnose)`r`nbCorner=$([int](-not $Fullscreen))`r`nbShots=$([int](-not $NoShots))`r`nbNoShadows=$([int][bool]$NoShadows)`r`nbWatchMap=$([int][bool]$WatchMap)`r`nfCameraYaw=$($CameraYaw.ToString([Globalization.CultureInfo]::InvariantCulture))`r`nsOnly=$Only`r`n")
+[IO.File]::WriteAllText($trigger, "[AutoTest]`r`nsStart=$Start`r`nbFlatGround=$flat`r`nbQuit=1`r`nfHoldEnd=$HoldEnd`r`nsShots=$shots`r`nbDiagnose=$([int][bool]$Diagnose)`r`nbCorner=$([int](-not $Fullscreen))`r`nbShots=$([int](-not $NoShots))`r`nbNoShadows=$([int][bool]$NoShadows)`r`nbWatchMap=$([int][bool]$WatchMap)`r`nfCameraYaw=$($CameraYaw.ToString([Globalization.CultureInfo]::InvariantCulture))`r`nsOnly=$Only`r`nbTraceJumps=$([int](-not $NoTrace))`r`n")
 $TimeoutSec += $HoldEnd
 $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
 
