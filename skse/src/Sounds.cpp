@@ -5,77 +5,106 @@
 
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Sounds
 {
 	namespace
 	{
-		// The game mixes its moments by level (dB): a moment this loud plays at full volume, and
-		// quieter ones (his footsteps' foley at -9 dB) below it. Louder ones play at full volume
-		// too, their layers in their own mix (the Shatterbomb's blast, at 35 dB, had all eight of
-		// its layers pushed to full and crackled). Ours: Skyrim has no mixer to match, and its own
-		// sound volume applies on top.
-		constexpr float kFullLevelDb = 15.0f;
+		// The sandbox's mix (apps/sandbox/src/sound.rs): the game's moments span about 45 dB of
+		// levels before its own buses and loudness mixing, which neither has; they play at half
+		// their difference from 24 dB, within -18..+3 dB, times each file's own volume, times 0.7
+		// overall. Skyrim's sound volume applies on top, and the INI's fSoundVolume.
+		constexpr float kMaster = 0.7f;
+		constexpr float kLevelReference = 24.0f;
+		constexpr float kLevelScale = 0.5f;
+		constexpr float kLevelMin = -18.0f;
+		constexpr float kLevelMax = 3.0f;
+		// A sound away from him is full within 6 m (Ratchet-sized), then fades (sound.rs falloff).
+		constexpr float kFullWithin = 6.0f;
+		// Stopping a sound fades it this long (ms): cut dead, it clicks.
+		constexpr std::uint16_t kStopFade = 30;
 
 		struct File
 		{
 			std::string path;  // under Data
-			float       seconds = 0.0f;
+			float       seconds = 1.0f;
+			float       volume = 1.0f;  // its own, times its layer's
+			std::string loopPath;       // a looping layer's: the file over and over (baked by the converter)
+			float       loopSeconds = 0.0f;
 		};
 
 		struct Layer
 		{
-			float             volume = 1.0f;
 			float             delay = 0.0f;
 			bool              loop = false;
 			float             pitchLow = 0.0f;  // cents
 			float             pitchHigh = 0.0f;
+			float             interval = 0.0f;  // looping: a fresh file this often (s) instead of one looping
 			std::vector<File> files;
 		};
 
 		struct Moment
 		{
-			float              levelDb = 0.0f;
+			float              gain = 1.0f;
 			float              chance = 1.0f;
 			std::vector<Layer> layers;
 		};
 
-		struct Pending
+		// One sound of a moment, waiting on its delay or playing; or a layer's driver, playing a
+		// fresh file of it every interval while its loop lasts.
+		struct Voice
 		{
-			float        in = 0.0f;  // seconds until it starts
-			std::string  file;
-			float        volume = 1.0f;
-			float        frequency = 1.0f;
-			RE::NiPoint3 where;
-			std::string  loop;   // the looping moment it belongs to, if any
-			std::string  owner;  // what it belongs to (a Shatterbomb in the air), if anything
+			const Moment*     moment = nullptr;
+			std::size_t       layer = 0;
+			std::string       loop;            // the loop it came from (it follows the loop's place)
+			bool              looping = false; // and ends with the loop (its loop layers do; the rest play out)
+			std::string       owner;           // what it belongs to: it follows that, and ends with it
+			RE::NiPoint3      where;
+			float             in = 0.0f;       // seconds until it starts (a driver: until its next file)
+			float             every = 0.0f;    // > 0: a driver
+			std::string       file;
+			float             volume = 1.0f;   // before the master volumes and the distance
+			float             frequency = 1.0f;
+			bool              looped = false;  // its baked loop, again each time it's over
+			float             length = 0.0f;   // seconds, at its frequency
+			bool              started = false;
+			double            endsAt = 0.0;
+			RE::BSSoundHandle handle;
 		};
 
-		// A looping moment: a round of its layers, and the next round when the longest is over
-		// (Skyrim's handles don't say reliably whether a sound is still playing).
-		struct Looping
-		{
-			std::vector<RE::BSSoundHandle> handles;
-			double                          nextRound = 0.0;
-		};
+		std::unordered_map<std::string, Moment> g_moments;
+		std::vector<Voice>                      g_voices;
+		std::unordered_set<std::string>         g_loops;  // the loops started and not stopped
+		// Per loop: when it started, and the files it has played (logged at its stop).
+		std::unordered_map<std::string, std::pair<double, int>> g_loopStats;
+		double                                  g_clock = 0.0;
+		std::uint32_t                           g_random = 0x2545F491u;
+		bool                                    g_warned = false;
 
-		std::unordered_map<std::string, Moment>  g_moments;
-		std::vector<Pending>                     g_pending;
-		std::unordered_map<std::string, Looping> g_loops;
-		std::unordered_map<std::string, std::vector<RE::BSSoundHandle>> g_owned;
-		double                                   g_clock = 0.0;
-		std::uint32_t                            g_random = 0x2545F491u;
-		bool                                     g_warned = false;
-
-		float Random01()
+		// xorshift32, as the sandbox's.
+		std::uint32_t Next()
 		{
 			g_random ^= g_random << 13;
 			g_random ^= g_random >> 17;
 			g_random ^= g_random << 5;
-			return static_cast<float>(g_random >> 8) / 16777216.0f;
+			return g_random;
 		}
 
-		RE::BSSoundHandle Start(const Pending& a_p)
+		float Unit() { return static_cast<float>(Next() >> 8) / 16777216.0f; }
+
+		// How loud a sound at a_where is from him (sound.rs falloff: his own are at his feet).
+		float Falloff(const RE::NiPoint3& a_where)
+		{
+			const auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) {
+				return 1.0f;
+			}
+			const float metres = a_where.GetDistance(player->GetPosition()) / RE::bhkWorld::GetWorldScaleInverse() / Settings::Get().scale;
+			return metres <= kFullWithin ? 1.0f : std::pow(kFullWithin / metres, 0.85f);
+		}
+
+		RE::BSSoundHandle Start(const Voice& a_voice)
 		{
 			RE::BSSoundHandle handle;
 			auto* audio = RE::BSAudioManager::GetSingleton();
@@ -83,50 +112,86 @@ namespace Sounds
 				return handle;
 			}
 			RE::BSResource::ID id;
-			id.GenerateFromPath(a_p.file.c_str());
+			id.GenerateFromPath(a_voice.file.c_str());
 			audio->GetSoundHandleByFile(handle, id, 0x1A, 128);
 			if (!handle.IsValid()) {
 				if (!g_warned) {
 					g_warned = true;
-					SKSE::log::warn("sounds: Skyrim won't play {} (no more of these warnings)", a_p.file);
+					SKSE::log::warn("sounds: Skyrim won't play {} (no more of these warnings)", a_voice.file);
 				}
 				return handle;
 			}
-			handle.SetPosition(a_p.where);
-			handle.SetVolume(a_p.volume);
-			if (a_p.frequency != 1.0f) {
-				handle.SetFrequency(a_p.frequency);
+			handle.SetPosition(a_voice.where);
+			handle.SetVolume(std::clamp(kMaster * a_voice.volume * Falloff(a_voice.where) * Settings::Get().soundVolume, 0.0f, 1.0f));
+			if (a_voice.frequency != 1.0f) {
+				handle.SetFrequency(a_voice.frequency);
 			}
 			handle.Play();
 			return handle;
 		}
 
-		// Each layer of a moment, one of its files, now or after its delay. Returns how long
-		// the round lasts (its longest layer, from now).
-		float Queue(const Moment& a_moment, const RE::NiPoint3& a_where, const std::string& a_loop, float a_after, const std::string& a_owner = {})
+		void Begin(Voice& a_voice)
 		{
-			const float master = Settings::Get().soundVolume;
-			const float level = std::min(1.0f, std::pow(10.0f, (a_moment.levelDb - kFullLevelDb) / 20.0f));
-			float       longest = 0.0f;
-			for (const Layer& layer : a_moment.layers) {
-				if (layer.files.empty() || layer.volume <= 0.0f) {
+			a_voice.handle = Start(a_voice);
+			a_voice.started = true;
+			a_voice.endsAt = g_clock + a_voice.length;
+			if (!a_voice.loop.empty() && a_voice.handle.IsValid()) {
+				if (const auto it = g_loopStats.find(a_voice.loop); it != g_loopStats.end()) {
+					++it->second.second;
+				}
+			}
+		}
+
+		// One file of the voice's layer, at a pitch in its range (sound.rs pick); a_looped: its
+		// baked loop.
+		void Pick(Voice& a_voice, bool a_looped)
+		{
+			const Layer& layer = a_voice.moment->layers[a_voice.layer];
+			const File&  file = layer.files[Next() % layer.files.size()];
+			const float  cents = layer.pitchLow + (layer.pitchHigh - layer.pitchLow) * Unit();
+			a_voice.frequency = std::pow(2.0f, cents / 1200.0f);
+			a_voice.looped = a_looped && !file.loopPath.empty();
+			a_voice.file = a_voice.looped ? file.loopPath : file.path;
+			a_voice.length = (a_voice.looped ? file.loopSeconds : file.seconds) / a_voice.frequency;
+			a_voice.volume = file.volume * a_voice.moment->gain;
+		}
+
+		// A moment's cue (sound.rs play): each layer once. A loop's and an owner's loop layers loop
+		// (a retriggered one through a driver); only an owner's wait for their delay.
+		void Cue(const Moment& a_moment, const RE::NiPoint3& a_where, float a_after, const std::string& a_loop, const std::string& a_owner)
+		{
+			const bool looping = !a_loop.empty() || !a_owner.empty();
+			for (std::size_t i = 0; i < a_moment.layers.size(); ++i) {
+				const Layer& layer = a_moment.layers[i];
+				if (layer.files.empty()) {
 					continue;
 				}
-				const File& file = layer.files[std::min(layer.files.size() - 1, static_cast<std::size_t>(Random01() * layer.files.size()))];
-				const float cents = layer.pitchLow + (layer.pitchHigh - layer.pitchLow) * Random01();
-				Pending p;
-				p.in = layer.delay + a_after;
-				p.file = file.path;
-				p.volume = std::clamp(level * layer.volume * master, 0.0f, 1.0f);
-				p.frequency = std::pow(2.0f, cents / 1200.0f);
-				p.where = a_where;
-				p.loop = a_loop;
-				p.owner = a_owner;
-				// A higher pitch plays the file faster.
-				longest = std::max(longest, p.in + file.seconds / p.frequency);
-				g_pending.push_back(std::move(p));
+				const bool looped = looping && layer.loop;
+				Voice      v;
+				v.moment = &a_moment;
+				v.layer = i;
+				v.loop = a_loop;
+				v.looping = looped && !a_loop.empty();
+				v.owner = a_owner;
+				v.where = a_where;
+				if (looped && layer.interval > 0.0f) {
+					v.every = layer.interval;
+					v.in = layer.delay + a_after;
+				} else {
+					Pick(v, looped);
+					v.in = (looped && a_owner.empty() ? 0.0f : layer.delay) + a_after;
+				}
+				g_voices.push_back(std::move(v));
 			}
-			return longest;
+		}
+
+		bool Roll(const Moment& a_moment) { return a_moment.chance >= 1.0f || Unit() < a_moment.chance; }
+
+		void Silence(Voice& a_voice)
+		{
+			if (a_voice.started) {
+				a_voice.handle.FadeOutAndRelease(kStopFade);
+			}
 		}
 	}
 
@@ -144,123 +209,172 @@ namespace Sounds
 		std::string line;
 		Moment*     current = nullptr;
 		std::size_t files = 0;
+		std::size_t loops = 0;
 		while (std::getline(in, line)) {
 			std::istringstream words(line);
 			std::string        kind;
 			words >> kind;
 			if (kind == "moment") {
 				std::string name;
+				float       level = kLevelReference;
 				Moment      m;
-				words >> name >> m.levelDb >> m.chance;
+				words >> name >> level >> m.chance;
+				m.gain = std::pow(10.0f, std::clamp((level - kLevelReference) * kLevelScale, kLevelMin, kLevelMax) / 20.0f);
 				current = &(g_moments[name] = std::move(m));
 			} else if (kind == "layer" && current) {
 				Layer l;
+				float volume = 1.0f;
 				int   loop = 0;
-				words >> l.volume >> l.delay >> loop >> l.pitchLow >> l.pitchHigh;
+				words >> volume >> l.delay >> loop >> l.pitchLow >> l.pitchHigh;
 				l.loop = loop != 0;
-				for (std::string f; words >> f;) {
-					File        file;
-					const auto  bar = f.find('|');
-					file.path = f.substr(0, bar);
-					file.seconds = bar == std::string::npos ? 1.0f : std::strtof(f.c_str() + bar + 1, nullptr);
+				std::vector<std::string> rest;
+				for (std::string w; words >> w;) {
+					rest.push_back(std::move(w));
+				}
+				// (An older sounds.txt has no interval: its files follow the pitch.)
+				std::size_t first = 0;
+				if (!rest.empty() && rest[0].find('|') == std::string::npos) {
+					l.interval = std::strtof(rest[0].c_str(), nullptr);
+					first = 1;
+				}
+				for (std::size_t i = first; i < rest.size(); ++i) {
+					std::vector<std::string> parts;
+					for (std::size_t from = 0;;) {
+						const auto bar = rest[i].find('|', from);
+						parts.push_back(rest[i].substr(from, bar == std::string::npos ? std::string::npos : bar - from));
+						if (bar == std::string::npos) {
+							break;
+						}
+						from = bar + 1;
+					}
+					File file;
+					file.path = parts[0];
+					file.seconds = parts.size() > 1 ? std::strtof(parts[1].c_str(), nullptr) : 1.0f;
+					file.volume = volume * (parts.size() > 2 ? std::strtof(parts[2].c_str(), nullptr) : 1.0f);
+					if (parts.size() > 4) {
+						file.loopPath = parts[3];
+						file.loopSeconds = std::strtof(parts[4].c_str(), nullptr);
+						++loops;
+					}
 					l.files.push_back(std::move(file));
 				}
 				files += l.files.size();
 				current->layers.push_back(std::move(l));
 			}
 		}
-		SKSE::log::info("sounds: {} moments, {} files", g_moments.size(), files);
+		SKSE::log::info("sounds: {} moments, {} files ({} looping)", g_moments.size(), files, loops);
 		return !g_moments.empty();
 	}
 
 	void Play(std::string_view a_moment, const RE::NiPoint3& a_where, float a_after, std::string_view a_owner)
 	{
 		const auto it = g_moments.find(std::string(a_moment));
-		if (it == g_moments.end() || Random01() >= it->second.chance) {
+		if (it == g_moments.end() || !Roll(it->second)) {
 			return;
 		}
-		Queue(it->second, a_where, {}, a_after, std::string(a_owner));
+		Cue(it->second, a_where, a_after, {}, std::string(a_owner));
 	}
 
 	void Follow(std::string_view a_owner, const RE::NiPoint3& a_where)
 	{
-		const std::string owner(a_owner);
-		if (const auto it = g_owned.find(owner); it != g_owned.end()) {
-			for (auto& handle : it->second) {
-				handle.SetPosition(a_where);
-			}
-		}
-		for (auto& p : g_pending) {
-			if (p.owner == owner) {
-				p.where = a_where;
+		for (auto& v : g_voices) {
+			if (v.owner == a_owner) {
+				v.where = a_where;
+				if (v.started) {
+					v.handle.SetPosition(a_where);
+				}
 			}
 		}
 	}
 
 	void StopOwned(std::string_view a_owner)
 	{
-		const std::string owner(a_owner);
-		if (const auto it = g_owned.find(owner); it != g_owned.end()) {
-			for (auto& handle : it->second) {
-				handle.FadeOutAndRelease(50);
+		for (auto& v : g_voices) {
+			if (v.owner == a_owner) {
+				Silence(v);
 			}
-			g_owned.erase(it);
 		}
-		std::erase_if(g_pending, [&](const Pending& p) { return p.owner == owner; });
+		std::erase_if(g_voices, [&](const Voice& v) { return v.owner == a_owner; });
 	}
 
 	void Loop(std::string_view a_moment, const RE::NiPoint3& a_where)
 	{
-		const std::string name(a_moment);
-		const auto        it = g_moments.find(name);
-		if (it == g_moments.end()) {
-			return;
+		// Started once (a second start does nothing), then it follows a_where.
+		if (const std::string name(a_moment); g_loops.insert(name).second) {
+			const auto it = g_moments.find(name);
+			if (it == g_moments.end() || !Roll(it->second)) {
+				return;
+			}
+			g_loopStats[name] = { g_clock, 0 };
+			Cue(it->second, a_where, 0.0f, name, {});
 		}
-		auto& loop = g_loops[name];
-		for (auto& handle : loop.handles) {
-			handle.SetPosition(a_where);
-		}
-		if (g_clock >= loop.nextRound) {
-			loop.handles.clear();
-			loop.nextRound = g_clock + std::max(0.05f, Queue(it->second, a_where, name, 0.0f));
+		for (auto& v : g_voices) {
+			if (v.loop == a_moment) {
+				v.where = a_where;
+				if (v.started) {
+					v.handle.SetPosition(a_where);
+				}
+			}
 		}
 	}
 
 	void Stop(std::string_view a_moment)
 	{
-		const std::string name(a_moment);
-		if (const auto it = g_loops.find(name); it != g_loops.end()) {
-			for (auto& handle : it->second.handles) {
-				handle.FadeOutAndRelease(100);
-			}
-			g_loops.erase(it);
+		g_loops.erase(std::string(a_moment));
+		if (const auto it = g_loopStats.find(std::string(a_moment)); it != g_loopStats.end()) {
+			SKSE::log::info("sounds: {} stopped after {:.2f} s, {} files played", a_moment, g_clock - it->second.first, it->second.second);
+			g_loopStats.erase(it);
 		}
-		std::erase_if(g_pending, [&](const Pending& p) { return p.loop == name; });
+		for (auto& v : g_voices) {
+			if (v.looping && v.loop == a_moment) {
+				Silence(v);
+			}
+		}
+		std::erase_if(g_voices, [&](const Voice& v) { return v.looping && v.loop == a_moment; });
+	}
+
+	void Reset()
+	{
+		for (auto& v : g_voices) {
+			Silence(v);
+		}
+		g_voices.clear();
+		g_loops.clear();
 	}
 
 	void Update(float a_dt)
 	{
 		g_clock += a_dt;
-		for (std::size_t i = 0; i < g_pending.size();) {
-			auto& p = g_pending[i];
-			p.in -= a_dt;
-			if (p.in > 0.0f) {
-				++i;
-				continue;
-			}
-			const Pending started = std::move(p);
-			g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(i));
-			auto handle = Start(started);
-			if (!started.owner.empty() && handle.IsValid()) {
-				g_owned[started.owner].push_back(handle);
-			}
-			if (!started.loop.empty() && handle.IsValid()) {
-				if (const auto it = g_loops.find(started.loop); it != g_loops.end()) {
-					it->second.handles.push_back(handle);
-				} else {
-					handle.Stop();  // stopped before it began
+		std::vector<Voice> fresh;  // the drivers' new files
+		for (auto& v : g_voices) {
+			if (v.every > 0.0f) {
+				// A retriggered loop: a fresh file every interval, from the first on (sound.rs
+				// retrigger; it plays out, unless its owner goes).
+				v.in -= a_dt;
+				if (v.in <= 0.0f) {
+					v.in += v.every;
+					Voice one = v;
+					one.every = 0.0f;
+					one.looping = false;
+					Pick(one, false);
+					Begin(one);
+					fresh.push_back(std::move(one));
 				}
+			} else if (!v.started) {
+				v.in -= a_dt;
+				if (v.in <= 0.0f) {
+					Begin(v);
+				}
+			} else if (v.looped && g_clock >= v.endsAt) {
+				// The baked loop is over: again (its seams inside are the file's own).
+				v.handle = Start(v);
+				v.endsAt += v.length;
 			}
+		}
+		// Played out: gone (their handles end by themselves).
+		std::erase_if(g_voices, [](const Voice& v) { return v.started && !v.looped && v.every == 0.0f && g_clock >= v.endsAt + 0.1; });
+		for (auto& v : fresh) {
+			g_voices.push_back(std::move(v));
 		}
 	}
 }

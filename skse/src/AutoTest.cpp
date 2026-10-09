@@ -74,6 +74,9 @@ namespace AutoTest
 			// through a load door; "load": the most recent save), then shots again. The new shots'
 			// effects have to be alive under the new cell's 3D.
 			const char* door = nullptr;
+			// He starts on a platform this far up (metres; 0: the ground), its edge half a metre
+			// ahead: a long glide off it, for Clank's heli-pack and its sounds.
+			float       platformUp = 0.0f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -92,6 +95,8 @@ namespace AutoTest
 			{ .name = "strafe jump", .hold = 0.5f, .aimHeld = true, .wantClip = "strafe_jump" },
 			{ "double jump", 0.3f, 0.0f, false, 0.4f, 0.1f },
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
+			// Off a platform 8 m up, the stick forward: seconds of glide (the heli-pack's loop).
+			{ .name = "long glide", .hold = 0.3f, .airStick = true, .again = 0.4f, .againHold = 8.0f, .platformUp = 8.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
 			// A run along the road (the bridge's cobbles), no jump.
@@ -152,7 +157,7 @@ namespace AutoTest
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
 		constexpr float kLongFall = 0.3f;            // seconds: a fall in a run on the road longer than this fails it
-		constexpr float kTimeout = 180.0f;           // seconds in game for the whole run
+		constexpr float kTimeout = 240.0f;           // seconds in game for the whole run
 
 		struct State
 		{
@@ -658,6 +663,25 @@ namespace AutoTest
 			player->SetPosition(from + RE::NiPoint3{ 0.0f, 0.0f, 0.05f * Units() }, true);
 			SKSE::log::info("autotest: a platform {:.1f} m up, a ledge {:.1f} m ahead of it with its lip {:.2f} m above it (facing it is {:.2f} in the sim){}",
 				a_case.ledgeFrom, a_case.ledgeAt, a_case.ledgeUp + 0.05f, std::atan2(ahead.x, -ahead.y), platform && wall && top ? "" : ": couldn't place it all");
+		}
+
+		// The long glide's platform (WRIntFloorSTMid01Large, 14.6 m square, flat at its origin)
+		// a_case.platformUp metres up, its front edge half a metre ahead of where he'll stand; then
+		// he's put on it.
+		void PlacePlatform(const Case& a_case)
+		{
+			constexpr RE::FormID kFloorBase = 0x001044AA;
+			constexpr float      kFloorHalf = 512.0f;  // game units
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player || !s.startPos) {
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 from = *s.startPos + RE::NiPoint3{ 0.0f, 0.0f, a_case.platformUp * Units() };
+			const auto platform = Place(kFloorBase, from + ahead * (0.5f * Units() - kFloorHalf));
+			s.placed.push_back(platform);
+			player->SetPosition(from + RE::NiPoint3{ 0.0f, 0.0f, 0.05f * Units() }, true);
+			SKSE::log::info("autotest: a platform {:.1f} m up{}", a_case.platformUp, platform ? "" : ": couldn't place it");
 		}
 
 		// The ledge case's wall as Skyrim's collision has it: straight down onto its top at points
@@ -1166,6 +1190,11 @@ namespace AutoTest
 			if ((c.rampDeg > 0.0f || c.climb) && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
 				s.wallPlaced = true;
 				PlaceClimb(c);
+			}
+			if (c.platformUp > 0.0f && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
+				s.wallPlaced = true;
+				PlacePlatform(c);
+				return {};
 			}
 			if (s.settle < kSettle) {
 				return {};

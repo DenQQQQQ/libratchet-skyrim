@@ -34,11 +34,13 @@ namespace
 			Jump::Reset();
 			Combat::Reset();
 			Model::Reset();
+			Sounds::Reset();
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			Jump::Reset();
 			Combat::Reset();
 			Model::Reset();
+			Sounds::Reset();
 			AutoTest::OnGameLoaded();
 			break;
 		default:

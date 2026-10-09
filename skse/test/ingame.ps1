@@ -35,6 +35,10 @@ param(
     [switch]$WatchMap,
     # The third-person camera's turn round him from behind, radians (2.5: in front, three quarters).
     [double]$CameraYaw = 0,
+    # Record Skyrim's own audio (its process only) to audio.wav with the screenshots, and check it
+    # for clipping and dropouts (test/audio_check.py).
+    [switch]$Audio,
+    [string]$VsDir = "G:\dev\VS2022BuildTools",
     [string]$Mo2 = "G:\Modding\MO2",
     [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
     [string]$Executable = "SKSE"
@@ -60,6 +64,20 @@ New-Item -ItemType Directory -Force $shots | Out-Null
 $TimeoutSec += $HoldEnd
 $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
 
+# The audio recorder, built when it's older than its source.
+$recorder = Join-Path $PSScriptRoot "..\..\target\skse\tools\audio_capture.exe"
+if ($Audio) {
+    $source = Join-Path $PSScriptRoot "audio_capture.cpp"
+    if (-not (Test-Path $recorder) -or (Get-Item $source).LastWriteTime -gt (Get-Item $recorder).LastWriteTime) {
+        $dir = Split-Path $recorder
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        $vcvars = Join-Path $VsDir "VC\Auxiliary\Build\vcvars64.bat"
+        cmd /c "`"$vcvars`" >nul 2>nul && cl /nologo /EHsc /O2 /std:c++20 `"$source`" /Fo`"$dir\\`" /Fe`"$recorder`" ole32.lib mmdevapi.lib" | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "couldn't build the audio recorder" }
+    }
+}
+$recording = $null
+
 $launched = Get-Date
 $result = $null
 $proc = $null
@@ -73,6 +91,9 @@ try {
     }
     if (-not $proc) { throw "Skyrim didn't start within $TimeoutSec s" }
     Write-Host "Skyrim is running (pid $($proc.Id))"
+    if ($Audio) {
+        $recording = Start-Process -FilePath $recorder -ArgumentList $proc.Id, "`"$(Join-Path $shots 'audio.wav')`"", $TimeoutSec -PassThru -WindowStyle Hidden
+    }
 
     $shown = 0
     $stuckSince = $null
@@ -114,6 +135,17 @@ try {
     }
 } finally {
     if (Test-Path $trigger) { Remove-Item $trigger -Force }
+}
+
+# The recorder stops when Skyrim does.
+if ($recording) {
+    if (-not $recording.WaitForExit(30000)) { Stop-Process -Id $recording.Id -Force }
+    $wav = Join-Path $shots "audio.wav"
+    if (Test-Path $wav) {
+        uv run --quiet --with numpy python (Join-Path $PSScriptRoot "audio_check.py") $wav $log | Out-Host
+    } else {
+        Write-Host "No audio recorded"
+    }
 }
 
 # CrashLogger writes crash-*.log next to the SKSE logs.

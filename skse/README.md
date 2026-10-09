@@ -97,7 +97,9 @@ the NIF reader/writer the converter uses.
 
 His sounds (`skse/tools/ratchet_sounds_to_skyrim.py`) come with `clip_sounds.txt`: the steps,
 foley, swishes, efforts and swings his clips call for, played on the clip clock as the sandbox
-plays them.
+plays them. They're mixed as the sandbox mixes them (`apps/sandbox/src/sound.rs`: each moment's
+gain from its level, each file's own volume), with its loops (a looping file is baked into one of
+at least 15 s) and retriggered layers (the glide's rotor chops).
 
 ## His weapons' effects
 `build.ps1 -Install` also converts the game's effect art (`riftapart-assets/vfx`, made by
@@ -168,7 +170,10 @@ The game runs in a small window in the corner behind other windows; `-Fullscreen
 screen. Screenshots (idle, each jump's top, double jump and glide, the heli-pack out, the end) go to
 `target/skse/shots/<run>/`. Other
 options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his front), `-NoShots`,
-`-Only <name>` (only the cases whose names contain it; `"guard|bear"` for several).
+`-Only <name>` (only the cases whose names contain it; `"guard|bear"` for several), `-Audio`
+(records Skyrim's own audio, its process alone, to `audio.wav` with the screenshots and checks it
+for clipping and dropouts: `test/audio_capture.cpp`, `test/audio_check.py`; `audio_check.py
+<wav> <log> --after <regex> [seconds]` shows the loudness after a log line).
 
 ## How it works
 - **Input.** The keys bound to Skyrim's Jump control and to the dash's (INI `sDashControl`,

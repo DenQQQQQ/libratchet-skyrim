@@ -51,17 +51,20 @@ namespace Combat
 		struct Spread
 		{
 			float min, grow, max, recover;  // degrees, degrees a shot, degrees, degrees/s
+			int   freeShots;                // shots in a row before it grows (MinShotsToIncrease)
 		};
-		constexpr Spread kHipSpread{ 0.1f, 0.05f, 4.0f, 25.0f };
-		constexpr Spread kAimedSpread{ 0.1f, 0.01f, 0.65f, 5.0f };
+		constexpr Spread kHipSpread{ 0.1f, 0.05f, 4.0f, 25.0f, 3 };
+		// (The aimed spread has no MinShotsToIncrease: it grows from the first shot.)
+		constexpr Spread kAimedSpread{ 0.1f, 0.01f, 0.65f, 5.0f, 0 };
 
 		// The Shatterbomb (wpn_protogrenade_weapon.json, as libarsenal reads it: its level-1
 		// upgrades win). A cooked throw: holding fire winds it up, letting go throws, 0.8 a second,
 		// 6 in the glove (filled again 1.5 s after the last, the sandbox's convenience). Lobbed at
 		// 30 m/s under 30 m/s² to come down on the aimed point, aimed 30 m out at most, 8 s in the
 		// air at most. Its blast: 170.5 damage within 1 m, falling to 85.25 at 6 m; knocked back
-		// 3.5 m within 3 m, 1.5 m further out. Distances and speeds × scale. It leaves his hand
-		// 0.1 s into the throw (the sandbox's, without the clip's event).
+		// 3.5 m within 3 m, 1.5 m further out. Distances and speeds × scale. It leaves his hand at
+		// the throw clip's AnimFireWeapon: 0.1 s into the whole-body throw standing, 0.0653 s into
+		// the arm's on the move or in the air (the sandbox's choice of clip).
 		constexpr float kBombRate = 0.8f;
 		constexpr int   kBombAmmo = 6;
 		constexpr float kBombRefill = 1.5f;
@@ -71,6 +74,8 @@ namespace Combat
 		constexpr float kBombLife = 8.0f;
 		constexpr float kBombSpin = 500.0f;  // degrees/s, for its look
 		constexpr float kBombRelease = 0.1f;
+		constexpr float kBombReleaseArm = 0.0653f;
+		constexpr float kStandingSpeed = 0.6f;  // m/s × scale: slower on the ground is standing
 		constexpr float kBlastInner = 1.0f;
 		constexpr float kBlastOuter = 6.0f;
 		constexpr float kBlastInnerDamage = 170.5f;
@@ -193,6 +198,15 @@ namespace Combat
 			return a_state <= RATCHET_STATE_GLIDE;
 		}
 
+		// No wrench throw while he swings (the combo, the Hyper-Strike) or is on a wall, a ledge or
+		// a swing (the sandbox's start_throw); a dash doesn't stop one.
+		bool CanThrow(std::uint32_t a_state)
+		{
+			const bool swinging = a_state >= RATCHET_STATE_MELEE && a_state <= RATCHET_STATE_SMASH_LAND;
+			const bool holstered = a_state >= RATCHET_STATE_WALL_STICK && a_state <= RATCHET_STATE_SWING_JUMP;
+			return !swinging && !holstered;
+		}
+
 		template <class F>
 		void ForEachTarget(RE::PlayerCharacter* a_player, F&& a_fn)
 		{
@@ -228,7 +242,6 @@ namespace Combat
 		{
 			const float damage = a_damage * Settings::Get().damageMult;
 			Spells::Hit(a_target, damage, a_stagger);
-			Sounds::Play("wrench_hit", a_target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, a_target->GetHeight() * 0.5f });
 			++c.tally.hits;
 			c.tally.damage += damage;
 		}
@@ -258,11 +271,14 @@ namespace Combat
 					return;
 				}
 				Deal(a_target, info.damage, stagger);
-				++hits;
-				// Where it lands: his side of their body, half their height up.
+				// Where it lands: his side of their body, half their height up. One hit sound a
+				// swing, at the first (the sandbox's).
 				const RE::NiPoint3 at = NearestOfBody(a_target, me) + RE::NiPoint3{ 0.0f, 0.0f, a_target->GetHeight() * 0.5f };
-				RE::NiPoint3       way{ d.x, d.y, 0.0f };
-				const float        l = way.Length();
+				if (hits++ == 0) {
+					Sounds::Play("wrench_hit", at);
+				}
+				RE::NiPoint3 way{ d.x, d.y, 0.0f };
+				const float  l = way.Length();
 				way = l > 1.0f ? way / l : RE::NiPoint3{ ahead.x, ahead.y, 0.0f };
 				Fx::WrenchHit(at, way, a_target->GetPositionZ());
 			});
@@ -364,15 +380,15 @@ namespace Combat
 			c.thrownFar = 0.0f;
 			c.struck.clear();
 			++c.tally.throws;
-			++c.throws;
 			Sounds::Play("wrench_throw", hand);
-			Sounds::Play("voice_throw", hand);
 			SKSE::log::info("combat: the wrench leaves his hand ({})", c.thrown ? "flying" : "the sim didn't throw it");
 		}
 
-		// Everyone within reach of its path from a_from to a_to takes the throw's hit, once.
-		void Strike(RE::PlayerCharacter* a_player, const RE::NiPoint3& a_from, const RE::NiPoint3& a_to)
+		// Everyone within reach of its path from a_from to a_to takes the throw's hit, once. True if
+		// anyone did: it turns back (the sandbox's), with one hit sound at the first.
+		bool Strike(RE::PlayerCharacter* a_player, const RE::NiPoint3& a_from, const RE::NiPoint3& a_to)
 		{
+			int hits = 0;
 			const float s = Settings::Get().scale;
 			const float u = Units();
 			const float reach = (kThrowRadius + kBodyRadius) * s * u;
@@ -392,12 +408,16 @@ namespace Combat
 				}
 				c.struck.push_back(handle);
 				Deal(a_target, kThrowDamage, 0.5f);
+				if (hits++ == 0) {
+					Sounds::Play("wrench_hit", middle);
+				}
 				RE::NiPoint3 way{ path.x, path.y, 0.0f };
 				const float  l = way.Length();
 				way = l > 1.0f ? way / l : RE::NiPoint3{ 1.0f, 0.0f, 0.0f };
 				Fx::WrenchHit(middle, way, a_target->GetPositionZ());
-				SKSE::log::info("combat: the thrown wrench hits");
+				SKSE::log::info("combat: the thrown wrench hits {}", a_target->GetName());
 			});
+			return hits > 0;
 		}
 
 		void Fly(RE::PlayerCharacter* a_player, float a_dt)
@@ -413,17 +433,19 @@ namespace Combat
 			c.thrownFor += a_dt;
 			c.thrownFar = std::max(c.thrownFar, now.GetDistance(c.thrownFrom) / Units());
 			if (!caught) {
-				// A wall turns it back; actors don't (it flies on through, hitting them).
+				// A wall turns it back, and so does anyone it hits (the sandbox's: it knocks them
+				// back and comes home).
 				const auto hit = Physics::Ray(c.wrenchAt, now);
-				if (hit && !(hit->ref && hit->ref->As<RE::Actor>())) {
+				const bool wall = hit && !(hit->ref && hit->ref->As<RE::Actor>());
+				const bool struck = Strike(a_player, c.wrenchAt, now);
+				if (wall || struck) {
 					c.blocked = 1;
 					if (!c.turned) {
 						c.turned = true;
-						SKSE::log::info("combat: the wrench hit {} {:.1f} m out and turns back", hit->ref ? hit->ref->GetName() : "the world",
-							hit->point.GetDistance(c.thrownFrom) / Units());
+						SKSE::log::info("combat: the wrench hit {} {:.1f} m out and turns back", wall ? (hit->ref ? hit->ref->GetName() : "the world") : "someone",
+							now.GetDistance(c.thrownFrom) / Units());
 					}
 				}
-				Strike(a_player, c.wrenchAt, now);
 			}
 			Fx::WrenchTrail(c.wrenchAt, now);
 			c.wrenchAt = now;
@@ -434,8 +456,10 @@ namespace Combat
 				c.struck.clear();
 				Sounds::Stop("wrench_throw_loop");
 				Sounds::Play("wrench_catch", now);
-				// The sandbox's SHOW_AFTER: his throw's clip ends soon after the catch.
+				// The sandbox's SHOW_AFTER: his throw's clip ends soon after the catch, the wrench in
+				// his hand till then.
 				c.throwAnim = std::min(c.throwAnim, 0.35f);
+				c.sinceWrench = 0.0f;
 				++c.catches;
 				SKSE::log::info("combat: the wrench is back after {:.2f} s, {:.1f} m out at most", c.thrownFor, c.thrownFar);
 			} else {
@@ -466,21 +490,34 @@ namespace Combat
 			}
 			c.gun = a_gun;
 			++c.equips;
-			// No throw kept through a switch (the sandbox: a throw wound up, switched away and back,
-			// went at once).
-			c.bombTrigger = false;
-			c.cooking = false;
 			SKSE::log::info("combat: the {} is out", a_gun == Gun::kShatterbomb ? "Shatterbomb" : "Burst Pistol");
+		}
+
+		// The guns don't fire: he's swinging, dashing, on a wall, a ledge or a swing, or the
+		// wrench's throw has his hand, until just after the catch (the sandbox's busy: weapon_away,
+		// and the wrench's throwing).
+		bool GunsBusy() { return !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f; }
+
+		// The Burst Pistol put away (the Shatterbomb out): its wait runs down and its spread
+		// settles back (libarsenal's Weapon::stow, at the hip's rate).
+		void StowPistol(float a_dt)
+		{
+			c.cooldown = std::max(0.0f, c.cooldown - a_dt);
+			c.shotsInARow = 0;
+			c.spread = std::max(kHipSpread.min, c.spread - kHipSpread.recover * a_dt);
 		}
 
 		// The Shatterbomb's trigger, run the way libarsenal's Weapon runs a cooked one: holding
 		// fire winds the throw up, letting go throws (the bomb leaves his hand a moment later).
-		void Shatterbomb(float a_dt)
+		// Put away (the pistol out) or busy, it only follows the button as its wait runs down
+		// (Weapon::stow): a throw still held when he's free again goes on its release, and one let
+		// go meanwhile throws nothing. a_standing: on the ground, (nearly) still.
+		void Shatterbomb(float a_dt, bool a_out, bool a_standing)
 		{
-			// Busy (dashing, swinging, on a wall, the wrench out of his hand), a throw being wound
-			// up waits: it would go on the release otherwise (the sandbox's).
-			const bool busy = !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f;
-			if (!busy) {
+			if (!a_out || GunsBusy()) {
+				c.bombTrigger = c.fire;
+				c.bombCooldown = std::max(0.0f, c.bombCooldown - a_dt);
+			} else {
 				const bool released = !c.fire && c.bombTrigger;
 				c.bombTrigger = c.fire;
 				const bool wasReady = c.bombCooldown <= kReady;
@@ -489,13 +526,14 @@ namespace Combat
 					--c.bombAmmo;
 					// A throw due part-way through the step passes the rest on to the next wait.
 					c.bombCooldown = (wasReady ? 0.0f : c.bombCooldown) + 1.0f / kBombRate;
-					c.bombIn = kBombRelease;
+					c.bombIn = a_standing ? kBombRelease : kBombReleaseArm;
 					++c.bombThrows;
 				} else {
 					c.bombCooldown = std::max(c.bombCooldown, 0.0f);
 				}
 			}
-			c.cooking = c.bombTrigger && c.bombAmmo >= 1 && c.bombCooldown <= kReady;
+			// Winding up (the arc, his wind-up): held with a throw ready, busy or not.
+			c.cooking = a_out && c.bombTrigger && c.bombAmmo >= 1 && c.bombCooldown <= kReady;
 		}
 
 		// The bomb leaves his hand, lobbed to come down where the crosshair is (aimed no further
@@ -728,9 +766,8 @@ namespace Combat
 			// from ready starts its wait now; a wait doesn't bank up while it isn't firing.
 			const bool wasReady = c.cooldown <= kReady;
 			c.cooldown -= a_dt;
-			// (Not while the wrench's throw has his hand, until just after the catch: the gun is
-			// put away.)
-			if (!c.fire || !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f || c.pistolAmmo < 1) {
+			// (Not while he's busy: swinging, dashing, on a wall, or the wrench's throw has his hand.)
+			if (!c.fire || GunsBusy() || c.pistolAmmo < 1) {
 				c.spread = std::max(spread.min, c.spread - spread.recover * a_dt);
 				c.shotsInARow = 0;
 				c.cooldown = std::max(c.cooldown, 0.0f);
@@ -741,7 +778,7 @@ namespace Combat
 			}
 			c.cooldown = (wasReady ? 0.0f : c.cooldown) + 1.0f / (c.aim ? kAimedRate : kHipRate);
 			--c.pistolAmmo;
-			if (++c.shotsInARow > 3) {
+			if (++c.shotsInARow > spread.freeShots) {
 				c.spread = std::min(spread.max, c.spread + spread.grow);
 			}
 			c.spread = std::clamp(c.spread, spread.min, spread.max);
@@ -893,16 +930,19 @@ namespace Combat
 			c.requested.reset();
 		}
 		// The throw: on its press, or melee pressed while aiming (Rift Apart's, and the sandbox's
-		// throw_button), unless the wrench is out already or he's busy (dashing, swinging, on a
-		// wall or ledge).
+		// throw_button), unless the wrench is out already or he's busy (swinging, on a wall or
+		// ledge). His throw clip and the wrench in his hand start at the press; it leaves his hand
+		// at the clip's release.
 		const bool throwHeld = t.throwWrench || Input::ControlHeld(s.throwControl);
 		const bool aimedMelee = c.aim && c.melee && !c.meleeHeld;
 		c.meleeHeld = c.melee;
-		if (((throwHeld && !c.throwHeld) || aimedMelee) && !c.thrown && c.releaseIn < 0.0f && CanFire(a_state)) {
+		if (((throwHeld && !c.throwHeld) || aimedMelee) && !c.thrown && c.releaseIn < 0.0f && CanThrow(a_state)) {
 			c.releaseIn = kThrowRelease;
 			c.throwAnim = 1.4f;  // the sandbox's THROW_ANIM
 			c.throwView = a_view;
 			c.faceThrow = true;
+			c.sinceWrench = 0.0f;
+			++c.throws;
 		}
 		c.throwHeld = throwHeld;
 		// No swings while aiming, or while the wrench is out of his hand; and a press held through
@@ -915,12 +955,13 @@ namespace Combat
 			c.meleeLatched = false;
 			a_in.melee = c.melee ? 1 : 0;
 		}
-		// Aiming faces the aim and strafes; so does firing from the hip and the moment after the
-		// newest shot, unless the wrench's throw has his hand (a gun put away doesn't fire).
+		// Aiming faces the aim and strafes; so does the trigger held (in a dash or a swing too: he
+		// keeps facing the camera) and the moment after the newest shot, unless the wrench's throw
+		// has his hand (a gun put away doesn't fire). The sandbox's.
 		const bool throwing = c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
 		if (c.aim) {
 			a_in.aiming = 1;
-		} else if (!throwing && ((c.fire && CanFire(a_state)) || c.sinceShot < kStrafeAfterShot)) {
+		} else if (!throwing && (c.fire || c.sinceShot < kStrafeAfterShot)) {
 			a_in.aiming = 2;
 		}
 		if (a_in.aiming) {
@@ -961,10 +1002,15 @@ namespace Combat
 		if (c.thrown) {
 			Fly(a_player, a_dt);
 		}
+		// The gun put away follows the button too (the sandbox's stow).
+		const float s = Settings::Get().scale;
+		const bool  standing = a_r.state == RATCHET_STATE_GROUND && std::hypot(a_r.velocity.x, a_r.velocity.z) <= kStandingSpeed * s;
 		if (c.gun == Gun::kBurstPistol) {
 			Pistol(a_player, a_dt);
+			Shatterbomb(a_dt, false, standing);
 		} else {
-			Shatterbomb(a_dt);
+			StowPistol(a_dt);
+			Shatterbomb(a_dt, true, standing);
 			if (WindingUp()) {
 				DrawThrowArc(a_player);
 				if (c.arcFor < 0.25f && c.arcFor + a_dt >= 0.25f) {
@@ -1040,7 +1086,7 @@ namespace Combat
 
 	void Select(Gun a_gun) { Pick(a_gun); }
 
-	bool WindingUp() { return c.gun == Gun::kShatterbomb && c.cooking && CanFire(c.simState); }
+	bool WindingUp() { return c.gun == Gun::kShatterbomb && c.cooking; }
 
 	std::uint32_t BombThrows() { return c.bombThrows; }
 
@@ -1111,7 +1157,10 @@ namespace Combat
 
 	bool Strafing()
 	{
-		return Settings::Get().combat && (c.aim || ((c.fire && CanFire(c.simState)) || c.sinceShot < kStrafeAfterShot));
+		// As Fill hands it to the sim: aiming; or the trigger held or just after a shot, unless the
+		// wrench's throw has his hand.
+		const bool throwing = c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
+		return Settings::Get().combat && (c.aim || (!throwing && (c.fire || c.sinceShot < kStrafeAfterShot)));
 	}
 
 	void SetTestButtons(std::optional<TestButtons> a_buttons) { c.test = a_buttons; }

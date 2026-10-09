@@ -782,3 +782,38 @@ the fix (no crash), but by luck or by design was unknown. Now:
 - The cases check the new shots' effects are alive under the new cell's 3D, none from the old
   place remain, and Ratchet is posed and Clank playing there. **Tests: 32/32.**
 
+## 2026-10-09 (evening): an audit against the sandbox, its sounds, and listening without ears
+
+A research agent read every sandbox module (and libarsenal, libratchet's wrench, libratchet-anim)
+against `skse/src`, and ranked what a player would notice. Fixed from it so far:
+
+- **The sounds, as sound.rs plays them.** The converter keeps each layer's `interval` and each
+  file's own volume now, and bakes every looping file into one of at least 15 s (the file over and
+  over: Skyrim's handles play a file once, and this way the seams are the file's own). `Sounds.cpp`
+  is the sandbox's model: a moment's gain is its level's half-difference from 24 dB within -18..+3
+  dB, times the file's volume, times 0.7; a loop's loop layers loop, a retriggered one plays a
+  fresh file every interval (the glide's six rotor-chop layers, every 0.09 s: 145 files in a 2 s
+  glide, measured); an owner's (the Shatterbomb's) loop until its blast, the rest after their
+  delay; a sound away from him fades past 6 m. Before: the heli loop's chops played once per
+  12.8 s, the bomb's whir stopped 0.29 s into its flight, and the foley sat 8-10 dB under the
+  sandbox's mix. Loads stop everything.
+- **Hearing it without the owner:** `skse/test/audio_capture.cpp` records Skyrim's own audio (the
+  process's alone, Windows' process loopback: nothing else on the PC), and `audio_check.py` looks
+  for samples over full scale, the loudest moments (lined up with the plugin's log) and dropouts,
+  and with `--after` shows the loudness after a log line and how it pulses. `ingame.ps1 -Audio`
+  does both. On the full suite: peak -5 dBFS (the main menu's music), the Shatterbomb's blast at
+  0.28, nothing over full scale, no dropouts. The glide's sound pulses at 11 Hz (the chops).
+- **The wrench:** thrown, it turns back off the first one it hits (it flew through everyone to
+  15 m); one hit sound a swing or a throw's tick, none on the slam; no throw vocal (the sandbox
+  has none); his throw clip and the wrench in his hand start at the press, not 68 ms later; it
+  can be thrown in a dash; and it's in his hand for 0.35 s after the catch (his hand was empty).
+- **The guns follow the button while put away or while he's busy** (libarsenal's `stow`): their
+  waits run down and the pistol's spread settles meanwhile; a Shatterbomb held through a dash or
+  a swing keeps its arc and wind-up and goes on its release after, and one let go meanwhile
+  throws nothing (it was thrown the moment he was free). It leaves his hand at the throw clip's
+  own moment: 0.1 s standing, 0.0653 s moving or in the air. Holding fire faces him along the
+  camera in a dash or a swing too; the aimed spread grows from the first shot.
+- **Tests: 34/34** (new: a long glide off a platform 8 m up, 17.3 m across in 3 s, as the replay).
+  Once, the first run after the converter rewrote 73 MB of sounds, the combo's second swing came
+  0.3 s late and its third never did; not again in three runs (first reads of the new files).
+
