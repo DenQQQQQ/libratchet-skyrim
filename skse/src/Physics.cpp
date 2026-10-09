@@ -47,6 +47,26 @@ namespace Physics
 		return (from.z - hit->point.z - lift) / units;
 	}
 
+	std::optional<float> GroundUnder(const RE::NiPoint3& a_feet, float a_max, float a_radius)
+	{
+		const float units = RE::bhkWorld::GetWorldScaleInverse();
+		const float lift = 0.3f * units;
+		const float r = a_radius * units;
+		const RE::NiPoint3 offsets[] = { { 0.0f, 0.0f, 0.0f }, { r, 0.0f, 0.0f }, { -r, 0.0f, 0.0f }, { 0.0f, r, 0.0f }, { 0.0f, -r, 0.0f } };
+		std::optional<float> nearest;
+		for (const auto& o : offsets) {
+			const RE::NiPoint3 from = a_feet + o + RE::NiPoint3{ 0.0f, 0.0f, lift };
+			const RE::NiPoint3 to = a_feet + o - RE::NiPoint3{ 0.0f, 0.0f, a_max * units };
+			if (const auto hit = Ray(from, to)) {
+				const float d = (a_feet.z - hit->point.z) / units;
+				if (!nearest || d < *nearest) {
+					nearest = d;
+				}
+			}
+		}
+		return nearest;
+	}
+
 	std::optional<Wall> WallProbe(const RE::NiPoint3& a_feet, float a_middle, float a_reach, float a_side, std::optional<RE::NiPoint2> a_prefer)
 	{
 		const float units = RE::bhkWorld::GetWorldScaleInverse();

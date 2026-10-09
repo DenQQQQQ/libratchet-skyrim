@@ -577,3 +577,21 @@ fixed:
   (screenshots: the cow 8 m out, the blast on it), and the next case is back behind him.
   **23/23 pass.** The knockdown case has no automated test: the test's own step doesn't run
   while he's off foot.
+
+## 2026-10-09 (morning): "I keep sliding down tiny bumps in the road"
+
+- **The cause: the night's edge rule.** In a sim flight it took Skyrim's "standing" as a landing
+  only with ground within 0.5 m under his feet, by a ray from his middle. On a bumpy road that
+  ray often finds nothing (it starts inside a bump, or falls into a crack). Then a walk-off fall
+  went on while he was on the ground, the capsule sliding along the bumps in the fall pose. The
+  owner's log shows it: a dozen "falls" of 0.4-1.6 s that barely changed height. One moved 2 cm
+  in 0.8 s; one ended 11 cm higher than it began. The rule is gone: Skyrim's "standing" is a
+  landing again. The ledge test never needed it.
+- **The ground under him is measured the sandbox's way:** the nearest ground under his footprint
+  (his middle and 0.35 m to each side, `level::ground_distance`), from 0.3 m above his feet so a
+  bump he stands on still counts. Moving on the ground he's held to it within 0.35 m (the
+  sandbox's `STEP_HEIGHT`, was 0.3 m and not scaled).
+- **Brief falls aren't shown:** a sim fall off a bump or a step shorter than 0.15 s shows neither
+  the fall pose nor a landing, and makes no landing sound (Skyrim's own short falls don't either).
+- A new case runs 2 s along the road with no jump and fails on any fall longer than 0.3 s.
+  Built and installed for the owner to try first; not run in game yet.

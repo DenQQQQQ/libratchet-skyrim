@@ -19,6 +19,10 @@ namespace Physics
 	// Metres from his feet down to the ground (looking up to a_max metres below); nullopt if
 	// there's none that close.
 	std::optional<float> GroundDistance(const RE::NiPoint3& a_feet, float a_max);
+	// The same under his footprint, as the sandbox measures it (level::ground_distance): the
+	// nearest ground under his middle or a_radius metres to either side, from a little above his
+	// feet so a bump he stands on still counts (below 0 when one rises above his feet).
+	std::optional<float> GroundUnder(const RE::NiPoint3& a_feet, float a_max, float a_radius);
 
 	struct Wall
 	{

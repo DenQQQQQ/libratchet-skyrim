@@ -57,6 +57,9 @@ namespace AutoTest
 			bool        shatterbomb = false;
 			// In first person (his model isn't drawn there; what he throws still has to be).
 			bool        firstPerson = false;
+			// A run with no jump, this long (s), the stick forward: no fall in it may last longer
+			// than kLongFall (the owner slid down the road's bumps in sim falls of up to 1.6 s).
+			float       runFor = 0.0f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -76,6 +79,8 @@ namespace AutoTest
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
+			// A run along the road (the bridge's cobbles), no jump.
+			{ .name = "run on the road", .hold = -1.0f, .runFor = 2.0f },
 			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
 			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.0f },
 			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
@@ -115,6 +120,7 @@ namespace AutoTest
 		constexpr float kDashTolerance = 0.25f;      // metres
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
+		constexpr float kLongFall = 0.3f;            // seconds: a fall in a run on the road longer than this fails it
 		constexpr float kTimeout = 90.0f;            // seconds in game for the whole run
 
 		struct State
@@ -167,6 +173,10 @@ namespace AutoTest
 			std::optional<RE::NiPoint3> stuckAt;
 			bool                        wallJumped = false;
 			bool                        stuckSeen = false;  // on a wall at all during this case
+			// The run on the road: its falls, the one going on, and the longest.
+			int                         falls = 0;
+			float                       fallFor = 0.0f;
+			float                       longestFall = 0.0f;
 			// What he did on the ledge.
 			std::optional<RE::NiPoint3> jumpFrom;          // where he stands on the platform
 			float                       onLedge = -1.0f;   // seconds hanging so far (< 0: not yet)
@@ -385,6 +395,9 @@ namespace AutoTest
 			s.stuckAt.reset();
 			s.wallJumped = false;
 			s.stuckSeen = false;
+			s.falls = 0;
+			s.fallFor = 0.0f;
+			s.longestFall = 0.0f;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -1015,6 +1028,33 @@ namespace AutoTest
 			Buttons jump;
 			jump.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
 			return jump;
+		}
+		if (c.runFor > 0.0f) {
+			// The run: the stick forward, its falls counted, then the verdict.
+			Input::SetTestStick(RE::NiPoint2{ 0.0f, 1.0f });
+			if (a_state == RATCHET_STATE_FALL) {
+				if (s.fallFor == 0.0f) {
+					++s.falls;
+				}
+				s.fallFor += a_dt;
+				s.longestFall = std::max(s.longestFall, s.fallFor);
+			} else {
+				s.fallFor = 0.0f;
+			}
+			if (t >= c.runFor) {
+				const bool ok = s.longestFall <= kLongFall;
+				if (ok) {
+					++s.passed;
+				} else {
+					++s.failed;
+				}
+				auto* player = RE::PlayerCharacter::GetSingleton();
+				SKSE::log::info("autotest: {} {}: {:.1f} m in {:.1f} s, {} falls, the longest {:.3f} s (at most {:.2f}){}", ok ? "PASS" : "FAIL", c.name,
+					player && s.startPos ? player->GetPosition().GetDistance(*s.startPos) / Units() : 0.0f, c.runFor, s.falls, s.longestFall,
+					kLongFall, ok ? "" : " - off: a long fall on the road");
+				NextCase();
+			}
+			return {};
 		}
 		Buttons b;
 		b.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);

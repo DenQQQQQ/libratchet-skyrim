@@ -18,14 +18,16 @@ namespace Jump
 		// 0.0142875 game units -> Havok units (about 70 units to the metre).
 		float UnitsPerMetre() { return RE::bhkWorld::GetWorldScaleInverse(); }
 
-		// Dashing, ground this close under his feet still holds him (metres): he's pressed down
-		// onto it, but a slope going down falls away a little each frame.
-		constexpr float kDashGroundReach = 0.3f;
-		// In a flight, Skyrim's controller standing him on something is a landing when there's
-		// ground this close under his feet (metres: a capsule on a 50° slope is about 0.2 m above
-		// it), or once it has stood him there this long (seconds: an edge he rests on).
-		constexpr float kLandReach = 0.5f;
-		constexpr float kEdgeLanding = 0.25f;
+		// Moving on the ground, ground this close under his feet still holds him (metres × scale,
+		// the sandbox's STEP_HEIGHT): he's pressed down onto it, but a slope or a bump going down
+		// falls away a little each frame.
+		constexpr float kDashGroundReach = 0.35f;
+		// His footprint's half width, where the ground under him is looked for (metres × scale,
+		// the sandbox's BODY_HALF_WIDTH).
+		constexpr float kFootprint = 0.35f;
+		// A fall off a bump or a step shorter than this (seconds) lands without a sound: it shows
+		// no landing either (Model's kBriefFall).
+		constexpr float kBriefFall = 0.15f;
 
 		// The sandbox's body at scale 1 (apps/sandbox/src/main.rs BODY_HEIGHT, BODY_HALF_WIDTH,
 		// WALL_PROBE_REACH): the wall probe looks from his middle, 1 m out, with side probes
@@ -75,7 +77,7 @@ namespace Jump
 			Measure           m;
 			std::vector<Ratchet::Tick> ticks;         // this jump's (or dash's) frames, for the sandbox replay
 			RatchetVec3       startVelocity{};        // his velocity as it started (sim axes)
-			float             edgeTime = 0.0f;        // in a flight, Skyrim's controller has stood him on an edge this long
+			float             airborne = 0.0f;        // seconds the sim has had him off the ground
 		};
 		Host g;
 
@@ -276,7 +278,7 @@ namespace Jump
 		}
 
 		// Rift Apart's sounds for this step's moves (the game's own events for them).
-		void MoveSounds(RE::PlayerCharacter* a_player, const RatchetStepResult& a_r, std::uint32_t a_before)
+		void MoveSounds(RE::PlayerCharacter* a_player, const RatchetStepResult& a_r, std::uint32_t a_before, float a_airborne)
 		{
 			const RE::NiPoint3 at = a_player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * UnitsPerMetre() };
 			const auto e = a_r.events;
@@ -289,7 +291,7 @@ namespace Jump
 			if (e & RATCHET_EVENT_DOUBLE_JUMPED) {
 				Sounds::Play("double_jump", at);
 			}
-			if (e & RATCHET_EVENT_LANDED) {
+			if (e & RATCHET_EVENT_LANDED && !(a_before == RATCHET_STATE_FALL && a_airborne <= kBriefFall)) {
 				Sounds::Play("land", at);
 				Sounds::Play("footstep_land", at);
 				Sounds::Play("voice_land", at);
@@ -481,27 +483,17 @@ namespace Jump
 
 			const float z = a_player->GetPositionZ();
 			const RE::NiPoint3 feet = a_player->GetPosition();
-			// How far down the ground is: the sim's jumps, double jump, glide and falls ask.
-			const auto ground = Physics::GroundDistance(feet, 20.0f);
+			// How far down the ground is, under his footprint as the sandbox measures it: the sim's
+			// jumps, double jump, glide and falls ask. (A single ray from his middle missed bumps
+			// he stood on, or fell into the cracks between them.)
+			const float s = Settings::Get().scale;
+			const auto  ground = Physics::GroundUnder(feet, 20.0f, kFootprint * s);
 			// Skyrim's controller says whether he stands. In a ground move it's kept in its air
 			// state, and then the ground right under his feet is what holds him up.
-			bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach);
-			// In a flight, its capsule (the Dragonborn's, half again his height) also "stands" on
-			// an edge it meets at his chest, with nothing under his feet: a ledge he'd catch. Such
-			// a stand isn't a landing, unless it lasts (an edge he really rests on).
-			if (g.ours && !g.groundMove && Grounded(ctrl) && !(ground && *ground < kLandReach)) {
-				g.edgeTime += a_dt;
-				if (g.edgeTime < kEdgeLanding) {
-					grounded = false;
-					ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
-					// Skyrim may take each frame's touch-down as a landing: the fall it measures
-					// starts here, so it's counted once (on the first one), not every frame.
-					ctrl->fallStartHeight = z;
-					ctrl->fallTime = 0.0f;
-				}
-			} else {
-				g.edgeTime = 0.0f;
-			}
+			// (Not second-guessed by the ray: on a bumpy road it often finds nothing under his feet,
+			// and a flight that ignored Skyrim's "standing" there slid him along the bumps, seconds
+			// at a time. Skyrim's capsule standing on an edge at his chest is a landing too.)
+			const bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach * s);
 			// The buttons as they are: the sim makes the jump, double jump, glide and dashes of them.
 			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours, g.last.state);
 			RatchetInput in{};
@@ -538,7 +530,6 @@ namespace Jump
 			// jumps, so every wall is a plain one (one wall jump per jump) and there are no
 			// wall-jump zones.
 			if (!grounded || (g.ours && !g.groundMove)) {
-				const float s = Settings::Get().scale;
 				std::optional<RE::NiPoint2> prefer;
 				if (g.last.state == RATCHET_STATE_WALL_STICK) {
 					prefer = RE::NiPoint2{ g.last.wall_normal_x, -g.last.wall_normal_z };
@@ -579,6 +570,8 @@ namespace Jump
 			g_rayOrigin = ToSim(feet);
 			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(feet));
 			g_traceRays = false;
+			const float airborne = g.airborne;
+			g.airborne = r.state != RATCHET_STATE_GROUND ? g.airborne + a_dt : 0.0f;
 			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0, in.melee != 0 };
 
 			// A flight ended (a new jump can start in the same step); the slam lands into its
@@ -642,7 +635,7 @@ namespace Jump
 				RatchetVec3 v = r.velocity;
 				// Down a slope or a step the ground falls away under him: he follows it while it's
 				// in reach (Skyrim's ground state would snap him down too).
-				if (ground && *ground > 0.02f && *ground < kDashGroundReach) {
+				if (ground && *ground > 0.02f && *ground < kDashGroundReach * s) {
 					v.y = std::min(v.y, -*ground / a_dt);
 				}
 				SetVelocity(ctrl, v);
@@ -719,7 +712,7 @@ namespace Jump
 			if (r.events & RATCHET_EVENT_MELEE_SWING) {
 				AutoTest::OnMove(std::format("swing{}", r.melee_swing + 1));
 			}
-			MoveSounds(a_player, r, g.last.state);
+			MoveSounds(a_player, r, g.last.state, airborne);
 			// The wrench's hits, the slam, the gun.
 			Combat::Step(a_player, g.sim, r, a_dt);
 			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {

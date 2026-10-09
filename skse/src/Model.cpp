@@ -17,6 +17,7 @@ namespace Model
 		constexpr float kRunToWalk = 2.4f;
 		constexpr float kWalkToRun = 3.0f;
 		constexpr float kTurnRate = 12.0f;  // rad/s he turns to face where he's going (ours)
+		constexpr float kBriefFall = 0.15f;  // seconds: a fall this short isn't shown (Skyrim's own grace)
 
 		struct Playing
 		{
@@ -603,14 +604,19 @@ namespace Model
 			const bool air = a_drive.simJump ? a_drive.simState != RATCHET_STATE_GROUND : !a_drive.grounded;
 			s.airTime = air ? s.airTime + a_dt : 0.0f;
 			const bool landed = !air && s.wasAir;
-			s.wasAir = air && (a_drive.simJump || s.airTime > 0.15f);
+			// A fall shorter than kBriefFall (the sim's, off a bump or a step) shows neither the
+			// fall nor a landing, as Skyrim's own short falls don't.
+			const bool fall = a_drive.simJump && a_drive.simState == RATCHET_STATE_FALL;
+			s.wasAir = air && ((a_drive.simJump && !fall) || s.airTime > kBriefFall);
 			if (landed) {
 				s.landTimer = a_speed > kMoving ? 0.35f : 0.3f;
 			}
 			s.landTimer = std::max(0.0f, s.landTimer - a_dt);
 
 			std::string_view want;
-			if (a_drive.simJump && a_drive.simState != RATCHET_STATE_GROUND) {
+			if (fall && s.airTime <= kBriefFall && s.cur.clip) {
+				want = s.cur.clip->name;  // what he was doing goes on for now
+			} else if (a_drive.simJump && a_drive.simState != RATCHET_STATE_GROUND) {
 				switch (a_drive.simState) {
 				case RATCHET_STATE_JUMP:
 					want = a_vy < -5.0f ? "fall" : "jump";
@@ -659,7 +665,7 @@ namespace Model
 					want = "fall";
 					break;
 				}
-			} else if (air && s.airTime > 0.15f) {
+			} else if (air && s.airTime > kBriefFall) {
 				// Skyrim's own fall (off a ledge).
 				want = "fall";
 			} else if (a_drive.strafing) {
