@@ -42,7 +42,7 @@ repository is unchanged.
 | dash, air dash | Left Alt | LB | Sprint (`sDashControl`) |
 | wrench (press again for the combo; in the air: Hyper-Strike) | R | X | Ready Weapon (`sMeleeControl`) |
 | fire the Burst Pistol (hold), or wind up a Shatterbomb (hold, let go to throw) | left mouse | RT | Right Attack/Block (`sFireControl`) |
-| pick the Burst Pistol / the Shatterbomb | 1 / 2 | | Hotkey1 / Hotkey2 (`sPistolControl`, `sShatterbombControl`) |
+| pick the Burst Pistol / the Shatterbomb | 1 / 2 | D-pad left / right | Hotkey1 / Hotkey2 (`sPistolControl`, `sShatterbombControl`) |
 | aim | right mouse | LT | Left Attack/Block (`sAimControl`) |
 | throw the wrench | Z | RB | Shout (`sThrowControl`) |
 | let go of a ledge | Ctrl | left stick | Sneak |

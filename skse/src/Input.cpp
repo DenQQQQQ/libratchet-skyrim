@@ -53,9 +53,18 @@ namespace Input
 
 	void LogBindings()
 	{
+		const auto& s = Settings::Get();
 		LogBinding("Jump", "jump");
-		if (!Settings::Get().dashControl.empty()) {
-			LogBinding(Settings::Get().dashControl, "dash");
+		if (!s.dashControl.empty()) {
+			LogBinding(s.dashControl, "dash");
+		}
+		if (s.combat) {
+			LogBinding(s.fireControl, "fire");
+			LogBinding(s.aimControl, "aim");
+			LogBinding(s.meleeControl, "wrench");
+			LogBinding(s.throwControl, "wrench throw");
+			LogBinding(s.pistolControl, "Burst Pistol");
+			LogBinding(s.shatterbombControl, "Shatterbomb");
 		}
 	}
 
