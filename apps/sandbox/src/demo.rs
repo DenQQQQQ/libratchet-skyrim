@@ -708,9 +708,6 @@ fn grenade_switch() -> Vec<Act> {
     ]
 }
 
-/// Jumping while aiming: the game's strafe jumps by direction (side flips to his right and left, a
-/// back flip, ahead) and standing, a sideways double jump; then a glide off the tower under the
-/// heli-pack (its intro, the swaying loop, leaning into a turn).
 /// Bolts: the Burst Pistol knocks the lone dummy down and its bolts burst out and come to Ratchet
 /// standing by; then a Shatterbomb into the ring of dummies drops more, which lie there until he
 /// walks over. The counter (top right) adds them up.
@@ -787,6 +784,9 @@ fn bolts() -> Vec<Act> {
     ]
 }
 
+/// Jumping while aiming: the game's strafe jumps by direction (side flips to his right and left, a
+/// back flip, ahead) and standing, a sideways double jump; then a glide off the tower under the
+/// heli-pack (its intro, the swaying loop, leaning into a turn).
 fn strafe_jumps() -> Vec<Act> {
     use crate::weapons::Slot;
     let x = Vec2::X;

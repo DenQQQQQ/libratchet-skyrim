@@ -96,11 +96,13 @@ pub struct Pickup {
     bob: f32,
     bob_period: f32,
     lift: f32,
-    /// The pull's speed, the bolt's own swarm direction, and where the hero's centre was last
-    /// tick (each bolt keeps its own, from when its pull starts: ours).
+    /// The pull's speed, the bolt's own swarm direction, where the hero's centre was last tick
+    /// (each bolt keeps its own from when its pull starts), and the way it last moved
+    /// (RiftApart.exe).
     pull_speed: f32,
     swarm: Vec3,
     target: Vec3,
+    heading: Vec3,
 }
 
 /// How far up the bob is (0..1 of its height) `phase` periods in: the game's 16 steps of
@@ -241,6 +243,7 @@ impl BoltWorld {
             pull_speed: 0.0,
             swarm: Vec3::ZERO,
             target: Vec3::ZERO,
+            heading: Vec3::ZERO,
         }
     }
 
@@ -320,20 +323,29 @@ impl BoltWorld {
         b.pull_speed = speed;
         b.swarm = swarm;
         b.target = target;
+        b.heading = Vec3::ZERO;
         b.state = State::Pulled;
     }
 }
 
 /// One tick of a burst bolt's flight: exact under its gravity, the segment swept against the
 /// level. The game sweeps a 0.07 m sphere ahead of it; a ray along each tick's move is close
-/// enough at sandbox tick rates (ours). Returns how it was collected, if it fell out.
+/// enough at sandbox tick rates (ours). The game counts a hit only above 0.5 m/s into the
+/// surface and flies on through slower ones; with a ray that lets a bolt drifting into a wall
+/// pass into it, so a surface it moves into is never crossed (ours): a slow hit on a wall
+/// slides it along, one on a floor lands it. Returns how it was collected, if it fell out.
 fn fly(p: &mut Pickup, dt: f32, params: &BoltParams, level: &impl Collision) -> Option<Cause> {
     let g = Vec3::NEG_Y * p.gravity;
     let next = p.position + p.velocity * dt + 0.5 * g * dt * dt;
     let velocity = p.velocity + g * dt;
     match level.raycast(p.position, next) {
-        Some(hit) if hit.normal.dot(velocity) < -params.hit_speed => {
-            if hit.normal.y < params.floor_normal_y && p.bounces < params.max_bounces {
+        Some(hit) if hit.normal.dot(velocity) < 0.0 => {
+            let wall = hit.normal.y < params.floor_normal_y;
+            let counts = hit.normal.dot(velocity) < -params.hit_speed;
+            if wall && !counts {
+                p.velocity = velocity - velocity.dot(hit.normal) * hit.normal;
+                p.position = hit.point + hit.normal * params.radius;
+            } else if wall && p.bounces < params.max_bounces {
                 p.velocity = (velocity - 2.0 * velocity.dot(hit.normal) * hit.normal) * params.bounce_keep;
                 p.position = hit.point + hit.normal * params.radius;
                 p.bounces += 1;
@@ -353,19 +365,18 @@ fn fly(p: &mut Pickup, dt: f32, params: &BoltParams, level: &impl Collision) -> 
 }
 
 /// One tick of the swarm (RiftApart.exe): the step is the bolt's speed plus how far the hero
-/// moved along the way to him, toward a point off him along the bolt's own direction by 0.85 of
-/// the distance less the step, at most 7.5 m, so the bolts close in from all round. Returns
-/// `Reached` once it's within 0.5 m of his centre.
+/// moved along the way it last went, toward a point off him along the bolt's own direction by
+/// 0.85 of the distance less the step, at most 7.5 m, so the bolts close in from all round;
+/// never past that point or him. Returns `Reached` once it's within 0.5 m of his centre.
 fn swarm(p: &mut Pickup, dt: f32, params: &BoltParams, target: Vec3) -> Option<Cause> {
-    let to = target - p.position;
-    let dist = to.length();
-    let dir = to.normalize_or_zero();
-    let step = dir.dot(target - p.target).abs() + p.pull_speed * dt;
+    let dist = p.position.distance(target);
+    let step = p.heading.dot(target - p.target).abs() + p.pull_speed * dt;
     p.target = target;
     let off = (params.swarm_share * dist - step).clamp(0.0, params.swarm_max);
     let aim = target + p.swarm * off;
     let way = aim - p.position;
-    p.position += way.normalize_or_zero() * step.min(way.length());
+    p.heading = way.normalize_or_zero();
+    p.position += p.heading * step.min(way.length()).min(dist);
     (p.position.distance(target) < params.collect_radius).then_some(Cause::Reached)
 }
 

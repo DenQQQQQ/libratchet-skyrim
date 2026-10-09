@@ -189,19 +189,38 @@ fn walls_bounce_bolts_back_at_half_speed() {
                 let hit = v - Vec3::Y * g * DT;
                 assert!((b.velocity().length() - 0.5 * hit.length()).abs() < 1e-3, "{} after {}", b.velocity().length(), hit.length());
             }
-            // A wall lets a bolt through only when it moves into it slower than 0.5 m/s (the hit
-            // doesn't count, as in the game).
+            // No wall lets a bolt through, however slowly it moves into it.
             for axis in [0, 2] {
-                if p[axis].abs() < 0.6 && b.position()[axis].abs() >= 0.6 {
-                    assert!(v[axis].abs() <= 0.5, "through a wall at {} m/s", v[axis].abs());
-                }
+                assert!(b.position()[axis].abs() < 0.6, "through a wall from {} at {} m/s", p[axis], v[axis]);
             }
         }
     }
     assert!(bounced > 20, "only {bounced} bounces");
     assert!(all_resting(&w));
     let inside = w.pickups().iter().filter(|b| b.position().x.abs() < 0.6 && b.position().z.abs() < 0.6).count();
-    assert!(inside > 30, "{inside} of 40 stayed in the pen");
+    assert_eq!(inside, 40, "{inside} of 40 stayed in the pen");
+}
+
+/// Dropped right against a wall, steep bursts drift into it slowly; none ends up inside it.
+#[test]
+fn bolts_dropped_against_a_wall_stay_out_of_it() {
+    // Solid from x = 0.1 on.
+    let level = |from: Vec3, to: Vec3| {
+        let wall = (from.x < 0.1 && to.x >= 0.1).then(|| Hit { point: from.lerp(to, (0.1 - from.x) / (to.x - from.x)), normal: Vec3::NEG_X });
+        match (wall, floor(from, to)) {
+            (Some(w), Some(f)) => Some(if from.distance(w.point) < from.distance(f.point) { w } else { f }),
+            (w, f) => w.or(f),
+        }
+    };
+    for seed in 0..50 {
+        let mut w = BoltWorld::new(BoltParams::default(), seed);
+        w.drop_reward(Vec3::new(0.0, 1.0, 0.0), 2.0, DEFAULT_LEVEL_MULTIPLIER);
+        let (rested, _) = run(&mut w, 4.0, far(), &level, all_resting);
+        assert!(rested.is_some(), "seed {seed}: still flying");
+        for b in w.pickups() {
+            assert!(b.position().x < 0.1, "seed {seed}: a bolt at x {} is in the wall", b.position().x);
+        }
+    }
 }
 
 #[test]

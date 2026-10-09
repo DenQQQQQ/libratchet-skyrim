@@ -192,7 +192,7 @@ fn draw(
     mut bolts: ResMut<Bolts>,
     cams: Query<&GlobalTransform, With<Camera3d>>,
     mut drawn: Query<(&mut Transform, &mut Drawn)>,
-    mut glints: Query<&mut Transform, Without<Drawn>>,
+    mut glints: Query<(&mut Transform, &mut Visibility), Without<Drawn>>,
 ) {
     let b = &mut *bolts;
     let (dt, s) = (time.delta_secs(), b.scale);
@@ -200,7 +200,7 @@ fn draw(
     for p in b.world.pickups() {
         let tf = Transform { translation: p.position(), rotation: p.rotation(), scale: Vec3::splat(s) };
         let Some(&e) = b.drawn.get(&p.id()) else {
-            let glint = b.glint.as_ref().map(|(mesh, mat)| commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_scale(Vec3::ZERO), NotShadowCaster)).id());
+            let glint = b.glint.as_ref().map(|(mesh, mat)| commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::default(), Visibility::Hidden, NotShadowCaster)).id());
             let mut e = commands.spawn((tf, Visibility::default(), Drawn { glint, twinkle: b.rng.range(0.0, GLINT_EVERY.1) }));
             let (tier, look) = (p.kind().tier as usize, p.kind().variant as usize);
             match &b.models {
@@ -223,9 +223,11 @@ fn draw(
         if d.twinkle < -GLINT_LIFE {
             d.twinkle = b.rng.range(GLINT_EVERY.0, GLINT_EVERY.1);
         }
-        if let Some(Ok(mut g)) = d.glint.map(|g| glints.get_mut(g)) {
-            // Facing the camera, a little toward it, from inside the bolt's own turn and scale.
+        if let Some(Ok((mut g, mut shown))) = d.glint.map(|g| glints.get_mut(g)) {
+            // Facing the camera, a little toward it, from inside the bolt's own turn and scale;
+            // hidden between twinkles.
             let size = if d.twinkle < 0.0 { glint_size(-d.twinkle / GLINT_LIFE) } else { 0.0 };
+            shown.set_if_neq(if size > 0.0 { Visibility::Inherited } else { Visibility::Hidden });
             let back = tf.rotation.inverse();
             *g = Transform::from_translation(back * (cam.0 - tf.translation).normalize_or_zero() * GLINT_OUT).with_rotation(back * cam.1).with_scale(Vec3::splat(size * GLINT_SIZE));
         }

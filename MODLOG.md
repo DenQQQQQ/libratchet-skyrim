@@ -131,16 +131,23 @@ agent; the corrections won).
 ### Derived or assumed
 - **A ray instead of the sweep:** each tick's move is one segment query; the game sweeps a
   0.07 m sphere 0.16 s ahead. A bounce leaves the bolt 0.07 m off the wall, as the sphere would.
+- **Never into a surface** (ours, from the review): the game counts a hit only above 0.5 m/s
+  into it and flies on through slower ones; with a ray, steep bursts beside a wall drifted into
+  it (in a probe, 456 of 10,000 pickups dropped 0.1 m from a wall came to rest inside it). A
+  slow hit on a wall now slides the bolt along it, one on a floor lands it; tested over 50 drops
+  against a wall.
 - **The in-flight cap counts bursting bolts only**, not ones swarming to the hero.
-- **The swarm's "hero moved" term** is measured per bolt from when its pull starts (otherwise a
-  teleport would fling the bolts straight to him).
+- **The swarm** follows the game's code as the review read it: the "hero moved" term is
+  measured per bolt from when its pull starts, along the way the bolt last moved, and a step
+  never goes past its aim point or the hero.
 - **The bob** is read linearly between the table's steps, from the bottom when the bolt lands.
 - **The spin:** π read as radians per second; each of the axis's two tilts its own draw in -1..1;
   only at rest (whether it spins in flight isn't read).
 - **The glint's timing, size and brightness** (a 0.35 s twinkle every 0.8-2.5 s, 0.3 m, white
   x3) are ours; its scale over life follows our reading of the game's curve keys.
 - **The counter** jumps to the new total (the game's count-up animation, in its UI script, isn't
-  read).
+  read). It shows 3.5 s from the last change, so a gain's new total shows for the last 1.5 s;
+  whether the game restarts that when the total takes the gain in isn't read.
 - **Left out:** the approach loop (bronze only, starting at 15 m, past the 10 m pickup range,
   so it isn't the swarm's sound and what sets it off is unclear); zero gravity; moving platforms;
   hazard surfaces that send a bolt straight to the hero; AutoCollect and NoSpawn rewards;

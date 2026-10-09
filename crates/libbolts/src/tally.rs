@@ -9,8 +9,9 @@ const SHOW: f32 = 3.5;
 
 /// The hero's bolts and what the counter shows of them: gains add up in a "+N" beside the old
 /// total, which takes them in 2 s after the last; a loss, or a change from or to 0, shows at
-/// once. The counter is up for 3.5 s after any change. (The game's count-up animation, in its UI
-/// script, isn't read: the total jumps.)
+/// once. The counter is up for 3.5 s after any change, so a gain's new total shows for the last
+/// 1.5 s of it (Assumption: whether the game restarts that when the total takes the gain in
+/// isn't read). (The game's count-up animation, in its UI script, isn't read: the total jumps.)
 #[derive(Clone, Debug)]
 pub struct Tally {
     total: u32,

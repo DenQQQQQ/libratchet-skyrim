@@ -69,11 +69,10 @@ That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatter
 `shatterbomb_glove.glb`, `testdummy.glb` (the game's test-dummy robot, which the combat dummies
 wear) and the bolts: `bolt_<bronze|silver|golden|platinum>_0<1-3>.glb`, the twelve pickups the
 game drops (`--character bolts` makes just those). The sandbox picks them up automatically:
-Ratchet plays Rift Apart's own idle, run, jump,
-double jump, fall, glide (the heli-pack's intro, swaying loop and lean), land, dash (in eight
-directions), air-dash, strafe-jump, wall, ledge, Swingshot, wrench and gun clips, per weapon
-grip. Clank rides on his
-back (backpack idle, heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
+Ratchet plays Rift Apart's own idle, run, jump, double jump, fall, glide (the heli-pack's intro,
+swaying loop and lean), land, dash (in eight directions), air-dash, strafe-jump, wall, ledge,
+Swingshot, wrench and gun clips, per weapon grip. Clank rides on his back (backpack idle,
+heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
 hand, and the Shatterbomb's glove on it. Dropped bolts wear their tier's models. Without them,
 you get a capsule with Lombax ears (and rings for bolts). Never share the `.glb` files: they're
 game data.
