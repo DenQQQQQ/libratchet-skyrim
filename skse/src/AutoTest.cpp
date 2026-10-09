@@ -3,6 +3,7 @@
 
 #include "Clank.h"
 #include "Combat.h"
+#include "Fx.h"
 #include "Input.h"
 #include "Model.h"
 #include "Settings.h"
@@ -69,6 +70,10 @@ namespace AutoTest
 			// that has to play in it (the sandbox's choice, from libratchet-anim).
 			bool        aimHeld = false;
 			const char* wantClip = nullptr;
+			// The effects across a cell change: shots at the floor, then this console command (a coc
+			// through a load door; "load": the most recent save), then shots again. The new shots'
+			// effects have to be alive under the new cell's 3D.
+			const char* door = nullptr;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -125,6 +130,11 @@ namespace AutoTest
 			// metre short of the wall, inside the catch's reach (1.2 m) and outside the wall
 			// stick's (0.775 m).
 			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f },
+			// The effects hang under the player's cell's 3D, which goes at a load door or a load:
+			// through the Bannered Mare's door, then a load of the most recent save. Last, as they
+			// leave him away from the start.
+			{ .name = "effects through a load door", .hold = -1.0f, .door = "coc WhiterunBanneredMare" },
+			{ .name = "effects after loading a save", .hold = -1.0f, .door = "load" },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -206,6 +216,19 @@ namespace AutoTest
 			float                       climbPress = 0.0f; // seconds the climb's jump has been held
 			std::optional<RE::NiPoint3> hungAt;
 			bool                        climbed = false;
+			// A door case: its step (0 shots, 1 through, 2 shots there), the time in it, how long he's
+			// stood in the new cell, where he was, the games loaded, and what the effects did there.
+			int                 doorStep = 0;
+			float               doorTime = 0.0f;
+			float               doorSettle = 0.0f;
+			RE::TESObjectCELL*  doorFrom = nullptr;
+			int                 loads = 0;
+			int                 loadsBefore = 0;
+			std::size_t         fxLeft = 0;  // effects from the old place still alive in the new one
+			std::size_t         fxPeak = 0;
+			bool                fxUnder = false;
+			bool                ratchetThere = false;  // his model posed on the player there
+			bool                clankThere = false;    // and Clank playing on his back
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -251,8 +274,8 @@ namespace AutoTest
 		// applies fall damage after the landing frame).
 		void CheckHealthAfter(int a_case)
 		{
-			if (kCases[a_case].awake) {
-				return;  // its target fought back
+			if (kCases[a_case].awake || kCases[a_case].door) {
+				return;  // its target fought back, or a load set his health
 			}
 			const float now = Health();
 			if (now < s.healthBefore - 0.01f) {
@@ -450,6 +473,15 @@ namespace AutoTest
 			s.falls = 0;
 			s.fallFor = 0.0f;
 			s.longestFall = 0.0f;
+			s.doorStep = 0;
+			s.doorTime = 0.0f;
+			s.doorSettle = 0.0f;
+			s.doorFrom = nullptr;
+			s.fxLeft = 0;
+			s.fxPeak = 0;
+			s.fxUnder = false;
+			s.ratchetThere = false;
+			s.clankThere = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -819,6 +851,86 @@ namespace AutoTest
 			delete script;
 		}
 
+		// A door case: shots from the hip at the floor 3 m ahead for 0.4 s; then its door (a coc,
+		// or a load of the most recent save); once he's stood a second in the new cell, the shots
+		// again. Their pieces have to be alive there, under that cell's 3D (the old cell's is gone:
+		// a node left hanging on it would draw nothing, or crash the game).
+		void Door(const Case& a_case, float a_dt, bool a_grounded, bool a_busy)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) {
+				return;
+			}
+			if (s.doorStep != 1) {
+				const float h = player->GetAngleZ();
+				Combat::SetTestAim(player->GetPosition() + RE::NiPoint3{ std::sin(h), std::cos(h), 0.0f } * (3.0f * Units()));
+				Combat::SetTestButtons(Combat::TestButtons{ .fire = s.doorTime < 0.4f });
+			}
+			if (s.doorStep == 0 && s.doorTime == 0.0f) {
+				Combat::Select(Combat::Gun::kBurstPistol);
+			}
+			s.doorTime += a_dt;
+			const auto where = [](RE::TESObjectCELL* a_cell) { return a_cell ? std::string(a_cell->GetFormEditorID()) : std::string("?"); };
+			switch (s.doorStep) {
+			case 0:
+				if (s.doorTime >= 0.6f) {
+					s.doorFrom = player->GetParentCell();
+					s.loadsBefore = s.loads;
+					SKSE::log::info("autotest: {}: {} effects alive in {}, under its 3D: {}; now '{}'", a_case.name, Fx::Live(), where(s.doorFrom),
+						Fx::UnderPlayersCell(), a_case.door);
+					Combat::SetTestButtons(std::nullopt);
+					const std::string door = a_case.door;
+					SKSE::GetTaskInterface()->AddTask([door] {
+						if (door == "load") {
+							auto* saves = RE::BGSSaveLoadManager::GetSingleton();
+							saves->PopulateSaveList();
+							saves->LoadMostRecentSaveGame();
+						} else {
+							RunConsole(door);
+						}
+					});
+					s.doorStep = 1;
+					s.doorTime = 0.0f;
+				}
+				return;
+			case 1:
+				{
+					// Through: a new cell (a load: the game loaded again) with its 3D, him on his feet.
+					auto*      cell = player->GetParentCell();
+					auto*      loaded = cell ? cell->GetRuntimeData().loadedData : nullptr;
+					const bool through = std::string_view(a_case.door) == "load" ? s.loads > s.loadsBefore : cell != s.doorFrom;
+					s.doorSettle = through && loaded && loaded->cell3D && a_grounded && !a_busy ? s.doorSettle + a_dt : 0.0f;
+					if (s.doorSettle >= 1.0f) {
+						ThirdPerson();  // (a coc or a load can leave the camera in first person)
+						s.fxLeft = Fx::Live();
+						SKSE::log::info("autotest: {}: in {} now, {} effects alive", a_case.name, where(cell), s.fxLeft);
+						s.doorStep = 2;
+						s.doorTime = 0.0f;
+					} else if (s.doorTime > 40.0f) {
+						Fail(std::format("never got through (in {} after 40 s)", where(cell)));
+						NextCase();
+					}
+					return;
+				}
+			default:
+				s.fxPeak = std::max(s.fxPeak, Fx::Live());
+				s.fxUnder = s.fxUnder || (Fx::Live() > 0 && Fx::UnderPlayersCell());
+				if (const auto hand = Model::GunHand(); hand && hand->GetDistance(player->GetPosition()) < 2.5f * Units()) {
+					s.ratchetThere = true;
+				}
+				s.clankThere = s.clankThere || !Clank::Enabled() || !Clank::CurrentClip().empty();
+				if (s.doorTime >= 0.8f) {
+					const bool ok = s.fxPeak > 0 && s.fxUnder && s.fxLeft == 0 && s.ratchetThere && s.clankThere;
+					++(ok ? s.passed : s.failed);
+					SKSE::log::info("autotest: {} {}: in {}, {} effects left from the old place, up to {} alive from the shots there, {}; Ratchet {}, Clank {}",
+						ok ? "PASS" : "FAIL", a_case.name, where(player->GetParentCell()), s.fxLeft, s.fxPeak, s.fxUnder ? "under its 3D" : "never under its 3D",
+						s.ratchetThere ? "posed on him" : "NOT posed on him", s.clankThere ? "playing" : "NOT playing");
+					NextCase();
+				}
+				return;
+			}
+		}
+
 		void SetPref(const char* a_name, bool a_bool, float a_float, bool a_isFloat)
 		{
 			RE::Setting* setting = nullptr;
@@ -940,6 +1052,7 @@ namespace AutoTest
 
 	void OnGameLoaded()
 	{
+		++s.loads;
 		if (!s.active || s.then.empty()) {
 			return;
 		}
@@ -1014,7 +1127,8 @@ namespace AutoTest
 
 		if (s.pressed < 0.0f) {
 			auto* player = RE::PlayerCharacter::GetSingleton();
-			if (s.returnPending && s.startPos && player && a_grounded && !a_busy) {
+			// (Not for a door case: he may be in another cell by then.)
+			if (s.returnPending && s.startPos && player && a_grounded && !a_busy && !c.door) {
 				s.returnPending = false;
 				player->SetPosition(*s.startPos, true);
 				player->SetHeading(s.startHeading);
@@ -1152,6 +1266,10 @@ namespace AutoTest
 		// Once the heli-pack is all the way out (the glide's own clip), a picture of it.
 		if (Clank::CurrentClip() == "glide" && std::ranges::find(s.shotsThisCase, "heli") == s.shotsThisCase.end()) {
 			OnMove("heli");
+		}
+		if (c.door) {
+			Door(c, a_dt, a_grounded, a_busy);
+			return {};
 		}
 		if (c.duration > 0.0f) {
 			// A fight: the wrench presses and the trigger on their times, then the verdict.

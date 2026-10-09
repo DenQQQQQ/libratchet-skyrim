@@ -678,22 +678,24 @@ namespace Combat
 		}
 
 		// A load door, fast travel or a coc carried him off (another world, or 30 m in one step):
-		// what's in the air stays behind, its coordinates the old place's. The wrench is back in
-		// his hand.
+		// what's in the air stays behind, its coordinates the old place's, and the effects with it.
+		// The wrench is back in his hand.
 		void DropIfCarriedOff(RE::PlayerCharacter* a_player)
 		{
 			const RE::NiPoint3 at = a_player->GetPosition();
 			const void*        world = a_player->GetWorldspace() ? static_cast<const void*>(a_player->GetWorldspace()) :
 			                                                        static_cast<const void*>(a_player->GetParentCell());
 			if ((c.lastAt && c.lastAt->GetDistance(at) > 30.0f * Units()) || (c.lastWorld && world != c.lastWorld)) {
-				if (!c.bombs.empty() || c.thrown) {
-					SKSE::log::info("combat: he was carried off: {} Shatterbombs in the air dropped{}", c.bombs.size(),
-						c.thrown ? ", the wrench back in his hand" : "");
+				if (!c.bombs.empty() || c.thrown || !c.bolts.empty() || Fx::Live() > 0) {
+					SKSE::log::info("combat: he was carried off: {} Shatterbombs and {} bolts in the air, {} effects dropped{}", c.bombs.size(),
+						c.bolts.size(), Fx::Live(), c.thrown ? ", the wrench back in his hand" : "");
 				}
 				for (const auto& b : c.bombs) {
 					Sounds::StopOwned(b.sounds);
 				}
 				c.bombs.clear();
+				c.bolts.clear();
+				Fx::Clear();
 				if (c.thrown) {
 					ratchet_wrench_free(c.thrown);
 					c.thrown = nullptr;

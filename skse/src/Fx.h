@@ -13,6 +13,9 @@ namespace Fx
 	void Update(float a_dt);
 	// All of them gone (a load, a new world).
 	void Clear();
+	// For the tests: the pieces and bolts alive, and whether they hang under the player's cell's 3D.
+	std::size_t Live();
+	bool        UnderPlayersCell();
 
 	// The Burst Pistol's flash at its muzzle, shooting along a_dir (unit).
 	void MuzzleFlash(const RE::NiPoint3& a_at, const RE::NiPoint3& a_dir);

@@ -764,3 +764,21 @@ Read against weapons.rs, wrench.rs, combat.rs and libarsenal, rule by rule:
   to a frame a shot (6 a second from the hip came out 5.5 at 50 fps).
 - **Tests: 30/30** (new: melee while aiming throws the wrench into the cow 8 m out).
 
+### Load doors and loads, with the effects
+
+The effects hang under the player's cell's 3D, and no test had yet left a cell with any alive:
+the node kept a bare pointer to a cell's 3D the game unloads at a load door or a load. Two new
+cases (last in the suite: they leave him away from the start) shoot at the floor, go through the
+Bannered Mare's door (`coc`) or load the most recent save, and shoot again. They passed even before
+the fix (no crash), but by luck or by design was unknown. Now:
+
+- The node holds a reference to the cell 3D it hangs under, so that 3D can't be freed while it's
+  in use. It lets go as soon as the player is in another cell (and hangs again under the new one
+  when there's something to draw). A load lets go before the old world goes.
+- Carried off to another place (a load door, fast travel, a coc: another world, or 30 m in one
+  step), the bolts in the air and the effects left behind go too, as the Shatterbombs and the
+  thrown wrench already did. Before, the 5 longest-lived pieces from Whiterun went on drawing in
+  the Bannered Mare at Whiterun's coordinates.
+- The cases check the new shots' effects are alive under the new cell's 3D, none from the old
+  place remain, and Ratchet is posed and Clank playing there. **Tests: 32/32.**
+

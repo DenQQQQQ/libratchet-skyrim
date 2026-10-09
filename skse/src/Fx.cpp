@@ -241,16 +241,38 @@ namespace Fx
 		};
 		std::unordered_map<std::string, Template> g_templates;
 		RE::NiPointer<RE::NiNode>                 g_root;
+		// The cell 3D the root hangs under, held while it does: the game unloads cells (a load
+		// door, a load, the exterior grid moving on), and the root is never left on a node that's
+		// gone.
+		RE::NiPointer<RE::NiNode>                 g_holder;
 		int                                       g_available = -1;  // not looked yet
+
+		RE::TESObjectCELL* PlayersCell()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			return player ? player->GetParentCell() : nullptr;
+		}
+
+		RE::NiNode* Cell3D(RE::TESObjectCELL* a_cell)
+		{
+			auto* loaded = a_cell ? a_cell->GetRuntimeData().loadedData : nullptr;
+			return loaded ? loaded->cell3D.get() : nullptr;
+		}
+
+		void Unhang()
+		{
+			if (g_root && g_holder && g_root->parent == g_holder.get()) {
+				g_holder->DetachChild(g_root.get());
+			}
+			g_holder.reset();
+		}
 
 		// Under the player's cell's 3D, as the cell's own objects are: drawn in first and third
 		// person alike. (Hung under Skyrim's shadow scene node directly, nothing was drawn.)
 		RE::NiNode* Root()
 		{
-			auto* player = RE::PlayerCharacter::GetSingleton();
-			auto* cell = player ? player->GetParentCell() : nullptr;
-			auto* loaded = cell ? cell->GetRuntimeData().loadedData : nullptr;
-			auto* holder = loaded ? loaded->cell3D.get() : nullptr;
+			auto* cell = PlayersCell();
+			auto* holder = Cell3D(cell);
 			if (!holder) {
 				return nullptr;
 			}
@@ -258,11 +280,10 @@ namespace Fx
 				g_root.reset(RE::NiNode::Create(0));
 				g_root->name = "RatchetFx";
 			}
-			if (g_root->parent != holder) {
-				if (g_root->parent) {
-					g_root->parent->DetachChild(g_root.get());
-				}
+			if (g_holder.get() != holder) {
+				Unhang();
 				holder->AttachChild(g_root.get(), true);
+				g_holder.reset(holder);
 				const auto& w = holder->world;
 				SKSE::log::info("fx: under {}'s 3D (at {:.1f} {:.1f} {:.1f}, scale {:.2f})", cell->GetFormEditorID(), w.translate.x, w.translate.y,
 					w.translate.z, w.scale);
@@ -775,6 +796,11 @@ namespace Fx
 	void Update(float a_dt)
 	{
 		g_clock += a_dt;
+		// The root lets go of a cell the player has left: it hangs again under his new one as
+		// soon as there's something to draw. (Carried off to another place, Combat clears it all.)
+		if (g_holder && Cell3D(PlayersCell()) != g_holder.get()) {
+			Unhang();
+		}
 		if (!g_arcDrawn) {
 			HideArc(0);
 		}
@@ -823,6 +849,18 @@ namespace Fx
 		}
 		g_swipeParts.clear();
 		g_swipe.clear();
+		// Off the cell's 3D too: a load's old world goes with nothing of ours holding on to it.
+		Unhang();
+	}
+
+	std::size_t Live() { return g_pieces.size() + g_bolts.size(); }
+
+	bool UnderPlayersCell()
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* cell = player ? player->GetParentCell() : nullptr;
+		auto* loaded = cell ? cell->GetRuntimeData().loadedData : nullptr;
+		return g_root && loaded && g_root->parent == loaded->cell3D.get();
 	}
 
 	void Swipe(std::optional<RE::NiTransform> a_wrench)

@@ -113,6 +113,9 @@ winds up, the wrench's hits, the Hyper-Strike's landing and the thrown wrench's 
 flash lights (Skyrim point lights, at most 8 at once) and the bombs' glow in flight. Without the
 art, Skyrim's spell bolt and rune explosion stand in.
 
+The effects hang under the player's cell's 3D (holding it while they do). When he's carried off
+(a load door, fast travel, a load), what's in the air and the effects left behind go.
+
 ## Checking the jump
 At load the plugin runs libratchet's flat-floor jump on its own (the same test as the sandbox
 and `crates/libratchet/tests/movement.rs`) and logs the apex for a tap and for a full hold. Every
@@ -148,6 +151,10 @@ selected, and follows the log.
   Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb (also in
   first person). Each passes if the cow lost at least the expected damage (× the save's
   difficulty multiplier) from enough hits.
+- Last, a cell change with effects alive: shots at the floor, through the Bannered Mare's door
+  (`coc`), shots again; then the same across a load of the most recent save. The new shots'
+  effects have to be alive under the new cell's 3D with none left from the old place, and
+  Ratchet posed and Clank playing there.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor
