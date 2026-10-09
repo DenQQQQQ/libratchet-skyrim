@@ -742,3 +742,25 @@ showed that Skyrim didn't: Rift Apart's camera, the Shatterbomb's throw arc, the
   going first. Bevy's lumens to Skyrim's fade: 40 000 lm is 1.
 - **Tests: 29/29.**
 
+## 2026-10-09 (evening): the sandbox's weapon rules, line by line
+
+Read against weapons.rs, wrench.rs, combat.rs and libarsenal, rule by rule:
+
+- **What's in his hand** (gun_visibility, weapon_away, held_wrench): the Burst Pistol whenever it's
+  the weapon, not only while aiming or just after a shot; nothing while dashing, on a wall, a ledge
+  or a swing, or while the wrench's throw has his hand (from the throw until just after the catch);
+  the wrench while he swings and 0.35 s after.
+- **Switching:** a pick while the wrench is out of his hand does nothing; a Shatterbomb already
+  leaving his hand goes first, the switch right after it. Outside Skyrim's third-person camera on
+  foot (first person, a horse, furniture), Skyrim's own field of view comes back each frame.
+- **The throw:** melee pressed while aiming throws the wrench (Rift Apart's, the sandbox's
+  throw_button), and he turns along the camera as it goes: `ratchet_set_facing`, C API version 3.
+  A melee press held through a block (aiming, the wrench out) doesn't swing once the block ends,
+  until it's let go; while the throw has his hand, firing from the hip doesn't strafe him and the
+  pistol doesn't fire.
+- **The Burst Pistol's rounds:** 150 (its level-1 ammo), one a shot; the gun out, empty for 1.5 s,
+  fills both guns (the sandbox's REFILL_AFTER). Its wait between shots carries over frames as
+  libarsenal's does: before, a shot came due only at the first frame after its wait, which lost up
+  to a frame a shot (6 a second from the hip came out 5.5 at 50 fps).
+- **Tests: 30/30** (new: melee while aiming throws the wrench into the cow 8 m out).
+

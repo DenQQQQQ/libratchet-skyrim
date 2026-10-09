@@ -31,6 +31,8 @@ namespace Combat
 		constexpr float kAimedRate = 3.0f;
 		constexpr float kHipRate = 6.0f;
 		constexpr float kRange = 45.0f;
+		// Its rounds (its level-1 kAmmo, one a shot): empty for a moment, both guns fill again.
+		constexpr int kPistolAmmo = 150;
 		// Its bolt (ShotPrius InitialMotion): 80 m/s, no gravity. With Rift Apart's effect art the
 		// plugin flies it, as the sandbox does; without, Skyrim's spell bolt does.
 		constexpr float kBoltSpeed = 80.0f;
@@ -138,7 +140,8 @@ namespace Combat
 			bool              bombTrigger = false;  // the trigger at its last step (the throw goes on its release)
 			float             bombCooldown = 0.0f;
 			int               bombAmmo = kBombAmmo;
-			float             bombEmpty = 0.0f;     // seconds the glove has been empty
+			int               pistolAmmo = kPistolAmmo;
+			float             bombEmpty = 0.0f;     // seconds the gun out has been empty
 			float             bombIn = -1.0f;       // a throw: seconds until the bomb leaves his hand
 			bool              cooking = false;
 			std::vector<Bomb> bombs;
@@ -703,10 +706,13 @@ namespace Combat
 		}
 
 		// The glove fills again 1.5 s after it's empty, whichever gun is out.
+		// The sandbox's: the gun out, empty for a moment (REFILL_AFTER), refills both.
 		void Refill(float a_dt)
 		{
-			c.bombEmpty = c.bombAmmo == 0 ? c.bombEmpty + a_dt : 0.0f;
+			const bool empty = c.gun == Gun::kBurstPistol ? c.pistolAmmo == 0 : c.bombAmmo == 0;
+			c.bombEmpty = empty ? c.bombEmpty + a_dt : 0.0f;
 			if (c.bombEmpty > kBombRefill) {
+				c.pistolAmmo = kPistolAmmo;
 				c.bombAmmo = kBombAmmo;
 				c.bombEmpty = 0.0f;
 			}
@@ -715,18 +721,24 @@ namespace Combat
 		void Pistol(RE::PlayerCharacter* a_player, float a_dt)
 		{
 			const Spread& spread = c.aim ? kAimedSpread : kHipSpread;
-			c.cooldown = std::max(0.0f, c.cooldown - a_dt);
+			// libarsenal's Weapon::step: a shot that came due part-way through the frame passes the
+			// rest of it on to the next wait (the rate doesn't hang on the frame rate); one fired
+			// from ready starts its wait now; a wait doesn't bank up while it isn't firing.
+			const bool wasReady = c.cooldown <= kReady;
+			c.cooldown -= a_dt;
 			// (Not while the wrench's throw has his hand, until just after the catch: the gun is
 			// put away.)
-			if (!c.fire || !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f) {
+			if (!c.fire || !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f || c.pistolAmmo < 1) {
 				c.spread = std::max(spread.min, c.spread - spread.recover * a_dt);
 				c.shotsInARow = 0;
+				c.cooldown = std::max(c.cooldown, 0.0f);
 				return;
 			}
-			if (c.cooldown > 0.0f) {
+			if (c.cooldown > kReady) {
 				return;
 			}
-			c.cooldown = 1.0f / (c.aim ? kAimedRate : kHipRate);
+			c.cooldown = (wasReady ? 0.0f : c.cooldown) + 1.0f / (c.aim ? kAimedRate : kHipRate);
+			--c.pistolAmmo;
 			if (++c.shotsInARow > 3) {
 				c.spread = std::min(spread.max, c.spread + spread.grow);
 			}
