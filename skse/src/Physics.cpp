@@ -47,7 +47,7 @@ namespace Physics
 		return (from.z - hit->point.z - lift) / units;
 	}
 
-	std::optional<float> GroundUnder(const RE::NiPoint3& a_feet, float a_max, float a_radius)
+	std::optional<float> GroundUnder(const RE::NiPoint3& a_feet, float a_max, float a_radius, RE::NiPoint3* a_normal)
 	{
 		const float units = RE::bhkWorld::GetWorldScaleInverse();
 		const float lift = 0.3f * units;
@@ -61,6 +61,9 @@ namespace Physics
 				const float d = (a_feet.z - hit->point.z) / units;
 				if (!nearest || d < *nearest) {
 					nearest = d;
+					if (a_normal) {
+						*a_normal = hit->normal;
+					}
 				}
 			}
 		}

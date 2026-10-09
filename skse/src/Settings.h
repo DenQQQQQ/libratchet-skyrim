@@ -23,6 +23,10 @@ struct Settings
 	// The sim walks and runs him too (Rift Apart's speeds, acceleration and turning), not only
 	// his jumps and dashes. Off: Skyrim's own locomotion moves him on the ground.
 	bool simGround = true;
+	// Skyrim's own ground state carries out the sim's moves on the ground (its slopes, stairs,
+	// small edges and hold on the ground, at the sim's speed). Off: the sim's velocity is set
+	// on the controller in its air state, slopes and steps followed by the plugin's own probes.
+	bool nativeGround = true;
 	// Ratchet's combat: the OmniWrench and his gun on these Skyrim controls (Rift Apart's
 	// controller layout: R2 fires, L2 aims, Square swings, R1 throws). Skyrim's own attacks,
 	// blocks, weapon drawing and shouts are off on foot then.

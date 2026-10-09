@@ -56,6 +56,25 @@ namespace Anim
 			return q;
 		}
 
+		// glam's slerp (Bevy's interpolation of rotations): the shorter way, lerped when nearly
+		// the same.
+		RE::NiQuaternion Slerp(const RE::NiQuaternion& a_a, RE::NiQuaternion a_b, float a_t)
+		{
+			float dot = a_a.Dot(a_b);
+			if (dot < 0.0f) {
+				a_b.Neg();
+				dot = -dot;
+			}
+			if (dot > 1.0f - 1.1920929e-7f) {
+				return Normalized({ a_a.w + (a_b.w - a_a.w) * a_t, a_a.x + (a_b.x - a_a.x) * a_t, a_a.y + (a_b.y - a_a.y) * a_t,
+					a_a.z + (a_b.z - a_a.z) * a_t });
+			}
+			const float theta = std::acos(std::clamp(dot, -1.0f, 1.0f));
+			const float k1 = std::sin(theta * (1.0f - a_t)) / std::sin(theta);
+			const float k2 = std::sin(theta * a_t) / std::sin(theta);
+			return { a_a.w * k1 + a_b.w * k2, a_a.x * k1 + a_b.x * k2, a_a.y * k1 + a_b.y * k2, a_a.z * k1 + a_b.z * k2 };
+		}
+
 		RE::NiQuaternion Nlerp(const RE::NiQuaternion& a_a, RE::NiQuaternion a_b, float a_w)
 		{
 			if (a_a.Dot(a_b) < 0.0f) {
@@ -274,6 +293,172 @@ namespace Anim
 			a_a.t[i] = a_a.t[i] + (a_b.t[i] - a_a.t[i]) * a_w;
 			a_a.r[i] = Nlerp(a_a.r[i], a_b.r[i], a_w);
 			a_a.s[i] = a_a.s[i] + (a_b.s[i] - a_a.s[i]) * a_w;
+		}
+	}
+
+	namespace
+	{
+		// A clip's two keys around a_t (clamped to the clip) and how far between them.
+		struct Keys
+		{
+			std::uint32_t i0 = 0;
+			std::uint32_t i1 = 0;
+			float         w = 0.0f;
+		};
+
+		Keys KeysAt(const Clip& a_clip, float a_t)
+		{
+			const std::uint32_t last = a_clip.frames > 0 ? a_clip.frames - 1 : 0;
+			const float         f = std::clamp(a_t * a_clip.rate, 0.0f, static_cast<float>(last));
+			Keys                k;
+			k.i0 = std::min(static_cast<std::uint32_t>(f), last);
+			k.i1 = std::min(k.i0 + 1, last);
+			k.w = f - static_cast<float>(k.i0);
+			return k;
+		}
+
+		RE::NiPoint3 PointAt(const Track& a_track, const Keys& a_k)
+		{
+			const float* a = a_track.values.data() + (a_track.constant ? 0 : a_k.i0 * 3);
+			const float* b = a_track.values.data() + (a_track.constant ? 0 : a_k.i1 * 3);
+			return { a[0] + (b[0] - a[0]) * a_k.w, a[1] + (b[1] - a[1]) * a_k.w, a[2] + (b[2] - a[2]) * a_k.w };
+		}
+
+		RE::NiQuaternion TurnAt(const Track& a_track, const Keys& a_k)
+		{
+			const float* a = a_track.values.data() + (a_track.constant ? 0 : a_k.i0 * 4);
+			const float* b = a_track.values.data() + (a_track.constant ? 0 : a_k.i1 * 4);
+			return Slerp({ a[3], a[0], a[1], a[2] }, { b[3], b[0], b[1], b[2] }, a_k.w);
+		}
+
+		float ScaleAt(const Track& a_track, const Keys& a_k)
+		{
+			const float a = a_track.values[a_track.constant ? 0 : a_k.i0];
+			const float b = a_track.values[a_track.constant ? 0 : a_k.i1];
+			return a + (b - a) * a_k.w;
+		}
+	}
+
+	void Library::SetUpperBody(std::string_view a_name)
+	{
+		_upper.assign(_joints.size(), false);
+		// Parents come before their children in the file.
+		for (std::size_t i = 0; i < _joints.size(); ++i) {
+			const auto parent = _joints[i].parent;
+			_upper[i] = _joints[i].name == a_name || (parent >= 0 && static_cast<std::size_t>(parent) < i && _upper[parent]);
+		}
+	}
+
+	void Library::Mix(std::span<const Layer> a_layers, Pose& a_pose) const
+	{
+		const std::size_t n = _joints.size();
+		if (a_pose.t.size() != n) {
+			a_pose = Rest();
+		}
+		// The weight blended into each channel so far (joint × 3).
+		thread_local std::vector<float> sums;
+		sums.assign(n * 3, 0.0f);
+		for (const Layer& layer : a_layers) {
+			if (!layer.clip || layer.weight <= 0.0f || layer.kind == Layer::Kind::kAdditive) {
+				continue;
+			}
+			const bool upperOnly = layer.kind == Layer::Kind::kBaseUpperBody && _upper.size() == n;
+			const Keys k = KeysAt(*layer.clip, layer.time);
+			for (const Track& tr : layer.clip->tracks) {
+				if (upperOnly && !_upper[tr.joint]) {
+					continue;
+				}
+				float& sum = sums[tr.joint * 3 + tr.path];
+				sum += layer.weight;
+				const float w = layer.weight / sum;  // 1 for the first: it sets the channel
+				switch (tr.path) {
+				case 0:
+					a_pose.t[tr.joint] = a_pose.t[tr.joint] + (PointAt(tr, k) - a_pose.t[tr.joint]) * w;
+					break;
+				case 1:
+					a_pose.r[tr.joint] = w >= 1.0f ? TurnAt(tr, k) : Slerp(a_pose.r[tr.joint], TurnAt(tr, k), w);
+					break;
+				default:
+					a_pose.s[tr.joint] = a_pose.s[tr.joint] + (ScaleAt(tr, k) - a_pose.s[tr.joint]) * w;
+					break;
+				}
+			}
+		}
+		const RE::NiQuaternion identity{ 1.0f, 0.0f, 0.0f, 0.0f };
+		for (const Layer& layer : a_layers) {
+			if (!layer.clip || layer.weight <= 0.0f || layer.kind != Layer::Kind::kAdditive) {
+				continue;
+			}
+			const Keys k = KeysAt(*layer.clip, layer.time);
+			for (const Track& tr : layer.clip->tracks) {
+				switch (tr.path) {
+				case 0:
+					a_pose.t[tr.joint] = a_pose.t[tr.joint] + PointAt(tr, k) * layer.weight;
+					break;
+				case 1:
+					a_pose.r[tr.joint] = Multiply(Slerp(identity, TurnAt(tr, k), layer.weight), a_pose.r[tr.joint]);
+					break;
+				default:
+					a_pose.s[tr.joint] = a_pose.s[tr.joint] + ScaleAt(tr, k) * layer.weight;
+					break;
+				}
+			}
+		}
+	}
+
+	void Player::Play(const Clip* a_clip, float a_fade, bool a_loop)
+	{
+		if (!a_clip) {
+			return;
+		}
+		if (_main.clip) {
+			// It fades out from the weight it has now.
+			Playing old = _main;
+			old.decline = a_fade > 0.0f ? 1.0f / a_fade : std::numeric_limits<float>::infinity();
+			_fading.push_back(old);
+		}
+		std::erase_if(_fading, [&](const Playing& a_p) { return a_p.clip == a_clip; });
+		_main = { a_clip, 0.0f, a_loop, 1.0f, 0.0f };
+	}
+
+	void Player::Advance(float a_dt)
+	{
+		// The weights (Bevy's advance_transitions), the newest fading clip first: each keeps its
+		// own weight × what the newer ones left, and the clip playing gets the rest. The faded
+		// ones go (its expire_completed_transitions).
+		float remaining = 1.0f;
+		for (auto it = _fading.rbegin(); it != _fading.rend(); ++it) {
+			it->weight = std::max(0.0f, it->weight - it->decline * a_dt);
+			const float share = it->weight * remaining;
+			remaining -= share;
+			it->share = share;
+		}
+		_main.weight = remaining;
+		_main.share = remaining;
+		std::erase_if(_fading, [](const Playing& a_p) { return a_p.weight <= 0.0f; });
+		// The clocks (its advance_animations): a looping clip wraps, a one-shot holds at its end.
+		const auto tick = [a_dt](Playing& a_p) {
+			if (!a_p.clip || a_p.clip->seconds <= 0.0f || (!a_p.loop && a_p.time >= a_p.clip->seconds)) {
+				return;
+			}
+			a_p.time += a_dt;
+			if (a_p.loop && a_p.time >= a_p.clip->seconds) {
+				a_p.time = std::fmod(a_p.time, a_p.clip->seconds);
+			}
+		};
+		tick(_main);
+		for (auto& p : _fading) {
+			tick(p);
+		}
+	}
+
+	void Player::Layers(std::vector<Layer>& a_out) const
+	{
+		for (const auto& p : _fading) {
+			a_out.push_back({ p.clip, p.time, p.share, Layer::Kind::kBase });
+		}
+		if (_main.clip) {
+			a_out.push_back({ _main.clip, _main.time, _main.share, Layer::Kind::kBase });
 		}
 	}
 }

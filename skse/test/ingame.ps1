@@ -25,7 +25,7 @@ param(
     # corner behind the other windows.
     [switch]$Fullscreen,
     [switch]$NoShots,
-    # Only the cases whose names contain this ("ledge", "wall"...).
+    # Only the cases whose names contain this ("ledge", "wall"...), or any of several: "guard|bear".
     [string]$Only = "",
     # No per-frame trace in the log (on by default for test runs).
     [switch]$NoTrace,

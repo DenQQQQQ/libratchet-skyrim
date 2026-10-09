@@ -595,3 +595,58 @@ fixed:
   the fall pose nor a landing, and makes no landing sound (Skyrim's own short falls don't either).
 - A new case runs 2 s along the road with no jump and fails on any fall longer than 0.3 s.
   Built and installed for the owner to try first; not run in game yet.
+
+## 2026-10-09: the owner's second try (small uphills and stairs)
+
+The owner played and listed: trouble up small slopes and stairs, crackling on the Shatterbomb, no
+hostility from the pistol, the strafe flips and Clank's rotor sway missing, and Rift Apart's own
+shots wanted.
+
+- **Up slopes and stairs.** The trace of a run at stone stairs showed the cause. Moving on the
+  ground, the controller was held in its air state with the sim's velocity, pressed straight down
+  at 2 m/s. On a slope the solver keeps the downhill part of that press, and the sim went on each
+  frame from the speed the controller kept. So every uphill frame cost speed: he stalled at the
+  foot of the stairs and slid back down (from about 8 degrees at 100 fps). A research pass over
+  the CommonLib headers, the executable's vtables and three released plugins (SkyrimDirectional-
+  Combat, SimpleTimedBlockAddons, AnimationMotionRevolution) found the clean way: stay in Skyrim's
+  ground state and write `velocityMod` inside its physics step (vfunc 8 of
+  `bhkCharacterStateOnGround`). Measured: it's in m/s, in his own frame (x right, y forward;
+  `forwardVec` points back), and taken with no lag (5.75 m/s forward asked, 5.75 m/s made).
+  Skyrim keeps that speed along the slope: on the 30 degree ramp 6.64 m/s asked gave 5.7 m/s
+  across it, the sim's 5.74. Two things went wrong at first, both fixed:
+  - The slope came from the controller's own contacts, which on stairs are the steps' edges
+    (normals 45 degrees off): the speed-up for the slope was wrong there. The slope comes from the
+    rays under his footprint now (the treads: flat).
+  - The sim went on from the controller's speed every frame. Up the stairs Skyrim moved him faster
+    at times and the steps' edges turned him; fed back each frame, that ran away (9.4 m/s, then
+    sideways off the stairs). Now the sim takes the controller's speed only when it's slower than
+    asked (a wall).
+- When Skyrim's state loses him over a bump (the ground still within 0.35 m), the controller is
+  held in its air state with the sim's velocity as before, now along the slope under him and
+  pressed into it along its normal, and rising onto a step ahead (looked for up to 0.12 s ahead).
+  `bNativeGround = 0` uses that all the time: it passes the ramps too, but climbs stairs in
+  bursts.
+- **Tests:** new cases run up a 15 and a 30 degree ramp (a floor piece tilted: a reference's x and
+  y angles tilt its up axis to (-cos x sin y, sin x, cos x cos y), measured) and the stone stairs
+  outside Whiterun's gate, each until he's high enough. The 30 degree ramp: 4.0 m up in 1.46 s.
+  The stairs: 4.5 m up in 1.25 s, no falls (before: -1.0 m, stalled). A landing during a case's
+  setup (off the last case's ramp as it's deleted) isn't counted against the next case. The
+  suite's time limit is 180 s (90 s cut off the last three cases). `-Only` takes several names
+  (`"guard|bear|ledge"`). **28/28 pass** (full suite and the three it had cut off).
+- **Crackling on the Shatterbomb.** Rift Apart's moments are levels in dB; the plugin played a
+  moment above 15 dB with every layer clamped to full, and the bomb's flight hum (with an 18 s drone
+  pitched down 1620 cents) was left playing. A moment's gain is capped at 1 now (layers keep their
+  mix), and the bomb's hum layers belong to the bomb: they follow it and stop when it goes off.
+  Not checked by ear yet.
+- **The pistol raises hostility.** Its bolts are spells the player casts, which hurt but raise
+  nothing until the target dies. Each shot now predicts what it will hit (a ray along it) and
+  that actor is attacked as the wrench's hits do it: the assault alarm and combat when the bolt
+  gets there. The damage effects are hostile and detrimental too. The case "a shot makes him
+  fight" passes.
+- **Clank** plays through a mixer that does what Bevy's animation graph does (per-channel
+  weights, the first base layer sets, the next ones interpolate toward theirs by weight, additive
+  layers on top) and Bevy's transitions (a new clip fades in, the old ones out). Ratchet's own
+  clip choice (strafe flips, the glide's intro and lean, the run's lean and grip sets) is being
+  ported from the sandbox into a library both use, and comes next.
+- Known: the game sometimes crashes as the test quits it (a pathfinding job reading Whiterun's
+  navmesh, twice in two days, both right after "done"). Not seen in play.

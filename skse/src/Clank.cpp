@@ -21,13 +21,6 @@ namespace Clank
 		constexpr float kExtend = 0.23f;
 		constexpr float kRetract = 0.3f;
 
-		struct Playing
-		{
-			const Anim::Clip* clip = nullptr;
-			float             time = 0.0f;
-			bool              loop = true;
-		};
-
 		struct Rotor
 		{
 			std::size_t  joint;
@@ -46,11 +39,11 @@ namespace Clank
 			std::optional<std::size_t>   attach;
 			std::vector<Rotor>           rotors;
 			float                        rotorAngle = 0.0f;
-			Playing                      cur, prev;
-			float                        fade = 1.0f;
+			Anim::Player                 player;  // his clips as Bevy plays them (the sandbox's AnimationTransitions)
+			std::vector<Anim::Layer>     layers;
 			float                        oneShot = 0.0f;  // seconds left of a one-shot clip
 			bool                         gliding = false;
-			Anim::Pose                   pose, other;
+			Anim::Pose                   pose;
 			RE::NiNode*                  bone = nullptr;  // Ratchet's ClankAttach
 			RE::NiNode*                  boneOf = nullptr;
 			int                          frames = 0;      // since he went on
@@ -165,7 +158,8 @@ namespace Clank
 		void PickClip(bool a_gliding, float a_dt)
 		{
 			s.oneShot = std::max(0.0f, s.oneShot - a_dt);
-			std::string_view want = s.cur.clip ? std::string_view(s.cur.clip->name) : "idle";
+			const Anim::Clip* current = s.player.Current();
+			std::string_view  want = current ? std::string_view(current->name) : "idle";
 			if (a_gliding && !s.gliding) {
 				want = "heli_extend";
 				s.oneShot = kExtend;
@@ -180,12 +174,10 @@ namespace Clank
 			if (!clip) {
 				clip = s.lib.Find(a_gliding ? "glide" : "idle");
 			}
-			if (!clip || clip == s.cur.clip) {
+			if (!clip || clip == current) {
 				return;
 			}
-			s.prev = s.cur;
-			s.cur = { clip, 0.0f, clip->name == "idle" || clip->name == "glide" };
-			s.fade = s.prev.clip ? 0.0f : 1.0f;
+			s.player.Play(clip, current ? kFade : 0.0f, clip->name == "idle" || clip->name == "glide");
 		}
 
 		void ShowHeli(bool a_show)
@@ -230,7 +222,7 @@ namespace Clank
 
 	bool Enabled() { return s.enabled && !s.failed; }
 
-	std::string_view CurrentClip() { return s.cur.clip ? std::string_view(s.cur.clip->name) : std::string_view{}; }
+	std::string_view CurrentClip() { return s.player.Current() ? std::string_view(s.player.Current()->name) : std::string_view{}; }
 
 	bool HeliOut() { return Enabled() && s.model && s.heliShown; }
 
@@ -263,35 +255,26 @@ namespace Clank
 		}
 
 		PickClip(a_gliding, a_dt);
-		if (!s.cur.clip) {
+		if (!s.player.Current()) {
 			return;
 		}
-		s.cur.time += a_dt;
-		// A looping clip's time wraps (hours without a glide would run its float precision out).
-		if (s.cur.loop && s.cur.clip->seconds > 0.0f) {
-			s.cur.time = std::fmod(s.cur.time, s.cur.clip->seconds);
-		}
-		if (s.prev.clip && s.fade < 1.0f) {
-			s.prev.time += a_dt;
-			s.fade = std::min(1.0f, s.fade + a_dt / kFade);
-			s.lib.Sample(*s.prev.clip, s.prev.time, s.prev.loop, s.pose);
-			s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.other);
-			Anim::Blend(s.pose, s.other, s.fade);
-		} else {
-			s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.pose);
-		}
+		// His clips mixed as Bevy mixes them (a channel no clip keys keeps last frame's value).
+		s.player.Advance(a_dt);
+		s.layers.clear();
+		s.player.Layers(s.layers);
+		s.lib.Mix(s.layers, s.pose);
 
 		// The heli-pack's looks while it's out (extend, glide, retract), its rotors spinning on
-		// top of the clip.
-		const std::string_view clip = s.cur.clip->name;
+		// top of the clip (on the nodes only: in the pose a spin would build up frame on frame).
+		const std::string_view clip = s.player.Current()->name;
 		ShowHeli(clip == "heli_extend" || clip == "glide" || clip == "heli_retract");
+		std::vector<std::pair<std::size_t, RE::NiQuaternion>> spins;
 		if (s.heliShown) {
 			s.rotorAngle = std::fmod(s.rotorAngle + kRotorSpeed * a_dt, 2.0f * 3.14159265f);
 			const float half = 0.5f * s.rotorAngle;
 			for (const auto& rotor : s.rotors) {
-				const RE::NiPoint3     a = rotor.axis * std::sin(half);
-				const RE::NiQuaternion spin{ std::cos(half), a.x, a.y, a.z };
-				s.pose.r[rotor.joint] = Anim::Multiply(s.pose.r[rotor.joint], spin);
+				const RE::NiPoint3 a = rotor.axis * std::sin(half);
+				spins.emplace_back(rotor.joint, RE::NiQuaternion{ std::cos(half), a.x, a.y, a.z });
 			}
 		}
 
@@ -303,6 +286,11 @@ namespace Clank
 			node->local.translate = s.pose.t[i];
 			node->local.rotate = s.pose.r[i].ToRotation();
 			node->local.scale = s.pose.s[i];
+		}
+		for (const auto& [joint, spin] : spins) {
+			if (auto* node = s.nodes[joint]) {
+				node->local.rotate = Anim::Multiply(s.pose.r[joint], spin).ToRotation();
+			}
 		}
 		// His attach joint exactly on Ratchet's bone: his root is the inverse of where the joint
 		// is in his model. Its place and turn only, not its scale: his backpack clips scale his

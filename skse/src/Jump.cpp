@@ -28,6 +28,13 @@ namespace Jump
 		// A fall off a bump or a step shorter than this (seconds) lands without a sound: it shows
 		// no landing either (Model's kBriefFall).
 		constexpr float kBriefFall = 0.15f;
+		// Moving on the ground, he runs up a step this high (metres × scale, the sandbox's
+		// STEP_HEIGHT: its box move steps onto anything this high), looked for as far ahead as he
+		// gets in kStepLook (seconds): he rises onto it on the way.
+		constexpr float kStepUp = 0.35f;
+		constexpr float kStepLook = 0.12f;
+		// The steepest ground he runs along (its normal's height: 53 degrees).
+		constexpr float kWalkable = 0.6f;
 
 		// The sandbox's body at scale 1 (apps/sandbox/src/main.rs BODY_HEIGHT, BODY_HALF_WIDTH,
 		// WALL_PROBE_REACH): the wall probe looks from his middle, 1 m out, with side probes
@@ -377,6 +384,122 @@ namespace Jump
 			return false;
 		}
 
+		struct Along
+		{
+			RE::NiPoint3 velocity;                     // Skyrim's axes, m/s
+			RE::NiPoint3 normal{ 0.0f, 0.0f, 1.0f };   // the ground's he goes along
+			float        step = 0.0f;                  // the step ahead he's rising onto, metres (0: none)
+		};
+		Along g_along;  // this frame's, for the trace
+
+		// Moving on the ground (the sim's run, a dash, a swing), he goes along it as the sandbox's
+		// box move keeps him on its floors: up and down a slope at the speed across the ground he'd
+		// have on the flat, held to it by a press into it along its normal, and up a step he comes
+		// to, rising onto it on the way. (Pressed straight down, the sim's 2 m/s slid him back down
+		// slopes, 1 m/s on stairs' 40 degrees, and the speed the controller kept, which the sim
+		// goes on from, shrank frame by frame: he stalled at the foot of the stairs.)
+		// a_v: the sim's velocity in Skyrim's axes; its downward part is the press.
+		Along AlongGround(const RE::bhkCharacterController* a_ctrl, const RE::NiPoint3& a_feet, const RE::NiPoint3& a_v, float a_dt)
+		{
+			Along out{ a_v };
+			const float s = Settings::Get().scale;
+			const float u = UnitsPerMetre();
+			// The ground as his capsule rests on it (it can be a stair's helper ramp).
+			const auto& sn = a_ctrl->supportNorm.quad.m128_f32;
+			if (a_ctrl->flags.any(RE::CHARACTER_FLAGS::kSupport) && sn[2] >= kWalkable && sn[2] <= 1.0001f) {
+				out.normal = { sn[0], sn[1], sn[2] };
+			}
+			const RE::NiPoint3& n = out.normal;
+			RE::NiPoint3 v{ a_v.x, a_v.y, -(n.x * a_v.x + n.y * a_v.y) / n.z };
+			// A step ahead: the first ground higher than the slope he's on, out to where he'll be
+			// in kStepLook (from half his footprint out: one under his front is risen onto now).
+			const float speed = std::sqrt(a_v.x * a_v.x + a_v.y * a_v.y);
+			if (speed > 0.2f) {
+				const RE::NiPoint3 dir{ a_v.x / speed, a_v.y / speed, 0.0f };
+				const float rise = -(n.x * dir.x + n.y * dir.y) / n.z;  // the slope's, per metre ahead
+				const float r = kFootprint * s;
+				const float top = (kStepUp + 0.05f) * s;
+				for (float d = 0.5f * r; d <= r + speed * kStepLook; d += 0.1f * s) {
+					const RE::NiPoint3 at = a_feet + dir * (d * u);
+					const auto hit = Physics::Ray(at + RE::NiPoint3{ 0.0f, 0.0f, top * u }, at - RE::NiPoint3{ 0.0f, 0.0f, 0.05f * u });
+					if (!hit) {
+						continue;
+					}
+					const float h = (hit->point.z - a_feet.z) / u;
+					if (h - rise * d < 0.03f * s) {
+						continue;  // the slope's own height, or lower
+					}
+					if (h > kStepUp * s || hit->normal.z < kWalkable) {
+						break;  // a wall: the controller stops him at it
+					}
+					// Up onto it by the time his front gets there.
+					const float time = std::max(a_dt, (d - r) / speed);
+					v.z = std::max(v.z, h / time);
+					out.step = h;
+					break;
+				}
+			}
+			if (out.step == 0.0f) {
+				const float press = std::max(0.0f, -a_v.z);
+				v = v - n * press;
+			}
+			out.velocity = v;
+			return out;
+		}
+
+		// A ground move Skyrim's ground state carries out (GroundStateHook): the sim's velocity
+		// across the ground for his controller (Skyrim's axes, m/s), and what the state made of it.
+		struct Drive
+		{
+			const RE::bhkCharacterController* ctrl = nullptr;
+			bool                              active = false;
+			RE::NiPoint2                      velocity;
+			RE::NiPoint3                      ground{ 0.0f, 0.0f, 1.0f };  // the ground's normal under him, as the rays find it
+			RE::NiPoint2                      local;  // the velocityMod it got: right, forward
+			RE::NiPoint3                      out;    // its outVelocity after
+		};
+		Drive g_drive;
+
+		// The ground as Skyrim's ground state sees it under him (its normal: up if there's none).
+		RE::NiPoint3 GroundNormal(const RE::bhkCharacterController* a_ctrl)
+		{
+			const auto& info = a_ctrl->surfaceInfo;
+			const auto& n = info.supportedState.all(RE::hkpSurfaceInfo::SupportedState::kSupported) ? info.surfaceNormal.quad.m128_f32 :
+			                a_ctrl->flags.any(RE::CHARACTER_FLAGS::kSupport)                    ? a_ctrl->supportNorm.quad.m128_f32 :
+			                                                                                       nullptr;
+			if (!n || !(n[2] > 0.0f && n[2] <= 1.0001f)) {
+				return { 0.0f, 0.0f, 1.0f };
+			}
+			return { n[0], n[1], n[2] };
+		}
+
+		// The sim's velocity as the ground state takes it: velocityMod, in his own frame (x right,
+		// y forward; his controller's forwardVec points back), m/s. The state keeps that speed
+		// along the ground: up or down a slope he'd go slower across it than the sim, so it's
+		// longer by the slope's length per metre across (measured on the 30 degree ramp: 5.74 m/s
+		// across it asked, 5.7 m/s made). The slope as the rays find it: the state's own contacts
+		// on stairs are their steps' edges, steep, and longer by those it went faster than asked.
+		void DriveVelocity(RE::bhkCharacterController* a_ctrl)
+		{
+			const auto& f = a_ctrl->forwardVec.quad.m128_f32;
+			const float fl = std::sqrt(f[0] * f[0] + f[1] * f[1]);
+			if (fl < 1e-4f) {
+				return;
+			}
+			const float fx = -f[0] / fl, fy = -f[1] / fl;
+			float       vx = g_drive.velocity.x, vy = g_drive.velocity.y;
+			const float speed = std::sqrt(vx * vx + vy * vy);
+			const RE::NiPoint3& n = g_drive.ground;
+			if (speed > 1e-3f && n.z >= kWalkable && n.z <= 1.0001f) {
+				const float t = -(n.x * vx + n.y * vy) / (n.z * speed);
+				const float k = std::min(std::sqrt(1.0f + t * t), 1.7f);
+				vx *= k;
+				vy *= k;
+			}
+			g_drive.local = { vx * fy - vy * fx, vx * fx + vy * fy };
+			a_ctrl->velocityMod = RE::hkVector4(g_drive.local.x, g_drive.local.y, 0.0f, 0.0f);
+		}
+
 		// The sim moves him along the ground: a dash, a wrench swing's lunge, the slam's landing.
 		// Skyrim's on-ground state moves him by its own locomotion, whatever velocity it's
 		// given; its in-air state keeps the one it's given. So he's put in the air state every
@@ -466,6 +589,8 @@ namespace Jump
 
 		void Step(RE::PlayerCharacter* a_player, float a_dt)
 		{
+			// The ground state moves him on its own unless this step hands it the sim's velocity.
+			g_drive.active = false;
 			auto* ctrl = a_player->GetCharController();
 			if (!ctrl || !g.sim) {
 				return;
@@ -487,7 +612,8 @@ namespace Jump
 			// jumps, double jump, glide and falls ask. (A single ray from his middle missed bumps
 			// he stood on, or fell into the cracks between them.)
 			const float s = Settings::Get().scale;
-			const auto  ground = Physics::GroundUnder(feet, 20.0f, kFootprint * s);
+			RE::NiPoint3 groundNormal{ 0.0f, 0.0f, 1.0f };
+			const auto   ground = Physics::GroundUnder(feet, 20.0f, kFootprint * s, &groundNormal);
 			// Skyrim's controller says whether he stands. In a ground move it's kept in its air
 			// state, and then the ground right under his feet is what holds him up.
 			// (Not second-guessed by the ray: on a bumpy road it often finds nothing under his feet,
@@ -551,8 +677,15 @@ namespace Jump
 				// speed. Not up and down: standing, Skyrim's vertical speed can sit a hair above
 				// zero, and the sim lands only when not rising (a fall it entered after a teleport
 				// never ended).
+				// In the sim's own walk, only when he went slower than it asked (a wall, or someone
+				// in the way): up stairs Skyrim moves him faster at times, and its steps' edges turn
+				// him, and fed back each frame that ran away with him, off the stairs' side.
 				const RatchetVec3 v = ControllerVelocity(ctrl);
-				ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
+				const float       asked = g.last.velocity.x * g.last.velocity.x + g.last.velocity.z * g.last.velocity.z;
+				const float       made = v.x * v.x + v.z * v.z;
+				if (!g.ours || made < 0.9f * asked) {
+					ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
+				}
 			}
 			if (g.ours && !g.groundMove) {
 				// Going up, he rose less than a quarter of what the sim asked for: something's above.
@@ -628,14 +761,33 @@ namespace Jump
 				started = false;
 			}
 
-			if (g.groundMove) {
-				// In the air state with the sim's velocity (see StartGroundMove). Bumps along the way
-				// aren't falls.
+			if (g.groundMove && Settings::Get().nativeGround && Grounded(ctrl)) {
+				// Skyrim's ground state moves him at the sim's speed (GroundStateHook): along slopes,
+				// over small edges and up stairs, held to the ground by its own pull and snap.
+				g_drive.ctrl = ctrl;
+				g_drive.active = true;
+				g_drive.velocity = { r.velocity.x, -r.velocity.z };
+				g_drive.ground = ground && *ground < kDashGroundReach * s ? groundNormal : RE::NiPoint3{ 0.0f, 0.0f, 1.0f };
+				ctrl->gravity = g.savedGravity;
+				g_along = {};
+				ctrl->fallStartHeight = z;
+				ctrl->fallTime = 0.0f;
+			} else if (g.groundMove) {
+				// In the air state with the sim's velocity (see StartGroundMove): bumps along the way
+				// (Skyrim's ground state lost him, the ground's still in reach) aren't falls.
 				ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
+				ctrl->gravity = 0.0f;
 				RatchetVec3 v = r.velocity;
-				// Down a slope or a step the ground falls away under him: he follows it while it's
-				// in reach (Skyrim's ground state would snap him down too).
-				if (ground && *ground > 0.02f && *ground < kDashGroundReach * s) {
+				if (grounded) {
+					// Along the ground: up and down slopes, up steps.
+					g_along = AlongGround(ctrl, feet, { v.x, -v.z, v.y }, a_dt);
+					v = { g_along.velocity.x, g_along.velocity.z, -g_along.velocity.y };
+				} else {
+					g_along = {};
+				}
+				// Down a step the ground falls away under him: he follows it while it's in reach
+				// (Skyrim's ground state would snap him down too).
+				if (g_along.step == 0.0f && ground && *ground > 0.02f && *ground < kDashGroundReach * s) {
 					v.y = std::min(v.y, -*ground / a_dt);
 				}
 				SetVelocity(ctrl, v);
@@ -717,10 +869,19 @@ namespace Jump
 			Combat::Step(a_player, g.sim, r, a_dt);
 			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {
 				SKSE::log::info(
-					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} facing {:.2f} z {:.1f} ctrl {}",
+					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} facing {:.2f} z {:.1f} ctrl {}{}",
 					a_dt, in.jump, in.dash, contact.grounded, contact.has_ground_distance ? "" : "none ", contact.ground_distance, contact.hit_ceiling,
 					in.move_x, in.move_z, r.state, r.events, r.velocity.x, r.velocity.y, r.velocity.z, r.facing_yaw, z,
-					static_cast<int>(ctrl->context.currentState));
+					static_cast<int>(ctrl->context.currentState),
+					g_drive.active ? std::format(" native mod {:.2f},{:.2f} last out {:.2f},{:.2f},{:.2f} normal {:.2f},{:.2f},{:.2f}", g_drive.local.x,
+										 g_drive.local.y, g_drive.out.x, g_drive.out.y, g_drive.out.z, GroundNormal(ctrl).x, GroundNormal(ctrl).y,
+										 GroundNormal(ctrl).z) :
+					g.groundMove ? std::format(" support {} {:.2f},{:.2f},{:.2f}{} along {:.2f},{:.2f},{:.2f} step {:.2f}",
+									   ctrl->flags.any(RE::CHARACTER_FLAGS::kSupport) ? "yes" : "no", ctrl->supportNorm.quad.m128_f32[0],
+									   ctrl->supportNorm.quad.m128_f32[1], ctrl->supportNorm.quad.m128_f32[2],
+									   ctrl->flags.any(RE::CHARACTER_FLAGS::kOnStairs) ? " stairs" : "", g_along.velocity.x, g_along.velocity.y,
+									   g_along.velocity.z, g_along.step) :
+								   "");
 			}
 			g.last = r;
 			g.lastDt = a_dt;
@@ -742,6 +903,28 @@ namespace Jump
 		}
 
 		// --- hooks
+
+		// Skyrim's ground state as it moves a character this frame (its physics step, vfunc 8 of
+		// bhkCharacterStateOnGround): it moves him at velocityMod along the ground he stands on. In
+		// a ground move the sim's velocity goes in there. (Set from a game update it doesn't stick:
+		// the locomotion's is written over it before this step.) It runs for every character, maybe
+		// off the main thread: only his controller is touched.
+		struct GroundStateHook
+		{
+			static void Simulate(RE::bhkCharacterStateOnGround* a_this, RE::bhkCharacterController* a_ctrl)
+			{
+				const bool ours = a_ctrl && g_drive.active && a_ctrl == g_drive.ctrl;
+				if (ours) {
+					DriveVelocity(a_ctrl);
+				}
+				_Simulate(a_this, a_ctrl);
+				if (ours) {
+					const auto& o = a_ctrl->outVelocity.quad.m128_f32;
+					g_drive.out = { o[0], o[1], o[2] };
+				}
+			}
+			static inline REL::Relocation<decltype(Simulate)> _Simulate;
+		};
 
 		// Skyrim's jump button: switched off on foot (the sim jumps instead). On a horse it stays
 		// the horse's.
@@ -839,6 +1022,9 @@ namespace Jump
 
 		REL::Relocation<std::uintptr_t> playerVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		PlayerUpdateHook::_Update = playerVtbl.write_vfunc(0xAD, PlayerUpdateHook::Update);
+
+		REL::Relocation<std::uintptr_t> groundVtbl{ RE::VTABLE_bhkCharacterStateOnGround[0] };
+		GroundStateHook::_Simulate = groundVtbl.write_vfunc(0x8, GroundStateHook::Simulate);
 
 		SKSE::log::info("jump: Skyrim's jump is off, libratchet's is on{}",
 			Settings::Get().dashControl.empty() ? "" :

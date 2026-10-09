@@ -16,8 +16,11 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
+#include <ranges>
+#include <span>
 #include <string>
 #include <thread>
 

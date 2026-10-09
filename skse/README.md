@@ -143,7 +143,7 @@ The game runs in a small window in the corner behind other windows; `-Fullscreen
 screen. Screenshots (idle, each jump's top, double jump and glide, the heli-pack out, the end) go to
 `target/skse/shots/<run>/`. Other
 options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his front), `-NoShots`,
-`-Only <name>` (only the cases whose names contain it).
+`-Only <name>` (only the cases whose names contain it; `"guard|bear"` for several).
 
 ## How it works
 - **Input.** The keys bound to Skyrim's Jump control and to the dash's (INI `sDashControl`,
@@ -156,10 +156,15 @@ options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his fr
   its whole velocity goes to the controller (`SetLinearVelocityImpl`), with the controller's own
   gravity and air control (`acrobatics`) off. Skyrim does the collision. On landing, Skyrim takes
   over again.
-- **Ground dash.** Skyrim's on-ground state would move him by its own locomotion, so for the
-  sim's ground dash the controller is held in its air state every frame, with the sim's velocity
-  pressing him down onto the ground. A ray from his feet tells the sim he's still on the ground
-  (within 0.3 m).
+- **On the ground** (the sim's run, a dash, a wrench swing's lunge). Skyrim's ground state moves
+  him: its physics step (vfunc 8 of `bhkCharacterStateOnGround`, hooked) gets the sim's velocity
+  as `velocityMod`, in his own frame (x right, y forward, m/s). So Skyrim's slopes, stairs, small
+  edges and hold on the ground all work at Rift Apart's speed. Skyrim keeps that speed along the
+  ground; up or down a slope (as the rays find it) the velocity is made longer so his speed across
+  it is the sim's. The sim goes on from what he really does only when he went slower than it
+  asked (a wall). When Skyrim's state loses him over a bump with the ground still within 0.35 m,
+  the controller is held in its air state with the sim's velocity, along the slope under him and
+  up a step ahead (`bNativeGround = 0` does that all the time, the older way).
 - **Animations.** With `bRatchet = 1` his own clips play. Skyrim's behaviour graph (the hidden
   Dragonborn's, or the visible one with `bRatchet = 0`) gets its jump events: a takeoff for each
   jump and double jump, `JumpFall` at each top (alternated with `JumpFallDirectional` every 4 s,

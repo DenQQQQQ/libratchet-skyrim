@@ -44,6 +44,22 @@ namespace Anim
 		std::vector<float>            s;
 	};
 
+	// A clip to blend, as Bevy's animation graph blends them (the sandbox's: libratchet-anim gives
+	// Ratchet's list, Player gives Clank's).
+	struct Layer
+	{
+		enum class Kind : std::uint8_t
+		{
+			kBase,           // blended with the other base layers by weight
+			kBaseUpperBody,  // the same, on the upper body only (Library::SetUpperBody)
+			kAdditive,       // its keys are changes, added on top
+		};
+		const Clip* clip = nullptr;
+		float       time = 0.0f;  // seconds into it (wrapped or held by whoever plays it)
+		float       weight = 0.0f;
+		Kind        kind = Kind::kBase;
+	};
+
 	class Library
 	{
 	public:
@@ -58,6 +74,16 @@ namespace Anim
 		// Bevy's additive blend does it: translations added, rotations turned by
 		// slerp(identity, change, weight) after the pose's.
 		void AddAdditive(const Clip& a_clip, float a_t, float a_weight, Pose& a_pose) const;
+
+		// The joint a_name and those below it: the upper body, for kBaseUpperBody layers.
+		void SetUpperBody(std::string_view a_name);
+		// The pose the layers make, as Bevy makes it. Per joint and channel, the base layers that
+		// key it, in order: the first sets it, each next one is interpolated toward by its weight
+		// over the weights so far (so weights needn't add up to 1: the glove's hand at 20 is 20/21
+		// of its joints). A channel no base layer keys keeps a_pose's (last frame's). Then the
+		// additive layers: translation += weight × change, rotation = slerp(I, change, weight) ×
+		// rotation. Keys are sampled at each layer's time, clamped to the clip, rotations slerped.
+		void Mix(std::span<const Layer> a_layers, Pose& a_pose) const;
 		// A partial clip (it keys only some joints) at a_t over a_pose, at a_weight: the joints it
 		// keys go that far toward its pose, the rest stay (the glove's hand on whatever he does).
 		void Overlay(const Clip& a_clip, float a_t, bool a_loop, float a_weight, Pose& a_pose) const;
@@ -65,6 +91,37 @@ namespace Anim
 	private:
 		std::vector<Joint> _joints;
 		std::vector<Clip>  _clips;
+		std::vector<bool>  _upper;  // by joint
+	};
+
+	// Bevy's AnimationTransitions with its clips' clocks, for a host that picks its clips itself
+	// (Clank, as the sandbox's clank.rs plays him). Play starts a clip from 0 and fades the one
+	// playing out over a_fade (0 cuts); each Advance takes the weights first (the newest fading
+	// clip keeps its weight × what's left, the clip playing gets the rest), then the clocks (a
+	// one-shot holds at its end, finished), and drops the faded ones.
+	class Player
+	{
+	public:
+		void Play(const Clip* a_clip, float a_fade, bool a_loop);
+		void Advance(float a_dt);
+		// Base layers, oldest first, the clip playing last (its weight is what the fades leave).
+		void Layers(std::vector<Layer>& a_out) const;
+		const Clip* Current() const { return _main.clip; }
+		bool Finished() const { return _main.clip && !_main.loop && _main.time >= _main.clip->seconds; }
+		void Reset() { *this = Player{}; }
+
+	private:
+		struct Playing
+		{
+			const Clip* clip = nullptr;
+			float       time = 0.0f;
+			bool        loop = true;
+			float       weight = 1.0f;   // its own (a fading clip's declines)
+			float       decline = 0.0f;  // per second, while fading out
+			float       share = 1.0f;    // what it blends with this frame
+		};
+		Playing              _main;
+		std::vector<Playing> _fading;  // oldest first
 	};
 
 	// a = a + (b - a) * w, joint by joint (rotations by shortest-arc nlerp).

@@ -89,9 +89,9 @@ namespace AutoTest
 			// Up a 15° and a 30° ramp (a floor piece tilted), and up stone stairs
 			// (ImpExtIceStairs01_NoIce, 8.5 m long, 5.2 m up): the owner struggled on small uphills
 			// and stairs.
-			{ .name = "run up a 15 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 15.0f, .minClimb = 1.5f },
-			{ .name = "run up a 30 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 30.0f, .minClimb = 2.5f },
-			{ .name = "run up stairs", .hold = -1.0f, .runFor = 2.5f, .climb = 0x000C9B5D, .minClimb = 2.5f },
+			{ .name = "run up a 15 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 15.0f, .minClimb = 2.5f },
+			{ .name = "run up a 30 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 30.0f, .minClimb = 4.0f },
+			{ .name = "run up stairs", .hold = -1.0f, .runFor = 2.5f, .climb = 0x000C9B5D, .minClimb = 4.5f },
 			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
 			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.0f },
 			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
@@ -135,7 +135,7 @@ namespace AutoTest
 		constexpr float kFloorTolerance = 0.05f;     // landing height on a flat floor, metres
 		constexpr float kSettle = 1.5f;              // seconds stood still before each jump
 		constexpr float kLongFall = 0.3f;            // seconds: a fall in a run on the road longer than this fails it
-		constexpr float kTimeout = 90.0f;            // seconds in game for the whole run
+		constexpr float kTimeout = 180.0f;           // seconds in game for the whole run
 
 		struct State
 		{
@@ -377,6 +377,21 @@ namespace AutoTest
 			}
 		}
 
+		// The -Only filter: names containing any of its |-separated parts (all if it's empty).
+		bool Picked(std::string_view a_name)
+		{
+			if (s.only.empty()) {
+				return true;
+			}
+			for (const auto part : std::views::split(std::string_view(s.only), '|')) {
+				const std::string_view want(part.begin(), part.end());
+				if (!want.empty() && a_name.find(want) != std::string_view::npos) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 		void NextCase()
 		{
 			Input::SetTestStick(std::nullopt);
@@ -462,7 +477,8 @@ namespace AutoTest
 		}
 
 		// A static placed in the world for a case, turned to the start's heading.
-		RE::ObjectRefHandle Place(RE::FormID a_base, const RE::NiPoint3& a_at, float a_pitch = 0.0f)
+		// a_tilt: the reference's x and y angles (its z is the start's heading).
+		RE::ObjectRefHandle Place(RE::FormID a_base, const RE::NiPoint3& a_at, RE::NiPoint2 a_tilt = {})
 		{
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(a_base);
@@ -470,7 +486,7 @@ namespace AutoTest
 			if (!player || !base || !handler) {
 				return {};
 			}
-			return handler->CreateReferenceAtLocation(base, a_at, RE::NiPoint3{ a_pitch, 0.0f, s.startHeading }, player->GetParentCell(),
+			return handler->CreateReferenceAtLocation(base, a_at, RE::NiPoint3{ a_tilt.x, a_tilt.y, s.startHeading }, player->GetParentCell(),
 				player->GetWorldspace(), nullptr, nullptr, {}, false, false);
 		}
 
@@ -486,21 +502,43 @@ namespace AutoTest
 			}
 			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
 			const RE::NiPoint3 up{ 0.0f, 0.0f, 1.0f };
+			RE::ObjectRefHandle placed;
 			if (a_case.rampDeg > 0.0f) {
 				const float t = a_case.rampDeg * 3.14159265f / 180.0f;
 				const RE::NiPoint3 at = *s.startPos + ahead * (1.0f * Units() + kHalf * std::cos(t)) + up * (kHalf * std::sin(t));
-				s.placed.push_back(Place(kFloorBase, at, -t));
+				// A reference's x and y angles tilt its up axis to (-cos x sin y, sin x, cos x cos y)
+				// in the world (measured: an x angle alone tilted the floor about the world's x
+				// axis, not across the way he faces): rising ahead, it leans back from the way ahead.
+				const float n = std::sin(t);
+				const float x = std::asin(-n * ahead.y);
+				const float y = std::asin(std::clamp(n * ahead.x / std::cos(x), -1.0f, 1.0f));
+				placed = Place(kFloorBase, at, { x, y });
 			} else if (a_case.climb) {
 				// Its near end 1 m ahead (its bounds start 260 units back from its origin).
-				s.placed.push_back(Place(a_case.climb, *s.startPos + ahead * (1.0f * Units() + 260.0f)));
+				placed = Place(a_case.climb, *s.startPos + ahead * (1.0f * Units() + 260.0f));
 			}
+			s.placed.push_back(placed);
+			const auto ref = placed.get();
+			SKSE::log::info("autotest: {}: {} ({:08X}, 3D {})", a_case.name, ref ? "placed" : "couldn't place it", ref ? ref->GetFormID() : 0,
+				ref && ref->Get3D() ? "loaded" : "not loaded yet");
+		}
+
+		// The ground ahead of the start as rays find it now (metres: height), for the climbing
+		// cases' log.
+		void MeasureAhead(const Case& a_case)
+		{
+			if (!s.startPos) {
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 up{ 0.0f, 0.0f, 1.0f };
 			std::string heights;
 			for (int i = 0; i <= 10; ++i) {
 				const RE::NiPoint3 p = *s.startPos + ahead * (static_cast<float>(i) * Units());
 				const auto hit = Physics::Ray(p + up * (8.0f * Units()), p - up * (2.0f * Units()));
 				heights += hit ? std::format(" {}:{:+.2f}", i, (hit->point.z - s.startPos->z) / Units()) : std::format(" {}:none", i);
 			}
-			SKSE::log::info("autotest: {}: placed; the ground ahead (m: height){}", a_case.name, heights);
+			SKSE::log::info("autotest: {}: the ground ahead (m: height){}", a_case.name, heights);
 		}
 
 		// The wall: a flat Dragonsreach wall piece (WRIntCastleWallDoubleHighExStr01Quad, 14.6 m
@@ -922,7 +960,7 @@ namespace AutoTest
 			return {};
 		}
 		const Case& c = kCases[s.index];
-		if (!s.only.empty() && std::string_view(c.name).find(s.only) == std::string_view::npos) {
+		if (!Picked(c.name)) {
 			NextCase();
 			return {};
 		}
@@ -1002,6 +1040,9 @@ namespace AutoTest
 			s.elapsed = 0.0f;
 			if (c.ledgeAt > 0.0f) {
 				MeasureLedge(c);
+			}
+			if (c.rampDeg > 0.0f || c.climb) {
+				MeasureAhead(c);
 			}
 			if (c.duration > 0.0f) {
 				Combat::Select(c.shatterbomb ? Combat::Gun::kShatterbomb : Combat::Gun::kBurstPistol);
@@ -1088,14 +1129,16 @@ namespace AutoTest
 			} else {
 				s.fallFor = 0.0f;
 			}
-			if (t >= c.runFor) {
-				auto*       player = RE::PlayerCharacter::GetSingleton();
-				const float climbed = player && s.startPos ? (player->GetPosition().z - s.startPos->z) / Units() : 0.0f;
+			auto*       player = RE::PlayerCharacter::GetSingleton();
+			const float climbed = player && s.startPos ? (player->GetPosition().z - s.startPos->z) / Units() : 0.0f;
+			// A climb ends once he's that high (on he'd run off its far end).
+			const bool reached = c.minClimb > 0.0f && climbed >= c.minClimb;
+			if (t >= c.runFor || reached) {
 				std::string bad;
 				if (s.longestFall > kLongFall) {
 					bad += " long-fall";
 				}
-				if (c.minClimb > 0.0f && climbed < c.minClimb) {
+				if (c.minClimb > 0.0f && !reached) {
 					bad += " climb";
 				}
 				if (bad.empty()) {
@@ -1103,9 +1146,9 @@ namespace AutoTest
 				} else {
 					++s.failed;
 				}
-				SKSE::log::info("autotest: {} {}: {:.1f} m in {:.1f} s, {:+.2f} m up (at least {:.2f}), {} falls, the longest {:.3f} s (at most {:.2f}){}",
+				SKSE::log::info("autotest: {} {}: {:.1f} m in {:.2f} s, {:+.2f} m up (at least {:.2f}), {} falls, the longest {:.3f} s (at most {:.2f}){}",
 					bad.empty() ? "PASS" : "FAIL", c.name, player && s.startPos ? player->GetPosition().GetDistance(*s.startPos) / Units() : 0.0f,
-					c.runFor, climbed, c.minClimb, s.falls, s.longestFall, kLongFall, bad.empty() ? "" : " - off:" + bad);
+					t, climbed, c.minClimb, s.falls, s.longestFall, kLongFall, bad.empty() ? "" : " - off:" + bad);
 				NextCase();
 			}
 			return {};
@@ -1197,6 +1240,12 @@ namespace AutoTest
 	void OnLanded(const Jump& a_jump)
 	{
 		if (!s.active || s.done || s.index >= static_cast<int>(std::size(kCases))) {
+			return;
+		}
+		if (s.pressed < 0.0f) {
+			// Before the case began: off the last case's ramp or stairs as they went away.
+			SKSE::log::info("autotest: {}: a landing before it began ({:+.2f} m after {:.3f} s), not counted", kCases[s.index].name, a_jump.landDz,
+				a_jump.airTime);
 			return;
 		}
 		s.landed = true;
