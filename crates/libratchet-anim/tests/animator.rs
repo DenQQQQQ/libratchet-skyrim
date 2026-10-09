@@ -606,6 +606,49 @@ fn swings_from_the_pull_in_into_the_loop_and_jumps_off() {
 }
 
 #[test]
+fn the_hookshot_reels_him_in() {
+    let target = SwingTarget { position: Vec3::new(0.0, 7.0, 4.0), kind: SwingKind::Hook, axis: AHEAD, length: 0.0, min_range: None, max_range: None, id: 1 };
+    let mut h = Host::on(Level { floor: true, wall_x: None, targets: vec![target] }, Vec3::ZERO);
+    h.frame(still());
+    h.frame(Input { swingshot: true, ..still() });
+    assert_eq!((h.sim.state(), h.clip()), (MoveState::Hook, "hook_reel"));
+    assert!((h.weight("hook_reel") - FRAME / 0.25).abs() < 1e-5);
+}
+
+#[test]
+fn swings_the_wrench_in_its_combo_and_slams_from_the_air() {
+    let mut h = Host::new();
+    h.weapons.slot = Some(Slot::BurstPistol);
+    h.frames(5, still());
+    assert_eq!(h.clip(), "pistol_idle");
+    // A swing: the combo's first, cutting in over 0.06 s; the melee grip puts the gun's clips away.
+    h.frame(Input { melee: true, ..still() });
+    assert_eq!((h.sim.state(), h.clip()), (MoveState::Melee, "melee_1"));
+    assert!((h.weight("melee_1") - FRAME / 0.06).abs() < 1e-5);
+    // Pressed again in the swing, the next one.
+    let mut picks = vec![h.clip()];
+    for i in 0..60 {
+        h.frame(Input { melee: i % 10 == 5, ..still() });
+        if picks.last() != Some(&h.clip()) {
+            picks.push(h.clip());
+        }
+    }
+    assert_eq!(picks[..2], ["melee_1", "melee_2"], "{picks:?}");
+    // Melee in the air: the Hyper-Strike's hop, then its slam on landing.
+    let mut h = Host::new();
+    h.frames(5, still());
+    h.frame(jump());
+    h.frames(10, still());
+    h.frame(Input { melee: true, ..still() });
+    assert_eq!((h.sim.state(), h.clip()), (MoveState::Smash, "smash_intro"));
+    while h.sim.state() == MoveState::Smash {
+        h.frame(still());
+        assert!(h.time < 3.0);
+    }
+    assert_eq!((h.sim.state(), h.clip()), (MoveState::SmashLand, "smash"));
+}
+
+#[test]
 fn a_reset_starts_over_and_takes_the_counts_in() {
     let mut h = Host::new();
     h.weapons = AnimInput { slot: Some(Slot::BurstPistol), shots: 7, equips: 3, ..Default::default() };
@@ -622,6 +665,22 @@ fn a_reset_starts_over_and_takes_the_counts_in() {
     h.frame(still());
     assert!(h.layer("fire_pistol_additive").is_none());
     assert_eq!(h.anim.layers(), &[Layer { clip: h.index("pistol_idle"), time: FRAME, weight: 1.0, kind: LayerKind::Base }]);
+}
+
+#[test]
+fn a_hitch_counts_a_quarter_second_and_a_name_given_twice_the_last() {
+    // A long frame (a load screen): as with Bevy's clock, only 0.25 s of it.
+    let mut h = Host::new();
+    h.frame(still());
+    let before = h.layer("idle").unwrap().time;
+    h.anim.update(&h.sim, &AnimInput { dt: 3.0, scale: 1.0, ..h.weapons });
+    assert!((h.layer("idle").unwrap().time - before - 0.25).abs() < 1e-6);
+    // Two clips with one name: the last plays, as Bevy's glTF loader keeps it.
+    let mut clips = clips();
+    clips.push(ClipInfo::new("idle", 3.0));
+    let mut anim = Animator::new(&clips);
+    let layers = anim.update(&h.sim, &AnimInput { dt: FRAME, ..Default::default() });
+    assert_eq!(layers[0].clip, clips.len() - 1);
 }
 
 #[test]

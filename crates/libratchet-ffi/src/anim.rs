@@ -29,7 +29,7 @@ pub const RATCHET_SLOT_SHATTERBOMB: u8 = 2;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RatchetAnimInput {
-    /// Seconds since the last update.
+    /// Seconds since the last update (at most 0.25 s counts).
     pub dt: f32,
     /// The sim's size (as given to `ratchet_new` or `ratchet_set_scale`); 0 or less, or not a
     /// number: the sim's own.
@@ -117,9 +117,9 @@ fn kind_code(kind: LayerKind) -> u8 {
     }
 }
 
-/// An animator for the host's `count` clips, matched by name (a clip with a null name or one
-/// that isn't UTF-8 is never matched). Null if `clips` is null with a count, or there are more
-/// clips than a layer's index can say (65536).
+/// An animator for the host's `count` clips, matched by name (the last of two with one name; a
+/// clip with a null name or one that isn't UTF-8 is never matched). Null if `clips` is null with
+/// a count, or there are more clips than a layer's index can say (65536).
 ///
 /// # Safety
 /// `clips` must point to `count` clip infos whose names are null or null-terminated strings.

@@ -8,16 +8,19 @@
 //! sample, each at a time and a weight. Coordinates are libratchet's: Y up, metres, yaw
 //! `atan2(x, z)`.
 //!
-//! **Blending the layers** (what the sandbox's animation graph does with them):
+//! **Blending the layers** (what the sandbox's animation graph does with them), for each joint's
+//! translation, rotation and scale on its own:
 //! - Base layers ([`LayerKind::Base`], [`LayerKind::BaseUpperBody`]) first, in the order given.
-//!   For each joint, among the layers whose clip has a track for it: the first one's value,
-//!   then each next one moves it toward its own by its weight over the sum of the weights so
-//!   far (translations and scales by lerp, rotations by slerp). The weights needn't sum to 1:
-//!   the glove's hand pose weighs 20 and the wrench catch 6, so they win where they have tracks.
-//!   An upper-body layer is there only for the joints in the `spine_1` branch (`spine_1` and
-//!   everything under it); the others leave it out entirely.
+//!   Among the layers whose clip has a track for it: the first one's value, then each next one
+//!   moves it toward its own by its weight over the sum of the weights so far (translations and
+//!   scales by lerp, rotations by slerp). The weights needn't sum to 1: the glove's hand pose
+//!   weighs 20 and the wrench catch 6, so they win where they have tracks. An upper-body layer
+//!   is there only for the joints in the `spine_1` branch (`spine_1` and everything under it);
+//!   the others leave it out entirely.
 //! - Then the additive layers, in order, on top: translation += weight × the clip's, and
-//!   rotation = slerp(identity, the clip's, weight) × rotation.
+//!   rotation = slerp(identity, the clip's, weight) × rotation (they have no scales). With no
+//!   base layer's track to start from they start from identity and zero; what no layer has a
+//!   track for keeps the value it had.
 //! - Each layer is sampled at its time as is: loops come wrapped and one-shots held at their end.
 
 mod animator;
@@ -63,11 +66,12 @@ pub enum Slot {
 /// What the animator needs from the host each frame besides the sim.
 ///
 /// The counts (`shots`, `grenade_throws`, `equips`, `wrench_throws`, `wrench_catches`) are
-/// running totals the host keeps: one that changed since the last update starts its layer. The
-/// first update after [`Animator::new`] or [`Animator::reset`] only takes them in.
+/// running totals the host keeps, read whatever the slot: one that changed since the last
+/// update starts its layer. The first update after [`Animator::new`] or [`Animator::reset`] only
+/// takes them in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimInput {
-    /// Seconds since the last update.
+    /// Seconds since the last update (at most 0.25 s counts, as with Bevy's clock).
     pub dt: f32,
     /// The size the sim's tuning is scaled to (`Tuning::scaled`, 1 = Ratchet-sized): speeds and
     /// heights are taken back to Ratchet's size to compare with the clips'. 0 or less, or not a
@@ -147,7 +151,9 @@ impl Default for AnimInput {
 pub enum LayerKind {
     /// Blended with the other base layers by weight.
     Base,
-    /// A base layer for the upper body only (the `spine_1` branch): the wrench catch.
+    /// A base layer for the upper body only (the `spine_1` branch): the wrench catch. A host
+    /// whose skeleton has no `spine_1` leaves `throw_catch` out of its clips, as the sandbox then
+    /// has no catch.
     BaseUpperBody,
     /// Added on top of the blended base layers.
     Additive,
@@ -165,7 +171,9 @@ pub struct Layer {
 }
 
 /// The picked move clip's clock for its sounds, as the sandbox reads it: before this update
-/// moves the clocks on, so the sounds come a frame after the pose, as in the sandbox.
+/// moves the clocks on, so the sounds come a frame after the pose, as in the sandbox. (The
+/// sandbox leaves out the clips' `Play_FOL_ratchet_land`: it plays the landing sound at
+/// touchdown instead, not where the jump clip ends in the air.)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SoundClock {
     /// Index into the clips given to [`Animator::new`].

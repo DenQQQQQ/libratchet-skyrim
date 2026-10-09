@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use std::time::Duration;
 
+/// The longest frame Bevy's virtual clock lets through (seconds).
+const MAX_FRAME: f32 = 0.25;
+
 /// A clip node of the sandbox's animation graph: the host's clip (none for the swing loop's
 /// carrier, which only holds a weight), its length, and how it goes into the pose.
 #[derive(Clone, Debug)]
@@ -70,10 +73,8 @@ impl Builder<'_> {
 
 impl Graph {
     fn new(clips: &[ClipInfo]) -> Graph {
-        let mut by_name = HashMap::new();
-        for (i, c) in clips.iter().enumerate() {
-            by_name.entry(c.name.as_str()).or_insert(i);
-        }
+        // Of two clips with one name, the last (as Bevy's glTF loader keeps them).
+        let by_name: HashMap<&str, usize> = clips.iter().enumerate().map(|(i, c)| (c.name.as_str(), i)).collect();
         let mut b = Builder { clips, by_name, nodes: Vec::new() };
         // The move clips crossfade under the base blend; layers are added on top of it.
         let mut move_clips = HashMap::new();
@@ -111,12 +112,9 @@ impl Graph {
         let aim_layers = AIM_LAYERS.map(|name| b.add(name, LayerKind::Additive));
         let throw_layer = b.add(THROW_LAYER, LayerKind::Additive);
         let fire_layer = b.add(FIRE_LAYER, LayerKind::Additive);
-        let mut authored_speed = HashMap::new();
-        for c in clips {
-            if c.root_distance > 0.5 && c.seconds > 0.0 {
-                authored_speed.entry(c.name.clone()).or_insert(c.root_distance / c.seconds);
-            }
-        }
+        let authored_speed = b.by_name.iter().map(|(&name, &i)| (name, &clips[i]));
+        let authored_speed = authored_speed.filter(|(_, c)| c.root_distance > 0.5 && c.seconds > 0.0).map(|(name, c)| (name.to_string(), c.root_distance / c.seconds));
+        let authored_speed = authored_speed.collect();
         let swing_jump_peak = b.by_name.get("swing_jump").and_then(|&i| clips[i].jump_peak).filter(|t| t.is_finite() && *t >= 0.0);
         Graph {
             nodes: b.nodes,
@@ -258,9 +256,9 @@ pub struct Animator {
 }
 
 impl Animator {
-    /// An animator for the host's clips, matched by name (the first, if two share one). Clips
-    /// it doesn't look for are never played; ones it looks for and doesn't find are done
-    /// without, as in the sandbox.
+    /// An animator for the host's clips, matched by name (the last, if two share one, as Bevy's
+    /// glTF loader keeps them). Clips it doesn't look for are never played; ones it looks for and
+    /// doesn't find are done without, as in the sandbox.
     pub fn new(clips: &[ClipInfo]) -> Self {
         let graph = Graph::new(clips);
         let rig = Rig::new(graph.nodes.len());
@@ -279,8 +277,10 @@ impl Animator {
     /// returns the layers to sample (also [`Animator::layers`]): the base layers in the order
     /// to blend them, then the additive ones in the order to add them.
     pub fn update(&mut self, sim: &Ratchet, input: &AnimInput) -> &[Layer] {
-        // (A frame that takes no time, or makes no sense, moves nothing on.)
-        let dt = if input.dt.is_finite() && input.dt > 0.0 { input.dt } else { 0.0 };
+        // Bevy's clock adds at most 0.25 s a frame (`Time<Virtual>`'s default max delta), so a
+        // hitch or a load moves the clips on by no more. (A frame that makes no sense moves
+        // nothing on.)
+        let dt = if input.dt.is_finite() && input.dt > 0.0 { input.dt.min(MAX_FRAME) } else { 0.0 };
         let scale = if input.scale.is_finite() && input.scale > 0.0 { input.scale } else { sim.tuning().scale };
         let Animator { graph, rig, layers, clock } = self;
         layers.clear();

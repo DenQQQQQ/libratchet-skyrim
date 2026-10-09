@@ -219,23 +219,27 @@ void ratchet_wrench_free(RatchetWrench *wrench);
  * them. Once a frame, after that frame's ratchet_step calls, ratchet_anim_update picks the clips
  * from the sim's state and the host's weapons, and writes the layers to sample.
  *
- * Blending the layers (what the sandbox's animation graph does):
+ * Blending the layers (what the sandbox's animation graph does), for each joint's translation,
+ * rotation and scale on its own:
  * - The base layers (RATCHET_LAYER_BASE, RATCHET_LAYER_BASE_UPPER_BODY) first, in the order
- *   given. For each joint, among the layers whose clip has a track for it: the first one's
- *   value, then each next one moves it toward its own by weight / (the sum of the weights so
- *   far): lerp for translations and scales, slerp for rotations. The weights needn't sum to 1
- *   (the glove's hand pose weighs 20 and the wrench catch 6, so they win where they have
- *   tracks). An upper-body layer is there only for the joints in the spine_1 branch (spine_1 and
- *   everything under it); the other joints leave it out entirely.
+ *   given. Among the layers whose clip has a track for it: the first one's value, then each next
+ *   one moves it toward its own by weight / (the sum of the weights so far): lerp for
+ *   translations and scales, slerp for rotations. The weights needn't sum to 1 (the glove's hand
+ *   pose weighs 20 and the wrench catch 6, so they win where they have tracks). An upper-body
+ *   layer is there only for the joints in the spine_1 branch (spine_1 and everything under it);
+ *   the other joints leave it out entirely.
  * - Then the additive layers, in order: translation += weight * the clip's;
- *   rotation = slerp(identity, the clip's, weight) * rotation.
+ *   rotation = slerp(identity, the clip's, weight) * rotation (they have no scales). With no base
+ *   layer's track to start from they start from identity and zero; what no layer has a track for
+ *   keeps the value it had.
  * - Sample each clip at its layer's time as is: loops come wrapped, one-shots held at their end.
  */
 typedef struct RatchetAnim RatchetAnim;
 
 typedef struct RatchetClipInfo {
     const char *name;    /* its name (UTF-8) as the converter's ratchet.glb has it ("run",
-                            "wall_stick_left", "glide_lean_additive"); copied */
+                            "wall_stick_left", "glide_lean_additive"); copied. A skeleton with no
+                            spine_1 leaves "throw_catch" out, as the sandbox then has no catch */
     float seconds;       /* its length */
     float root_distance; /* metres its root moves over it at Ratchet's size, 0 if none: a walk or
                             run moving more than 0.5 m plays at the rate that keeps its feet planted */
@@ -250,10 +254,10 @@ enum {
 };
 
 /* The counts (shots, grenade_throws, equips, wrench_throws, wrench_catches) are running totals
-   the host keeps: one that changed since the last update starts its layer. The first update
-   after ratchet_anim_new or ratchet_anim_reset only takes them in. */
+   the host keeps, read whatever the slot: one that changed since the last update starts its
+   layer. The first update after ratchet_anim_new or ratchet_anim_reset only takes them in. */
 typedef struct RatchetAnimInput {
-    float dt;              /* seconds since the last update */
+    float dt;              /* seconds since the last update (at most 0.25 counts, as with Bevy's clock) */
     float scale;           /* the sim's size, as given to ratchet_new or ratchet_set_scale; <= 0 or not
                               a number: the sim's own */
     RatchetVec3 velocity;  /* how he really moves, m/s, sim axes: the step's velocity, or the host's
@@ -298,7 +302,8 @@ typedef struct RatchetAnimLayer {
 /* The picked move clip's clock for the sounds it calls for, as the sandbox reads it: before the
    update moves the clocks on, so the sounds come a frame after the pose. A sound t seconds into
    the clip is due when: restarted ? t <= time : time >= previous ? (previous < t && t <= time)
-   : (t > previous || t <= time) (around a loop's end). ratchet_anim_sound_due tells. */
+   : (t > previous || t <= time) (around a loop's end). ratchet_anim_sound_due tells. The sandbox
+   leaves out the clips' Play_FOL_ratchet_land: it plays the landing sound at touchdown instead. */
 typedef struct RatchetAnimClock {
     uint16_t clip;     /* index into the clips given to ratchet_anim_new */
     uint8_t restarted; /* 1: new since the last update (another clip, or the first) */
@@ -306,8 +311,8 @@ typedef struct RatchetAnimClock {
     float time;        /* its time now (a one-shot that's over may be a little past its end) */
 } RatchetAnimClock;
 
-/* An animator for the host's clips, matched by name. Null if clips is null with count > 0, or
-   count > 65536. Free with ratchet_anim_free. */
+/* An animator for the host's clips, matched by name (the last of two with one name). Null if clips
+   is null with count > 0, or count > 65536. Free with ratchet_anim_free. */
 RatchetAnim *ratchet_anim_new(const RatchetClipInfo *clips, uint32_t count);
 void ratchet_anim_free(RatchetAnim *anim);
 /* After a load or a teleport: nothing playing, no clip picked; the next update takes the counts in. */
