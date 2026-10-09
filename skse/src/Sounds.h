@@ -10,8 +10,11 @@ namespace Sounds
 	// At plugin load: SKSE/Plugins/RatchetMovement/sounds.txt. False: no sounds.
 	bool Load(const std::filesystem::path& a_pluginDir);
 
-	// A moment, at a_where (game units), a_after seconds from now.
-	void Play(std::string_view a_moment, const RE::NiPoint3& a_where, float a_after = 0.0f);
+	// A moment, at a_where (game units), a_after seconds from now. With a_owner, its sounds belong
+	// to something (a Shatterbomb in the air): they follow it, and stop with it.
+	void Play(std::string_view a_moment, const RE::NiPoint3& a_where, float a_after = 0.0f, std::string_view a_owner = {});
+	void Follow(std::string_view a_owner, const RE::NiPoint3& a_where);
+	void StopOwned(std::string_view a_owner);
 	// A looping moment (the glide's heli, the thrown wrench's whir): played again each time it
 	// ends, at a_where, until Stop.
 	void Loop(std::string_view a_moment, const RE::NiPoint3& a_where);

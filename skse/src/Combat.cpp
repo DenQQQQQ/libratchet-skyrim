@@ -78,6 +78,7 @@ namespace Combat
 			RE::NiPoint3 velocity;  // m/s, Skyrim's axes
 			float        age = 0.0f;
 			float        spin = 0.0f;
+			std::string  sounds;    // its throw's sounds belong to it (its flight's hum stops at the blast)
 		};
 
 		struct State
@@ -119,6 +120,9 @@ namespace Combat
 			bool              cooking = false;
 			std::vector<Bomb> bombs;
 			std::uint32_t     bombThrows = 0;
+			std::uint32_t     bombsMade = 0;  // for each bomb's sounds' name
+			// Shots on their way to someone: the assault they are, when the bolt gets there.
+			std::vector<std::pair<RE::ActorHandle, float>> shotAt;
 			float             sinceBlast = 100.0f;
 			// Where he was at the last step, and in which world (a worldspace, or an interior cell).
 			std::optional<RE::NiPoint3> lastAt;
@@ -458,10 +462,13 @@ namespace Combat
 				to = target - hand;
 			}
 			const RE::NiPoint3 v = LobVelocity(hand / u, target / u, kBombSpeed * s, kBombGravity * s);
-			c.bombs.push_back({ hand, v });
+			const std::string sounds = std::format("shatterbomb {}", ++c.bombsMade);
+			c.bombs.push_back({ hand, v, 0.0f, 0.0f, sounds });
 			c.sinceShot = 0.0f;
 			++c.tally.bombs;
-			Sounds::Play("grenade_throw", hand);
+			// Its throw: the toss, and its flight's hum riding with it until the blast (the game's
+			// explosion event stops them; the sandbox's sounds owned by the grenade).
+			Sounds::Play("grenade_throw", hand, 0.0f, sounds);
 			AutoTest::OnMove("bomb_thrown");
 			SKSE::log::info("combat: a Shatterbomb leaves his hand for a point {:.1f} m away ({:.1f} m/s, {:.0f}° up)", to.Length() / u,
 				v.Length(), std::asin(std::clamp(v.z / std::max(v.Length(), 1e-4f), -1.0f, 1.0f)) * 57.29578f);
@@ -523,9 +530,11 @@ namespace Combat
 					blast = b.at;
 				}
 				if (blast) {
+					Sounds::StopOwned(b.sounds);
 					Blast(a_player, *blast);
 					it = c.bombs.erase(it);
 				} else {
+					Sounds::Follow(b.sounds, b.at);
 					++it;
 				}
 			}
@@ -543,6 +552,9 @@ namespace Combat
 				if (!c.bombs.empty() || c.thrown) {
 					SKSE::log::info("combat: he was carried off: {} Shatterbombs in the air dropped{}", c.bombs.size(),
 						c.thrown ? ", the wrench back in his hand" : "");
+				}
+				for (const auto& b : c.bombs) {
+					Sounds::StopOwned(b.sounds);
 				}
 				c.bombs.clear();
 				if (c.thrown) {
@@ -591,7 +603,15 @@ namespace Combat
 				return;
 			}
 			dir.Unitize();
-			Spells::Shoot(muzzle, Scatter(dir, c.spread), kShotDamage * Settings::Get().damageMult);
+			const RE::NiPoint3 shot = Scatter(dir, c.spread);
+			Spells::Shoot(muzzle, shot, kShotDamage * Settings::Get().damageMult);
+			// Who it's going to hit: Skyrim's bolt hurts them but raises nothing (the owner: the
+			// pistol made nobody hostile), so the assault is ours, when the bolt gets there.
+			if (const auto hit = Physics::Ray(muzzle, muzzle + shot * (kRange * Settings::Get().scale * Units()))) {
+				if (auto* target = hit->ref ? hit->ref->As<RE::Actor>() : nullptr; target && target != a_player && !target->IsDead()) {
+					c.shotAt.emplace_back(target->GetHandle(), hit->point.GetDistance(muzzle) / 2500.0f);
+				}
+			}
 			Sounds::Play("pistol_shot", muzzle);
 			if (c.shotsInARow == 3) {
 				AutoTest::OnMove("shot");  // his aim pose is in by then
@@ -751,6 +771,15 @@ namespace Combat
 		} else {
 			Shatterbomb(a_dt);
 		}
+		for (auto& [target, in] : c.shotAt) {
+			in -= a_dt;
+			if (in <= 0.0f) {
+				if (const auto actor = target.get()) {
+					Spells::Attacked(a_player, actor.get());
+				}
+			}
+		}
+		std::erase_if(c.shotAt, [](const auto& a_shot) { return a_shot.second <= 0.0f; });
 		if (c.bombIn >= 0.0f) {
 			c.bombIn -= a_dt;
 			if (c.bombIn < 0.0f) {
@@ -768,6 +797,9 @@ namespace Combat
 
 	void Reset()
 	{
+		for (const auto& b : c.bombs) {
+			Sounds::StopOwned(b.sounds);
+		}
 		c.bombs.clear();
 		c.bombIn = -1.0f;
 		c.bombTrigger = false;

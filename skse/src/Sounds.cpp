@@ -11,8 +11,10 @@ namespace Sounds
 	namespace
 	{
 		// The game mixes its moments by level (dB): a moment this loud plays at full volume, and
-		// quieter ones (his footsteps' foley at -9 dB) below it. Ours: Skyrim has no mixer to
-		// match, and its own sound volume applies on top.
+		// quieter ones (his footsteps' foley at -9 dB) below it. Louder ones play at full volume
+		// too, their layers in their own mix (the Shatterbomb's blast, at 35 dB, had all eight of
+		// its layers pushed to full and crackled). Ours: Skyrim has no mixer to match, and its own
+		// sound volume applies on top.
 		constexpr float kFullLevelDb = 15.0f;
 
 		struct File
@@ -45,7 +47,8 @@ namespace Sounds
 			float        volume = 1.0f;
 			float        frequency = 1.0f;
 			RE::NiPoint3 where;
-			std::string  loop;  // the looping moment it belongs to, if any
+			std::string  loop;   // the looping moment it belongs to, if any
+			std::string  owner;  // what it belongs to (a Shatterbomb in the air), if anything
 		};
 
 		// A looping moment: a round of its layers, and the next round when the longest is over
@@ -59,6 +62,7 @@ namespace Sounds
 		std::unordered_map<std::string, Moment>  g_moments;
 		std::vector<Pending>                     g_pending;
 		std::unordered_map<std::string, Looping> g_loops;
+		std::unordered_map<std::string, std::vector<RE::BSSoundHandle>> g_owned;
 		double                                   g_clock = 0.0;
 		std::uint32_t                            g_random = 0x2545F491u;
 		bool                                     g_warned = false;
@@ -99,9 +103,10 @@ namespace Sounds
 
 		// Each layer of a moment, one of its files, now or after its delay. Returns how long
 		// the round lasts (its longest layer, from now).
-		float Queue(const Moment& a_moment, const RE::NiPoint3& a_where, const std::string& a_loop, float a_after)
+		float Queue(const Moment& a_moment, const RE::NiPoint3& a_where, const std::string& a_loop, float a_after, const std::string& a_owner = {})
 		{
 			const float master = Settings::Get().soundVolume;
+			const float level = std::min(1.0f, std::pow(10.0f, (a_moment.levelDb - kFullLevelDb) / 20.0f));
 			float       longest = 0.0f;
 			for (const Layer& layer : a_moment.layers) {
 				if (layer.files.empty() || layer.volume <= 0.0f) {
@@ -112,10 +117,11 @@ namespace Sounds
 				Pending p;
 				p.in = layer.delay + a_after;
 				p.file = file.path;
-				p.volume = std::clamp(std::pow(10.0f, (a_moment.levelDb - kFullLevelDb) / 20.0f) * layer.volume * master, 0.0f, 1.0f);
+				p.volume = std::clamp(level * layer.volume * master, 0.0f, 1.0f);
 				p.frequency = std::pow(2.0f, cents / 1200.0f);
 				p.where = a_where;
 				p.loop = a_loop;
+				p.owner = a_owner;
 				// A higher pitch plays the file faster.
 				longest = std::max(longest, p.in + file.seconds / p.frequency);
 				g_pending.push_back(std::move(p));
@@ -167,13 +173,40 @@ namespace Sounds
 		return !g_moments.empty();
 	}
 
-	void Play(std::string_view a_moment, const RE::NiPoint3& a_where, float a_after)
+	void Play(std::string_view a_moment, const RE::NiPoint3& a_where, float a_after, std::string_view a_owner)
 	{
 		const auto it = g_moments.find(std::string(a_moment));
 		if (it == g_moments.end() || Random01() >= it->second.chance) {
 			return;
 		}
-		Queue(it->second, a_where, {}, a_after);
+		Queue(it->second, a_where, {}, a_after, std::string(a_owner));
+	}
+
+	void Follow(std::string_view a_owner, const RE::NiPoint3& a_where)
+	{
+		const std::string owner(a_owner);
+		if (const auto it = g_owned.find(owner); it != g_owned.end()) {
+			for (auto& handle : it->second) {
+				handle.SetPosition(a_where);
+			}
+		}
+		for (auto& p : g_pending) {
+			if (p.owner == owner) {
+				p.where = a_where;
+			}
+		}
+	}
+
+	void StopOwned(std::string_view a_owner)
+	{
+		const std::string owner(a_owner);
+		if (const auto it = g_owned.find(owner); it != g_owned.end()) {
+			for (auto& handle : it->second) {
+				handle.FadeOutAndRelease(50);
+			}
+			g_owned.erase(it);
+		}
+		std::erase_if(g_pending, [&](const Pending& p) { return p.owner == owner; });
 	}
 
 	void Loop(std::string_view a_moment, const RE::NiPoint3& a_where)
@@ -218,6 +251,9 @@ namespace Sounds
 			const Pending started = std::move(p);
 			g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(i));
 			auto handle = Start(started);
+			if (!started.owner.empty() && handle.IsValid()) {
+				g_owned[started.owner].push_back(handle);
+			}
 			if (!started.loop.empty() && handle.IsValid()) {
 				if (const auto it = g_loops.find(started.loop); it != g_loops.end()) {
 					it->second.handles.push_back(handle);

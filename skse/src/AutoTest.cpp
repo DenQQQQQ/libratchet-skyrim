@@ -92,6 +92,9 @@ namespace AutoTest
 			// thrown at the cow 8 m ahead.
 			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
 			{ .name = "shatterbomb in first person", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true, .firstPerson = true },
+			// A neutral hunter (EncHunterImperialM, another than the wrench's), awake, shot from the
+			// hip: the shots have to make him fight back too (the owner: the pistol raised nothing).
+			{ .name = "a shot makes him fight", .hold = -1.0f, .duration = 2.0f, .targetAt = 6.0f, .fireFrom = 0.0f, .fireTo = 0.5f, .minDamage = 10.0f, .awake = true, .target = 0x00073FBD },
 			// Then a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
 			// owner: hits raised no hostility until a kill).
 			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },

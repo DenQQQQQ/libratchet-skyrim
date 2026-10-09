@@ -39,6 +39,8 @@ namespace Spells
 			e->data.delivery = a_delivery;
 			e->data.projectileBase = a_projectile;
 			e->data.flags.reset(RE::EffectSetting::EffectSettingData::Flag::kRecover);
+			// An attack, as Skyrim counts them (a hostile, detrimental effect from the player).
+			e->data.flags.set(RE::EffectSetting::EffectSettingData::Flag::kHostile, RE::EffectSetting::EffectSettingData::Flag::kDetrimental);
 			return e;
 		}
 
