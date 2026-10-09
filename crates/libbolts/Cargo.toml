@@ -1,0 +1,9 @@
+[package]
+name = "libbolts"
+description = "Ratchet & Clank-style bolt drops as an engine-independent library: the amount, the split into pickups, the burst, the rest and the swarm to the hero, and the HUD's tally."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
