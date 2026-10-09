@@ -1048,13 +1048,22 @@ namespace Combat
 
 	Hand InHand()
 	{
-		if (c.thrown) {
-			return Hand::kNone;  // it's flying
+		// The sandbox's (weapons.rs gun_visibility and weapon_away, wrench.rs held_wrench): a dash
+		// puts the weapon away for its length, a wall, a ledge or a swing until he's off it.
+		const auto state = c.simState;
+		const bool dashing = state == RATCHET_STATE_DASH || state == RATCHET_STATE_AIR_DASH;
+		const bool holstered = state >= RATCHET_STATE_WALL_STICK && state <= RATCHET_STATE_SWING_JUMP;
+		const bool swinging = state == RATCHET_STATE_MELEE || state == RATCHET_STATE_SMASH || state == RATCHET_STATE_SMASH_LAND;
+		if (c.thrown || dashing || holstered) {
+			return Hand::kNone;
 		}
-		if (c.sinceWrench < 0.5f || c.releaseIn >= 0.0f) {
+		// The wrench: while he swings and 0.35 s after (SHOW_AFTER), and on its way out of his hand.
+		if (swinging || c.sinceWrench < 0.35f || c.releaseIn >= 0.0f) {
 			return Hand::kWrench;
 		}
-		if (c.gun == Gun::kBurstPistol && (c.aim || c.sinceShot < 2.0f)) {
+		// The Burst Pistol: whenever it's the weapon, unless the wrench's throw has his hand (from
+		// the throw until just after the catch).
+		if (c.gun == Gun::kBurstPistol && c.throwAnim <= 0.0f) {
 			return Hand::kPistol;
 		}
 		return Hand::kNone;  // (the Shatterbomb's glove is on his hand while it's out)
