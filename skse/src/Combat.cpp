@@ -117,6 +117,7 @@ namespace Combat
 			float          releaseIn = -1.0f;   // winding up: seconds until it leaves his hand
 			RE::NiPoint2   throwView;           // the camera's flat forward at the press
 			bool           faceThrow = false;   // he turns that way at the next step
+			bool           meleeHeld = false;   // the melee button at the last step (pressed while aiming, it throws)
 			RatchetWrench* thrown = nullptr;    // in the air
 			RE::NiPoint3   wrenchAt;            // where it is, game units
 			float          wrenchSpin = 0.0f;
@@ -874,10 +875,13 @@ namespace Combat
 			Pick(*c.requested);
 			c.requested.reset();
 		}
-		// The throw: on its press, unless the wrench is out already or he's busy (dashing,
-		// swinging, on a wall or ledge).
+		// The throw: on its press, or melee pressed while aiming (Rift Apart's, and the sandbox's
+		// throw_button), unless the wrench is out already or he's busy (dashing, swinging, on a
+		// wall or ledge).
 		const bool throwHeld = t.throwWrench || Input::ControlHeld(s.throwControl);
-		if (throwHeld && !c.throwHeld && !c.thrown && c.releaseIn < 0.0f && CanFire(a_state)) {
+		const bool aimedMelee = c.aim && c.melee && !c.meleeHeld;
+		c.meleeHeld = c.melee;
+		if (((throwHeld && !c.throwHeld) || aimedMelee) && !c.thrown && c.releaseIn < 0.0f && CanFire(a_state)) {
 			c.releaseIn = kThrowRelease;
 			c.throwAnim = 1.4f;  // the sandbox's THROW_ANIM
 			c.throwView = a_view;

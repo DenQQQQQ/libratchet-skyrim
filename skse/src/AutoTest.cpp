@@ -31,7 +31,7 @@ namespace AutoTest
 			float       melee[3] = { -1.0f, -1.0f, -1.0f };  // wrench presses (one frame each), s from the start
 			float       fireFrom = -1.0f;  // the trigger held from here to fireTo (s)
 			float       fireTo = -1.0f;
-			bool        aim = false;       // and the aim button with it
+			bool        aim = false;       // and the aim button with it (the whole fight if there's no firing)
 			float       minDamage = 0.0f;
 			int         minHits = 0;
 			float       throwAt = -1.0f;   // the wrench thrown (one frame), s from the start
@@ -104,6 +104,8 @@ namespace AutoTest
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
+			// Melee while aiming throws the wrench (Rift Apart's, and the sandbox's).
+			{ .name = "melee while aiming throws", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .melee = { 0.4f, -1.0f, -1.0f }, .aim = true, .minDamage = 25.0f, .minHits = 1 },
 			// A Shatterbomb (170.5 damage within 1 m of its blast, 85.25 at 6 m): wound up 0.4 s,
 			// thrown at the cow 8 m ahead.
 			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
@@ -1158,7 +1160,7 @@ namespace AutoTest
 				fight.melee = fight.melee || (at >= 0.0f && t >= at && t < at + a_dt);
 			}
 			fight.fire = c.fireFrom >= 0.0f && t >= c.fireFrom && t < c.fireTo;
-			fight.aim = c.aim && fight.fire;
+			fight.aim = c.aim && (fight.fire || c.fireFrom < 0.0f);
 			fight.throwWrench = c.throwAt >= 0.0f && t >= c.throwAt && t < c.throwAt + a_dt;
 			Combat::SetTestButtons(fight);
 			if (t >= c.duration && (!a_busy || t >= c.duration + 3.0f)) {
