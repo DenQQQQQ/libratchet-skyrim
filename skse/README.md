@@ -128,9 +128,8 @@ selected, and follows the log.
   jumps at a capped wall 3 m ahead, and has to catch its lip and climb up on a new press.
 - Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
   Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb (also in
-  first person). Each passes
-  if the cow lost at least the expected damage (× the save's difficulty multiplier) from enough
-  hits.
+  first person). Each passes if the cow lost at least the expected damage (× the save's
+  difficulty multiplier) from enough hits.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor
