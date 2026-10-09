@@ -12,6 +12,8 @@
 //!                     sounds, carry, dashjump, throwswitch, strafejump, walljump, ledges,
 //!                     swingshot, turns, grenadeswitch)
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
+//!   --mute            start with the sound off (M toggles it); demos start muted unless
+//!                     --sound is given (a recording still gets its sounds from the log)
 
 mod camera;
 mod clank;
@@ -231,6 +233,7 @@ fn main() {
     let demo = args.iter().any(|a| a == "--demo");
     let record = arg("--record").map(PathBuf::from);
     let clean = args.iter().any(|a| a == "--clean");
+    let mute = args.iter().any(|a| a == "--mute") || (demo && !args.iter().any(|a| a == "--sound"));
     let scale = arg("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let configs_dir = arg("--configs")
         .or_else(|| std::env::var("RIFTAPART_CONFIGS").ok())
@@ -299,6 +302,7 @@ fn main() {
     })
     .insert_resource(camera_configs)
     .insert_resource(DebugOverlay(!clean))
+    .insert_resource(sound::Mute(mute))
     .init_resource::<Trail>()
     .init_resource::<ScriptedInput>()
     .init_resource::<MouseMelee>()
@@ -433,7 +437,7 @@ fn setup(
         Text::new(
             "WASD move  |  Space jump (tap/hold = higher, again in the air = double jump, hold = glide; on a wall: jump off)  |  Shift dash (also in the air)  |  Ctrl walk\n\
              E Swingshot (hold)  |  C let go of a ledge  |  1 Burst Pistol, 2 Shatterbomb  |  left mouse fire  |  F melee (the wrench), in the air: Hyper-Strike\n\
-             right mouse aim; melee while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  F1 hide/show this",
+             right mouse aim; melee while aiming = throw the wrench (Q: one-button throw)  |  Tab Ratchet/Dragonborn size  |  R reload tuning  |  T clear trail  |  Backspace respawn  |  click to grab the mouse, Esc to free it  |  M sound on/off  |  F1 hide/show this",
         ),
         DebugUi,
         TextFont::from_font_size(13.0),

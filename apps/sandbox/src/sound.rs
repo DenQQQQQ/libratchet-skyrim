@@ -118,6 +118,11 @@ impl Sounds {
     }
 }
 
+/// Sound off: everything still plays (muted) and is logged, so a recording keeps its
+/// soundtrack. M toggles it.
+#[derive(Resource, Default)]
+pub struct Mute(pub bool);
+
 /// While a demo records: every sound it plays, one line each ("seconds<TAB>file<TAB>volume<TAB>
 /// speed<TAB>once|loop[<TAB>moment]", or "seconds<TAB>moment<TAB>0<TAB>1<TAB>stop"), so
 /// tools/mix_demo_audio.py can lay the soundtrack under the recorded frames.
@@ -163,7 +168,11 @@ struct Retrigger {
 }
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<Sounds>().add_message::<SoundCue>().add_systems(Startup, load).add_systems(Update, (play, delayed, retrigger, stop_orphans).chain());
+    app.init_resource::<Sounds>()
+        .init_resource::<Mute>()
+        .add_message::<SoundCue>()
+        .add_systems(Startup, load)
+        .add_systems(Update, (toggle_mute, play, delayed, retrigger, stop_orphans).chain());
 }
 
 fn load(settings: Res<Settings>, assets: Res<AssetServer>, mut sounds: ResMut<Sounds>) {
@@ -227,9 +236,9 @@ fn falloff(distance: f32) -> f32 {
 /// Starts one sound now, and logs it when a demo records (an owned one with its owner's key,
 /// so the recording cuts it where its owner went).
 #[allow(clippy::too_many_arguments)]
-fn start(commands: &mut Commands, log: &mut String, now: f32, file: Handle<AudioSource>, volume: f32, speed: f32, looped: bool, tag: &Tag) {
+fn start(commands: &mut Commands, log: &mut String, now: f32, file: Handle<AudioSource>, volume: f32, speed: f32, looped: bool, tag: &Tag, muted: bool) {
     let mode = if looped { PlaybackMode::Loop } else { PlaybackMode::Despawn };
-    let settings = PlaybackSettings { mode, volume: Volume::Linear(MASTER * volume), speed, ..PlaybackSettings::ONCE };
+    let settings = PlaybackSettings { mode, volume: Volume::Linear(MASTER * volume), speed, muted, ..PlaybackSettings::ONCE };
     if let Some(path) = file.path() {
         let kind = match tag {
             Tag::Loop(m) => format!("loop\t{m}"),
@@ -268,6 +277,7 @@ fn play(
     mut cues: MessageReader<SoundCue>,
     mut sounds: ResMut<Sounds>,
     settings: Res<Settings>,
+    mute: Res<Mute>,
     players: Query<&Player>,
     loops: Query<(Entity, &LoopOf)>,
     mut commands: Commands,
@@ -340,33 +350,44 @@ fn play(
                     pending.insert(o.clone());
                 }
             } else {
-                start(&mut commands, &mut lines, now, file, volume, speed, looped, &tag(looped));
+                start(&mut commands, &mut lines, now, file, volume, speed, looped, &tag(looped), mute.0);
             }
         }
     }
     write_log(log.as_deref(), &lines);
 }
 
-fn delayed(time: Res<Time>, log: Option<Res<SoundLog>>, mut q: Query<(Entity, &mut Delayed)>, mut commands: Commands) {
+/// M turns the sound off or on, the sounds already playing included.
+fn toggle_mute(keys: Res<ButtonInput<KeyCode>>, mut mute: ResMut<Mute>, mut sinks: Query<&mut AudioSink>) {
+    if !keys.just_pressed(KeyCode::KeyM) {
+        return;
+    }
+    mute.0 = !mute.0;
+    for mut sink in &mut sinks {
+        if mute.0 { sink.mute() } else { sink.unmute() }
+    }
+}
+
+fn delayed(time: Res<Time>, log: Option<Res<SoundLog>>, mute: Res<Mute>, mut q: Query<(Entity, &mut Delayed)>, mut commands: Commands) {
     let mut lines = String::new();
     for (e, mut d) in &mut q {
         d.left -= time.delta_secs();
         if d.left <= 0.0 {
-            start(&mut commands, &mut lines, time.elapsed_secs(), d.file.clone(), d.volume, d.speed, d.looped, &d.tag);
+            start(&mut commands, &mut lines, time.elapsed_secs(), d.file.clone(), d.volume, d.speed, d.looped, &d.tag, mute.0);
             commands.entity(e).despawn();
         }
     }
     write_log(log.as_deref(), &lines);
 }
 
-fn retrigger(time: Res<Time>, log: Option<Res<SoundLog>>, mut sounds: ResMut<Sounds>, mut q: Query<&mut Retrigger>, mut commands: Commands) {
+fn retrigger(time: Res<Time>, log: Option<Res<SoundLog>>, mute: Res<Mute>, mut sounds: ResMut<Sounds>, mut q: Query<&mut Retrigger>, mut commands: Commands) {
     let mut lines = String::new();
     for mut r in &mut q {
         r.left -= time.delta_secs();
         if r.left <= 0.0 {
             r.left += r.every;
             if let Some((file, volume, speed)) = sounds.pick(&r.moment, r.layer) {
-                start(&mut commands, &mut lines, time.elapsed_secs(), file, volume, speed, false, &r.tag);
+                start(&mut commands, &mut lines, time.elapsed_secs(), file, volume, speed, false, &r.tag, mute.0);
             }
         }
     }
