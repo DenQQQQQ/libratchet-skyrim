@@ -544,3 +544,11 @@ The owner asked for Clank on his back.
   hand with the flight's transform still on it, so every swing after the first throw showed it
   about 1.5 m to his right (the test screenshots since the throw went in show it). It's put back
   in his hand's own space now; the swing after the throw has it in his hand.
+- **Test fixes.**
+  - The ledge case failed once in five runs: at the top of his jump he was only 0.47 m from the
+    wall, inside the wall stick's reach. One run reached it still rising (1.35 m up) and stuck
+    to the wall before the catch, which only looks on the way down. The wall is 3 m ahead now:
+    the catch comes 0.92-0.96 m out, outside the stick's reach. 4 of 4 runs passed.
+  - The fights' cow: moved back for the next fight with its AI off, only its position moved,
+    not its 3D. The pictures showed it by Ratchet while the shots, the thrown wrench and the
+    Shatterbomb hit its body 6 m out. Its 3D goes with it now (`Update3DPosition`).

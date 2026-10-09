@@ -95,7 +95,7 @@ namespace AutoTest
 			// below it and at most 3.5 m above where he last stood). A full jump tops out about a
 			// metre short of the wall, inside the catch's reach (1.2 m) and outside the wall
 			// stick's (0.775 m).
-			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 2.5f },
+			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -422,6 +422,9 @@ namespace AutoTest
 			}
 			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
 			target->SetPosition(*s.startPos + ahead * (a_metres * Units()) + RE::NiPoint3{ 0.0f, 0.0f, 0.2f * Units() }, true);
+			// Its 3D too: with its AI off it stays where the last fight left it otherwise (pictures
+			// showed the cow by him while its body was hit 6 m out).
+			target->Update3DPosition(true);
 			target->EnableAI(false);
 			auto* av = target->AsActorValueOwner();
 			av->SetBaseActorValue(RE::ActorValue::kHealth, 1000.0f);
@@ -536,10 +539,15 @@ namespace AutoTest
 			} else {
 				++s.failed;
 			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
 			const auto up = [](const RE::NiPoint3& a_p) { return s.jumpFrom ? (a_p.z - s.jumpFrom->z) / Units() : 0.0f; };
-			SKSE::log::info("autotest: {} {}: {}, {}, landed {:+.2f} m from the platform after {:.3f} s (the lip {:.2f} m up){}", bad.empty() ? "PASS" : "FAIL",
-				a_case.name, s.hungAt ? std::format("caught it hanging {:.2f} m up", up(*s.hungAt)) : "never caught it",
-				s.climbed ? "climbed" : "never climbed", a_jump.landDz, a_jump.airTime, a_case.ledgeUp + 0.05f, bad.empty() ? "" : " - off:" + bad);
+			const auto out = [&](const RE::NiPoint3& a_p) { return s.jumpFrom ? a_case.ledgeAt - (a_p - *s.jumpFrom).Dot(ahead) / Units() : 0.0f; };
+			SKSE::log::info("autotest: {} {}: {}, {}{}, landed {:+.2f} m from the platform after {:.3f} s (the lip {:.2f} m up){}", bad.empty() ? "PASS" : "FAIL",
+				a_case.name,
+				s.hungAt ? std::format("caught it {:.2f} m up, {:.2f} m out from the wall", up(*s.hungAt), out(*s.hungAt)) : "never caught it",
+				s.climbed ? "climbed" : "never climbed",
+				s.stuckAt ? std::format(", stuck to the wall {:.2f} m up, {:.2f} m out", up(*s.stuckAt), out(*s.stuckAt)) : "", a_jump.landDz, a_jump.airTime,
+				a_case.ledgeUp + 0.05f, bad.empty() ? "" : " - off:" + bad);
 		}
 
 		// The wall case: he stuck to the wall, jumped off it, and landed at least a metre further
@@ -948,6 +956,13 @@ namespace AutoTest
 					SKSE::log::info("autotest: {}: he's {:.2f} m from the start, the target {:.2f} m from him ({:.2f} m from the start)", c.name,
 						player->GetPosition().GetDistance(*s.startPos) / Units(), target->GetPosition().GetDistance(player->GetPosition()) / Units(),
 						target->GetPosition().GetDistance(*s.startPos) / Units());
+					// Where the camera and his drawn hand are from him (a picture showed him at the target).
+					const auto* camera = RE::PlayerCamera::GetSingleton();
+					const auto  hand = Model::GunHand();
+					SKSE::log::info("autotest: {}: the camera {:.2f} m from him, his hand drawn {:.2f} m from him, the target's 3D {:.2f} m from him", c.name,
+						camera && camera->cameraRoot ? camera->cameraRoot->world.translate.GetDistance(player->GetPosition()) / Units() : -1.0f,
+						hand ? hand->GetDistance(player->GetPosition()) / Units() : -1.0f,
+						target->Get3D() ? target->Get3D()->world.translate.GetDistance(player->GetPosition()) / Units() : -1.0f);
 				}
 			}
 			SKSE::log::info("autotest: {} ({}{}{}{}{}{})", c.name,
@@ -963,7 +978,12 @@ namespace AutoTest
 		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
 		s.heliSeen = s.heliSeen || Clank::HeliOut();
-		s.stuckSeen = s.stuckSeen || a_state == RATCHET_STATE_WALL_STICK;
+		if (a_state == RATCHET_STATE_WALL_STICK && !s.stuckSeen) {
+			s.stuckSeen = true;
+			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && c.ledgeAt > 0.0f) {
+				s.stuckAt = player->GetPosition();
+			}
+		}
 		// Once the heli-pack is all the way out (the glide's own clip), a picture of it.
 		if (Clank::CurrentClip() == "glide" && std::ranges::find(s.shotsThisCase, "heli") == s.shotsThisCase.end()) {
 			OnMove("heli");
