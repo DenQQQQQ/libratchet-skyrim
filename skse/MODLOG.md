@@ -878,3 +878,7 @@ place was tested. Three new cases strafe 0.4 s with aim held (right, left, back:
 way is the start's room) and jump: `strafe_jump_e`, `_w` and `_s` play after `strafe_walk_e/w/s`,
 and the picture at the top of the right one shows him upside down mid-cartwheel.
 
+Two more cases check the Shatterbomb's busy rules: wound up, a dash at 0.2 s and the trigger let
+go during it (0.45 s) throws nothing; held through the dash and let go after it (1.1 s), the bomb
+goes and hits the cow (85 damage). Fights can dash now (`dashAt`), and check how many bombs went.
+

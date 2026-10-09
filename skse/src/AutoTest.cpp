@@ -95,6 +95,8 @@ namespace AutoTest
 			float       aimBeside = 0.0f;
 			// Which way airStick holds the stick (x right, y forward; camera-relative).
 			RE::NiPoint2 stick{ 0.0f, 1.0f };
+			// A fight: exactly this many Shatterbombs thrown (< 0: not checked).
+			int         bombs = -1;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -148,6 +150,12 @@ namespace AutoTest
 			// thrown at the cow 8 m ahead.
 			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
 			{ .name = "shatterbomb in first person", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true, .firstPerson = true },
+			// The sandbox's busy rules (libarsenal's stow): let go during a dash, nothing is thrown;
+			// held through it and let go after, the throw goes (from 7 m on, at the cow 16 m out).
+			{ .name = "shatterbomb let go in a dash", .hold = -1.0f, .dashAt = 0.2f, .duration = 2.0f, .targetAt = 16.0f, .fireFrom = 0.0f, .fireTo = 0.45f, .shatterbomb = true,
+				.bombs = 0 },
+			{ .name = "shatterbomb held through a dash", .hold = -1.0f, .dashAt = 0.2f, .duration = 3.5f, .targetAt = 16.0f, .fireFrom = 0.0f, .fireTo = 1.1f, .minDamage = 75.0f,
+				.shatterbomb = true, .bombs = 1 },
 			// A neutral hunter (EncHunterImperialM, another than the wrench's), awake, shot from the
 			// hip: the shots have to make him fight back too (the owner: the pistol raised nothing).
 			{ .name = "a shot makes him fight", .hold = -1.0f, .duration = 2.0f, .targetAt = 6.0f, .fireFrom = 0.0f, .fireTo = 0.5f, .minDamage = 10.0f, .awake = true, .target = 0x00073FBD },
@@ -853,6 +861,9 @@ namespace AutoTest
 			if (tally.hits < a_case.minHits) {
 				bad += " hits";
 			}
+			if (a_case.bombs >= 0 && tally.bombs != a_case.bombs) {
+				bad += " bombs";
+			}
 			const bool fighting = Target() && Target()->IsInCombat();
 			if (a_case.awake && !fighting) {
 				bad += " not-in-combat";
@@ -1537,6 +1548,11 @@ namespace AutoTest
 			}
 			Buttons jump;
 			jump.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
+			// A dash in the fight (the Shatterbomb's busy rules), pressed one frame.
+			if (c.dashAt >= 0.0f && t >= c.dashAt && !s.dashPressed) {
+				s.dashPressed = true;
+				jump.dash = true;
+			}
 			return jump;
 		}
 		if (c.runFor > 0.0f) {
