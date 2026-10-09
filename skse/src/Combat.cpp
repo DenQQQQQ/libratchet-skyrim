@@ -118,6 +118,7 @@ namespace Combat
 			RE::NiPoint2   throwView;           // the camera's flat forward at the press
 			bool           faceThrow = false;   // he turns that way at the next step
 			bool           meleeHeld = false;   // the melee button at the last step (pressed while aiming, it throws)
+			bool           meleeLatched = false;  // a press held through a block (aiming, the wrench out) swings no more
 			RatchetWrench* thrown = nullptr;    // in the air
 			RE::NiPoint3   wrenchAt;            // where it is, game units
 			float          wrenchSpin = 0.0f;
@@ -715,7 +716,9 @@ namespace Combat
 		{
 			const Spread& spread = c.aim ? kAimedSpread : kHipSpread;
 			c.cooldown = std::max(0.0f, c.cooldown - a_dt);
-			if (!c.fire || !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f) {
+			// (Not while the wrench's throw has his hand, until just after the catch: the gun is
+			// put away.)
+			if (!c.fire || !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f) {
 				c.spread = std::max(spread.min, c.spread - spread.recover * a_dt);
 				c.shotsInARow = 0;
 				return;
@@ -888,11 +891,22 @@ namespace Combat
 			c.faceThrow = true;
 		}
 		c.throwHeld = throwHeld;
-		// No swings while aiming, or while the wrench is out of his hand (the sandbox's rule).
-		a_in.melee = c.melee && !c.aim && !c.thrown && c.releaseIn < 0.0f ? 1 : 0;
+		// No swings while aiming, or while the wrench is out of his hand; and a press held through
+		// that doesn't swing once it's back, until it's let go (the sandbox's rule, as the game's).
+		const bool blocked = c.aim || c.thrown || c.releaseIn >= 0.0f;
+		if (c.melee && (blocked || c.meleeLatched)) {
+			c.meleeLatched = true;
+			a_in.melee = 0;
+		} else {
+			c.meleeLatched = false;
+			a_in.melee = c.melee ? 1 : 0;
+		}
+		// Aiming faces the aim and strafes; so does firing from the hip and the moment after the
+		// newest shot, unless the wrench's throw has his hand (a gun put away doesn't fire).
+		const bool throwing = c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
 		if (c.aim) {
 			a_in.aiming = 1;
-		} else if ((c.fire && CanFire(a_state)) || c.sinceShot < kStrafeAfterShot) {
+		} else if (!throwing && ((c.fire && CanFire(a_state)) || c.sinceShot < kStrafeAfterShot)) {
 			a_in.aiming = 2;
 		}
 		if (a_in.aiming) {
