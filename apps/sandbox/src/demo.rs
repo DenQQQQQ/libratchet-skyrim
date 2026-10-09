@@ -79,6 +79,7 @@ pub fn add(app: &mut App, out: PathBuf, record: Option<PathBuf>, part: Option<&s
         Some("swingshot") => [vec![hold(1.5, Vec2::ZERO, false)], swingshot()].concat(),
         Some("turns") => [vec![hold(1.5, Vec2::ZERO, false)], turns()].concat(),
         Some("grenadeswitch") => [vec![hold(1.5, Vec2::ZERO, false)], grenade_switch()].concat(),
+        Some("bolts") => [vec![hold(1.5, Vec2::ZERO, false)], bolts()].concat(),
         _ => script(),
     };
     if let Some(dir) = &record {
@@ -704,6 +705,82 @@ fn grenade_switch() -> Vec<Act> {
         Act::AimAt(None),
         Act::Caption(""),
         hold(0.5, Vec2::ZERO, false),
+    ]
+}
+
+/// Bolts: the Burst Pistol knocks the lone dummy down and its bolts burst out and come to Ratchet
+/// standing by; then a Shatterbomb into the ring of dummies drops more, which lie there until he
+/// walks over. The counter (top right) adds them up.
+fn bolts() -> Vec<Act> {
+    use crate::weapons::Slot;
+    let arena = spots::ARENA;
+    let lone = arena + Vec3::new(22.0, 0.0, 4.0);
+    let ring = arena + Vec3::new(8.0, 0.0, 0.0);
+    // He throws from 18 m off, between the ring's dummies (so the grenade lands among them), out
+    // of the bolts' 10 m reach.
+    let toward = Vec3::new(0.819, 0.0, 0.574);
+    let throw_from = ring - toward * 18.0;
+    let facing = (-toward.x).atan2(-toward.z);
+    let walk = Vec2::new(toward.x, toward.z);
+    vec![
+        Act::ClearTrail,
+        Act::Slot(Slot::BurstPistol),
+        Act::Teleport(lone - Vec3::new(6.0, 0.0, 0.0)),
+        hold(0.12, Vec2::X, false),
+        Act::Follow { yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.15, distance: 4.5 },
+        Act::Watch { focus: lone + Vec3::new(0.5, 0.3, 0.0), yaw: 0.25, pitch: 0.5, distance: 14.0 },
+        Act::Caption("The Burst Pistol knocks a dummy down: it drops 20 bolts (the test dummy's worth)"),
+        hold(0.5, Vec2::ZERO, false),
+        // At its chest, and on along the line it's pushed back along.
+        Act::AimAt(Some(lone + Vec3::Y * 1.1)),
+        Act::Gun { trigger: true, aim: false },
+        hold(3.0, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        Act::AimAt(None),
+        Act::Caption("They burst out and land; within 10 m of him they come at once"),
+        hold(1.0, Vec2::ZERO, false),
+        Act::Shot("b0_pistol_bolts"),
+        Act::Caption("The rest come as he runs over"),
+        hold(1.3, Vec2::X, false),
+        hold(0.8, Vec2::ZERO, false),
+        Act::Caption("The counter: \"+N\" while bolts come in, the total 2 s after the last"),
+        hold(2.4, Vec2::ZERO, false),
+        // The Shatterbomb, thrown into the ring from out of range.
+        Act::Caption("A Shatterbomb into the ring of dummies, from 18 m away"),
+        Act::Slot(Slot::Shatterbomb),
+        Act::Teleport(throw_from),
+        hold(0.12, walk, false),
+        Act::Follow { yaw: facing, pitch: 0.15, distance: 4.5 },
+        Act::AimAt(Some(ring + Vec3::Y * 0.3)),
+        hold(0.8, Vec2::ZERO, false),
+        Act::Gun { trigger: true, aim: false },
+        hold(0.5, Vec2::ZERO, false),
+        Act::Gun { trigger: false, aim: false },
+        hold(0.45, Vec2::ZERO, false),
+        Act::Watch { focus: ring + Vec3::Y * 0.3, yaw: -1.0, pitch: 0.6, distance: 12.0 },
+        hold(0.35, Vec2::ZERO, false),
+        Act::Caption("Every dummy down drops its bolts: they burst out, bounce and come to rest"),
+        hold(0.5, Vec2::ZERO, false),
+        Act::Shot("b1_ring_burst"),
+        hold(1.6, Vec2::ZERO, false),
+        Act::AimAt(None),
+        Act::Caption("At rest they bob and spin; 20 bolts come as 20 bronze pickups"),
+        Act::Watch { focus: ring - toward * 2.0 + Vec3::Y * 0.2, yaw: -1.3, pitch: 0.55, distance: 4.0 },
+        hold(1.5, Vec2::ZERO, false),
+        Act::Shot("b2_ring_rest"),
+        hold(0.1, Vec2::ZERO, false),
+        Act::Caption("He walks over: once he's within 10 m they swarm into him"),
+        Act::Watch { focus: ring - toward * 5.0 + Vec3::Y * 0.5, yaw: -1.1, pitch: 0.5, distance: 15.0 },
+        hold(1.2, walk, false),
+        Act::Shot("b3_swarm"),
+        hold(1.6, walk, false),
+        hold(0.4, Vec2::ZERO, false),
+        Act::Shot("b4_counter_gain"),
+        Act::Caption("\"+N\" until 2 s after the last bolt, then the new total"),
+        hold(2.4, Vec2::ZERO, false),
+        Act::Shot("b5_counter_total"),
+        hold(1.6, Vec2::ZERO, false),
+        Act::Caption(""),
     ]
 }
 

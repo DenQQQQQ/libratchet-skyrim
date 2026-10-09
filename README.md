@@ -9,6 +9,9 @@ back how to move.
 - **`crates/libratchet-ffi`**: a C API (`include/ratchet.h`) so C/C++ hosts can use it.
 - **`crates/libarsenal`**: the weapons, the same way: triggers, ammo, spread, projectiles,
   lobbed grenades and explosions, from the game's weapon configs.
+- **`crates/libbolts`**: the bolts (the currency), the same way: what an enemy drops and how it
+  splits into pickups, the burst, bounces and rest, the swarm to the hero, and the HUD's
+  counter, by the game's rules.
 - **`apps/sandbox`**: a Bevy test course to feel and measure the movement.
 - **Planned**: a Skyrim SE host (SKSE plugin) so the Dragonborn moves like Ratchet. See
   [docs/skyrim-plan.md](docs/skyrim-plan.md).
@@ -26,6 +29,9 @@ Moves so far:
 
 Weapons so far: the Burst Pistol and the Shatterbomb, with aim mode (strafing,
 over-the-shoulder camera).
+
+Bolts: a dummy knocked down drops the game's test dummy's 20 bolts, which burst out, bounce,
+come to rest and swarm into Ratchet when he's near, counted on the game's bolt counter.
 
 Unofficial fan project, not affiliated with Insomniac Games, Sony, or Bethesda. Built with an AI
 coding agent (Claude Code).
@@ -60,18 +66,20 @@ python tools/extract_riftapart_ratchet.py --game "<your Rift Apart folder>" --al
 ```
 
 That makes `ratchet.glb`, `clank.glb`, `wrench.glb`, `burstpistol.glb`, `shatterbomb.glb`,
-`shatterbomb_glove.glb` and `testdummy.glb` (the game's test-dummy robot, which the combat dummies
-wear). The sandbox picks them up automatically: Ratchet plays Rift Apart's own idle, run, jump,
-double jump, fall, glide (the heli-pack's intro, swaying loop and lean), land, dash (in eight
-directions), air-dash, strafe-jump, wall, ledge, Swingshot, wrench and gun clips, per weapon
-grip. Clank rides on his
-back (backpack idle, heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
-hand, and the Shatterbomb's glove on it. Without them, you get a capsule with Lombax ears. Never
-share the `.glb` files: they're game data.
+`shatterbomb_glove.glb`, `testdummy.glb` (the game's test-dummy robot, which the combat dummies
+wear) and the bolts: `bolt_<bronze|silver|golden|platinum>_0<1-3>.glb`, the twelve pickups the
+game drops (`--character bolts` makes just those). The sandbox picks them up automatically:
+Ratchet plays Rift Apart's own idle, run, jump, double jump, fall, glide (the heli-pack's intro,
+swaying loop and lean), land, dash (in eight directions), air-dash, strafe-jump, wall, ledge,
+Swingshot, wrench and gun clips, per weapon grip. Clank rides on his back (backpack idle,
+heli-pack while gliding). The OmniWrench and the Burst Pistol appear in his
+hand, and the Shatterbomb's glove on it. Dropped bolts wear their tier's models. Without them,
+you get a capsule with Lombax ears (and rings for bolts). Never share the `.glb` files: they're
+game data.
 
-The weapon effects (muzzle flashes, bolts, impacts, shells, the Shatterbomb's blast) use the
-game's own effect textures, meshes and colours, exported the same way into
-`riftapart-assets/vfx/`:
+The weapon effects (muzzle flashes, the pistol's shots, impacts, shells, the Shatterbomb's
+blast) and the dropped bolts' glint use the game's own effect textures, meshes and colours,
+exported the same way into `riftapart-assets/vfx/`:
 
 ```bash
 python tools/extract_riftapart_vfx.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
@@ -79,9 +87,9 @@ python tools/extract_riftapart_vfx.py --game "<your Rift Apart folder>" --alert 
 
 Without them, the guns fire plain shapes.
 
-The sounds (steps, foley, jumps, the heli-pack, dashes, the wrench, the guns, the explosion)
-are the game's own too, extracted into `riftapart-assets/sounds/` with a map from gameplay moments
-and animation sound events to the files:
+The sounds (steps, foley, jumps, the heli-pack, dashes, the wrench, the guns, the explosion,
+collecting bolts) are the game's own too, extracted into `riftapart-assets/sounds/` with a map
+from gameplay moments and animation sound events to the files:
 
 ```bash
 python tools/extract_riftapart_sounds.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
@@ -124,7 +132,7 @@ peak height, air time and distance.
 
 `cargo run -p sandbox -- --demo` plays a scripted run and saves screenshots to `screenshots/`.
 Add `--record frames` to also save 30 fps frames for a video, `--clean` to hide the overlay, and
-`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump|walljump|ledges|swingshot`
+`--demo-part wrench|weapons|moves|combat|face|sounds|carry|dashjump|throwswitch|strafejump|walljump|ledges|swingshot|bolts`
 to play one section (combat: the combo's timing, aiming and throwing mid-jump, a Shatterbomb on the
 walk; face: his face through a jump; carry: the weapon in hand, the whole wrench after the
 combo, the Shatterbomb's glove, dashing while aiming; dashjump: jumps out of a dash beside a
@@ -132,7 +140,9 @@ running jump; throwswitch: switching weapons around a wrench throw; strafejump: 
 flips and a long glide; walljump: up the wall-jump shaft onto its ledge, a slide down a wall, and the plain walls beside it;
 ledges: falling short of a platform and catching its lip, then climbing up; the placed yellow ledges on
 a wall: grabbing one, going up to the next, jumping up over it, and letting go; swingshot: across
-the swing targets, then the Hookshot up onto a block, through his camera and again from the side).
+the swing targets, then the Hookshot up onto a block, through his camera and again from the side;
+bolts: a dummy knocked down with the Burst Pistol, then a Shatterbomb into a ring of them, their
+bolts bursting out, coming to rest and swarming into him, and the counter adding them up).
 
 ## Tests
 

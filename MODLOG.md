@@ -35,6 +35,125 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-09: bolts, the currency: libbolts, and drops in the sandbox
+
+Defeated dummies drop the game's bolts: they burst out, bounce, come to rest and swarm into
+Ratchet when he's near, with the game's models and collect sound, counted on the game's HUD
+counter. The rules live in a new engine-independent crate, so the Skyrim plugin can use the same
+ones later. A research workflow read them from the game (each finding re-checked by a second
+agent; the corrections won).
+
+### Read from RiftApart.exe
+- **What an enemy is worth:** its RelativeValue (its reward component: small enemies 1, medium
+  3, tanks 5, large 10-20, bosses 30; the test dummy 2) times the level's BoltMultiplier (the
+  default economy config's 10; Megalopolis 10, Sargasso 12.485, up to 81.66 in the finale),
+  rounded down, at least 1. The killing weapon's kBolts upgrade and armor perks multiply it too
+  (1 without them); difficulty never does. The test dummy is worth 20 bolts.
+- **The split into pickups:** a budget of
+  `int((sqrt(clamp((RV-1)/9, 0, 1)) + 1) x (clamp((LM-10)/90, 0, 1) + 1) x 15 + 0.5)` pickups
+  (15 to 30 at a multiplier of 10). While bolts and budget are left: the smallest pickup worth at
+  least bolts left / budget left (one of its three looks at random), else the first platinum one;
+  so big rewards lose bolts (RV 20 at the finale: 1633 computed, 1620 spawned) and the last
+  pickups can overpay (816 becomes 820). At a multiplier of 10: RV 1 is 10 bronze, RV 3 4 silver
+  + 18 bronze, RV 5 13 silver + 11 bronze, RV 20 16 gold + 13 silver + 1 bronze, the dummy 20
+  bronze.
+- **The pickups:** bronze 1, silver 3, gold 10, platinum 30 bolts, three looks each; PickupRange
+  10 m, but 6 m for `pup_Bolt_Golden_01` (its siblings are 10 m); they never decay.
+- **The burst:** from the enemy 1 m up (or its SpawnLoc, usually the chest), each at a random yaw;
+  (0, 2, 0) m/s plus 7.5 x (1 - 0.4667 u²) m/s any way round, 0.5 rad above level to straight up;
+  each with its own gravity, 12 to 18.75 m/s², and no drag. At most 200 fly at once (the rest wait
+  at the spawn point, and can be pulled from there) and 1024 lie in the level (past that, the
+  resting one farthest from the hero is collected, one a frame, credited).
+- **Flight:** exact under gravity, swept ahead (a 0.07 m sphere). A hit counts when the bolt moves
+  into the surface faster than 0.5 m/s. A wall (normal y < 0.8) bounces it back at half speed
+  while it has bounced fewer than 12 times; a floor, or the 13th wall, lands it 0.15 m above the
+  contact. Falling at 25 m/s it has fallen out of the level and is collected.
+- **At rest:** it bobs up to 0.1 m and back by a 16-step table, (1 - cos(i·π/8))·0.05, over a
+  random 2.5-5 s, and spins at π about an axis (u·0.5, 1, u·0.5).
+- **The pull:** only from rest (or waiting under the cap), when the hero's root, or his thrown
+  wrench, is within its range. A random 9-14 m/s, times 1 + 2 x clamp((d² - 625)/1875, 0, 1) for its
+  distance d when it starts. Each frame its step is that speed plus how far the hero moved along
+  the way to him; it aims off his bounding sphere's centre along its own random direction (any way
+  round, 0-45° up) by 0.85 of the distance less the step, at most 7.5 m, and moves its step toward
+  that point. Collected within 0.5 m of the centre, credited on arrival.
+- **The counter (its UI logic):** a gain adds to a "+N" while the total shown stays; 2.0 s after
+  the last gain the total takes it in; a loss, or a change from or to 0, shows at once; up for 3.5
+  s after any change; at most 9,999,999.
+- **Sound and effects:** `Play_PUP_bolt_collect` for each pickup collected; nothing for a drop or
+  a bounce. The approach loop (`Play_OBJ_Pickup_Bolt_Approach`) is on bronze bolts only, starting
+  15 m out. The glow (`pup_Bolt_Glow`) runs a one-shot glint sprite, `beacon_spike_flare_grey_sm`.
+
+### Built
+- **`crates/libbolts`** (pure Rust, glam): `bolt_amount`, `pickup_budget`, `split`; `Tier` and
+  `Kind` (the twelve pickups); `BoltParams` (the game's numbers, `scaled` for the Dragonborn:
+  distances, speeds and gravity, same timing); `BoltWorld` (`drop_reward`, `spawn`, `step` through
+  the host's `Collision` segment query, `pickups` with position, rotation and state, `collected`
+  each step); `Tally` (the counter); `Rng` (seeded xorshift, so runs repeat).
+- **Sandbox:** `bolts.rs`. Every dummy knocked down (any weapon: all hits go through
+  `combat::hit`, which now marks the knock-down once) drops the test dummy's reward from 1 m up.
+  The bolts step after the movement sim, against the level's blocks (`level::raycast`), around
+  Ratchet's feet and body centre and the thrown wrench. Each pickup wears its model
+  (`bolt_<tier>_0<n>.glb`; rings without them), twinkles with the glint when
+  `vfx/bolt_glint.png` is there (optional: the weapon effects' art doesn't wait for it), and
+  plays `bolt_collect` when collected. The counter sits at the top right, outside the debug
+  overlay, so clean recordings show it; the debug HUD has a bolts line.
+- **Demo:** `--demo-part bolts`: the Burst Pistol knocks the lone dummy down (its bolts come to
+  him as they land, the rest as he runs over), then a Shatterbomb from 18 m into the ring (out of
+  the bolts' reach) knocks its four down; a close look at them resting, then he walks in and they
+  swarm into him, the counter showing "+N" and then the total.
+- **The extractor** (the previous commit) makes the twelve pickup models, the plain bolt, the
+  collect and approach sounds and the glint.
+- **`tools/mix_demo_audio.py`:** escapes colons twice in its filter graph, so an absolute
+  `--assets` path (`G:/...`) works.
+
+### Tested
+- `cargo test -p libbolts`, 18 tests: the amounts and budgets (RV 1, 2, 3, 5, 20); the split's
+  examples, every look turning up, the finale's lost and overpaid bolts; the burst's speeds,
+  angles and gravities; a drop resting on a floor within 2 s at 0.15-0.25 m; walls bouncing at
+  half speed (and letting through only bolts slower than 0.5 m/s into them); the swarm collecting
+  all 200 bolts of an RV 20 drop, and nothing pulled in flight; a dummy's drop reaching a hero 4 m
+  off within 2.7 s; the thrown wrench pulling; golden 01's 6 m range; the 200 in-flight cap and
+  the queue (pullable); the 1024 cap taking the farthest resting bolts; falling out credited; the
+  same burst 1.55x larger on the same clock; a seed repeating a run; the counter's timing; the
+  13th wall landing a bolt; the bob table.
+- **Measured** (the demo, 30 fps recording, `target/wf-bolts/bolts.mp4`, not in the repo):
+  - the lone dummy went down at 4.76 s: 20 bronze pickups, all landed 1.37 s later; 11 came to
+    him as they landed (he stood 6 m from its spot), the rest as he ran over, the last at 7.57 s.
+    The counter: "1" at once (from 0), then "+19", then "20" 2 s after the last;
+  - the Shatterbomb put the ring's four dummies down at 12.77 s: 80 bronze pickups, all landed
+    1.58 s later; none moved while he stood 18 m off; walking in, the
+    first reached him at 17.27 s, the last at 19.88 s; "20 +80", then "100". 100 dropped, 100
+    collected, none left lying;
+  - the models: textured bronze nuts, bolts and gears about 0.2 m across, floating 0.15-0.25 m
+    over their shadows; the glint twinkles on a few at a time;
+  - the soundtrack during the swarm: about -26 dB mean, peaks -9 dB (80 collects, 4 layers each).
+
+### Derived or assumed
+- **A ray instead of the sweep:** each tick's move is one segment query; the game sweeps a
+  0.07 m sphere 0.16 s ahead. A bounce leaves the bolt 0.07 m off the wall, as the sphere would.
+- **Never into a surface** (ours, from the review): the game counts a hit only above 0.5 m/s
+  into it and flies on through slower ones; with a ray, steep bursts beside a wall drifted into
+  it (in a probe, 456 of 10,000 pickups dropped 0.1 m from a wall came to rest inside it). A
+  slow hit on a wall now slides the bolt along it, one on a floor lands it; tested over 50 drops
+  against a wall.
+- **The in-flight cap counts bursting bolts only**, not ones swarming to the hero.
+- **The swarm** follows the game's code as the review read it: the "hero moved" term is
+  measured per bolt from when its pull starts, along the way the bolt last moved, and a step
+  never goes past its aim point or the hero.
+- **The bob** is read linearly between the table's steps, from the bottom when the bolt lands.
+- **The spin:** π read as radians per second; each of the axis's two tilts its own draw in -1..1;
+  only at rest (whether it spins in flight isn't read).
+- **The glint's timing, size and brightness** (a 0.35 s twinkle every 0.8-2.5 s, 0.3 m, white
+  x3) are ours; its scale over life follows our reading of the game's curve keys.
+- **The counter** jumps to the new total (the game's count-up animation, in its UI script, isn't
+  read). It shows 3.5 s from the last change, so a gain's new total shows for the last 1.5 s;
+  whether the game restarts that when the total takes the gain in isn't read.
+- **Left out:** the approach loop (bronze only, starting at 15 m, past the 10 m pickup range,
+  so it isn't the swarm's sound and what sets it off is unclear); zero gravity; moving platforms;
+  hazard surfaces that send a bolt straight to the hero; AutoCollect and NoSpawn rewards;
+  Challenge Mode's multipliers; the 1 m collect radius during the slingshot spin; resting when
+  slower than 0.01 m/s; enemies on splines passing on their motion. Bolts have no C API yet.
+
 ## 2026-10-08 (night): Shatterbomb bugs: the sound after its blast, a throw kept through a switch
 
 Two bugs from the user's playtest, each root cause found by an agent and re-checked by another.

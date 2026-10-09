@@ -32,6 +32,8 @@ pub struct Dummy {
     pub health: f32,
     /// Seconds left lying down after running out of health.
     down: f32,
+    /// It has just gone down: its bolts are due (the bolts module drops them and clears this).
+    pub knocked_down: bool,
     fall_axis: Vec3,
     /// How tall its hit volume is.
     height: f32,
@@ -103,6 +105,7 @@ pub fn spawn_dummies(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, m
                     tilt: Vec3::ZERO,
                     health: DUMMY_HEALTH,
                     down: 0.0,
+                    knocked_down: false,
                     fall_axis: Vec3::X,
                     height: DUMMY_HEIGHT,
                     posed: false,
@@ -150,7 +153,8 @@ fn hit_point(d: &Dummy, from: Vec3) -> Vec3 {
     d.pos + Vec3::Y * d.height * 0.6 + toward * DUMMY_RADIUS
 }
 
-/// One dummy takes a hit from the direction of `from`.
+/// One dummy takes a hit from the direction of `from`. Every weapon's hits come through here,
+/// so each knock-down is seen once, whatever did it.
 pub fn hit(d: &mut Dummy, from: Vec3, knockback: f32, lift: f32, damage: f32) {
     let away = Vec3::new(d.pos.x - from.x, 0.0, d.pos.z - from.z).normalize_or(Vec3::X);
     let speed = (2.0 * SLIDE_DECEL * knockback.max(0.0)).sqrt();
@@ -158,8 +162,9 @@ pub fn hit(d: &mut Dummy, from: Vec3, knockback: f32, lift: f32, damage: f32) {
     d.stunned = STUN;
     d.flash = 0.1;
     d.health -= damage;
-    if d.health <= 0.0 {
+    if d.health <= 0.0 && d.down <= 0.0 {
         d.down = DOWN_TIME;
+        d.knocked_down = true;
         d.fall_axis = Vec3::new(away.z, 0.0, -away.x);
     }
 }
