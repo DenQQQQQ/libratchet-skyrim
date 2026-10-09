@@ -1,0 +1,9 @@
+[package]
+name = "libratchet-anim"
+description = "Ratchet's clip choice as an engine-independent library: from libratchet's state to the clips that play, their crossfades, clocks and layers."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+libratchet = { path = "../libratchet" }

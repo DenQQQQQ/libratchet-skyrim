@@ -3346,10 +3346,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libratchet-anim"
+version = "0.1.0"
+dependencies = [
+ "libratchet",
+]
+
+[[package]]
 name = "libratchet-ffi"
 version = "0.1.0"
 dependencies = [
  "libratchet",
+ "libratchet-anim",
 ]
 
 [[package]]

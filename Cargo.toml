@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/libratchet", "crates/libratchet-ffi", "crates/libarsenal", "apps/sandbox", "tools/gdeflate-ffi"]
+members = ["crates/libratchet", "crates/libratchet-anim", "crates/libratchet-ffi", "crates/libarsenal", "apps/sandbox", "tools/gdeflate-ffi"]
 
 [workspace.package]
 edition = "2024"

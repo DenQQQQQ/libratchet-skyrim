@@ -1,8 +1,12 @@
-//! C ABI for libratchet, so C/C++ hosts (an SKSE plugin for Skyrim) can drive the sim.
+//! C ABI for libratchet, so C/C++ hosts (an SKSE plugin for Skyrim) can drive the sim, and for
+//! libratchet-anim (`anim.rs`), so they can play Ratchet's clips as the sandbox does.
 //! The matching header is `include/ratchet.h`; keep the two in sync.
 //!
 //! Coordinates are libratchet's: Y up, metres. Hosts with other conventions convert at the
 //! boundary (Skyrim: Z up, about 70 units per metre).
+
+mod anim;
+pub use anim::*;
 
 use libratchet::glam::{Vec2, Vec3};
 use libratchet::{
@@ -326,8 +330,8 @@ fn state_code(s: MoveState) -> u32 {
 
 /// The C API's version (`RATCHET_API_VERSION` in ratchet.h): raised with every change to its
 /// structs or functions. Fields are only ever added at the end of a struct, never moved or
-/// removed.
-pub const RATCHET_API_VERSION: u32 = 1;
+/// removed. 2: the animation (`ratchet_anim_*`).
+pub const RATCHET_API_VERSION: u32 = 2;
 
 /// The API version this library was built with, for a host to check against the header it was
 /// built with (`RATCHET_API_VERSION`) before using anything else.
@@ -783,6 +787,49 @@ mod tests {
         assert_eq!(state, 12);
         assert!(last.has_ledge != 0 && (last.ledge_point.y - 5.0).abs() < 0.01 && last.ledge_normal_x < -0.99, "ledge {:?}", last.ledge_point);
         assert!((pos.y - (5.0 - Tuning::default().ledge.hang_down)).abs() < 0.05, "hangs at {}", pos.y);
+    }
+
+    /// The catch above, animated: the catch clip, the hang, and the let-go clip as he drops off
+    /// (the step's let-go event reaching the animator in its events).
+    #[test]
+    fn animates_a_ledge_catch_and_its_let_go_through_the_c_api() {
+        let names: Vec<std::ffi::CString> = libratchet_anim::clip_names().into_iter().map(|n| std::ffi::CString::new(n).unwrap()).collect();
+        let clips: Vec<RatchetClipInfo> = names.iter().map(|n| RatchetClipInfo { name: n.as_ptr(), seconds: 1.0, root_distance: 0.0, jump_peak: -1.0 }).collect();
+        let anim = unsafe { ratchet_anim_new(clips.as_ptr(), clips.len() as u32) };
+        let sim = ratchet_new(1.0);
+        unsafe { ratchet_set_world(sim, RatchetWorld { user: std::ptr::null_mut(), ledges: None, raycast: Some(block_raycast), swing_targets: None }) };
+        let mut pos = RatchetVec3 { x: 0.0, y: 5.6, z: 0.0 };
+        let face = RatchetInput { move_x: 1.0, ..Default::default() };
+        let mut picks: Vec<String> = vec![];
+        for frame in 0..200 {
+            let (mut events, mut velocity) = (0, RatchetVec3::default());
+            for tick in 0..2 {
+                let i = frame * 2 + tick;
+                let standing = i < 40;
+                let ground_distance = if standing { 0.0 } else { pos.y };
+                let contact = RatchetContact { grounded: standing as u8, has_ground_distance: 1, ground_distance, ..Default::default() };
+                // Hanging a while, then the drop button.
+                let input = if standing { face } else { RatchetInput { crouch: (300..304).contains(&i) as u8, ..Default::default() } };
+                let r = unsafe { ratchet_step(sim, 1.0 / 120.0, input, contact, pos) };
+                events |= r.events;
+                velocity = r.velocity;
+                if !standing {
+                    pos.y += r.velocity.y / 120.0;
+                }
+            }
+            let input = RatchetAnimInput { dt: 1.0 / 60.0, velocity, feet: pos, has_ground_distance: 1, ground_distance: pos.y, events, ..Default::default() };
+            unsafe { ratchet_anim_update(anim, sim, &input, std::ptr::null_mut(), 0) };
+            let pick = unsafe { CStr::from_ptr(ratchet_anim_clip_name(anim)) }.to_str().unwrap().to_string();
+            if picks.last() != Some(&pick) {
+                picks.push(pick);
+            }
+        }
+        unsafe {
+            ratchet_anim_free(anim);
+            ratchet_free(sim);
+        }
+        let at = picks.iter().position(|p| p == "ledge_from_fall").unwrap_or_else(|| panic!("no catch: {picks:?}"));
+        assert_eq!(picks[at..], ["ledge_from_fall", "ledge_idle", "ledge_drop", "fall"], "{picks:?}");
     }
 
     /// One Swingshot target, 7 m up and 4 m ahead.

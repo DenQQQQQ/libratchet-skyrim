@@ -11,3 +11,4 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 libratchet = { path = "../libratchet" }
+libratchet-anim = { path = "../libratchet-anim" }

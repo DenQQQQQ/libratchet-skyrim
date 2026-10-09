@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#define RATCHET_API_VERSION 1u
+#define RATCHET_API_VERSION 2u
 
 #ifdef __cplusplus
 extern "C" {
@@ -213,6 +213,118 @@ void ratchet_smash_info(const RatchetSim *sim, float *damage, float *radius);
 RatchetWrench *ratchet_wrench_throw(const RatchetSim *sim, RatchetVec3 from, RatchetVec3 dir);
 uint8_t ratchet_wrench_step(RatchetWrench *wrench, float dt, RatchetVec3 hand, uint8_t blocked, RatchetVec3 *position, float *spin);
 void ratchet_wrench_free(RatchetWrench *wrench);
+
+/* ---- Animation (API version 2; crates/libratchet-ffi/src/anim.rs) ----
+ * Which of Ratchet's clips play, with their crossfades and clocks, as the Bevy sandbox plays
+ * them. Once a frame, after that frame's ratchet_step calls, ratchet_anim_update picks the clips
+ * from the sim's state and the host's weapons, and writes the layers to sample.
+ *
+ * Blending the layers (what the sandbox's animation graph does):
+ * - The base layers (RATCHET_LAYER_BASE, RATCHET_LAYER_BASE_UPPER_BODY) first, in the order
+ *   given. For each joint, among the layers whose clip has a track for it: the first one's
+ *   value, then each next one moves it toward its own by weight / (the sum of the weights so
+ *   far): lerp for translations and scales, slerp for rotations. The weights needn't sum to 1
+ *   (the glove's hand pose weighs 20 and the wrench catch 6, so they win where they have
+ *   tracks). An upper-body layer is there only for the joints in the spine_1 branch (spine_1 and
+ *   everything under it); the other joints leave it out entirely.
+ * - Then the additive layers, in order: translation += weight * the clip's;
+ *   rotation = slerp(identity, the clip's, weight) * rotation.
+ * - Sample each clip at its layer's time as is: loops come wrapped, one-shots held at their end.
+ */
+typedef struct RatchetAnim RatchetAnim;
+
+typedef struct RatchetClipInfo {
+    const char *name;    /* its name (UTF-8) as the converter's ratchet.glb has it ("run",
+                            "wall_stick_left", "glide_lean_additive"); copied */
+    float seconds;       /* its length */
+    float root_distance; /* metres its root moves over it at Ratchet's size, 0 if none: a walk or
+                            run moving more than 0.5 m plays at the rate that keeps its feet planted */
+    float jump_peak;     /* seconds into it of its first JumpPeak event, < 0 if none: the swing
+                            jump plays so that it comes at the jump's top */
+} RatchetClipInfo;
+
+enum {
+    RATCHET_SLOT_NONE = 0,         /* no weapons at all: the empty-handed clips, nothing to aim */
+    RATCHET_SLOT_BURST_PISTOL = 1, /* the one-handed grip */
+    RATCHET_SLOT_SHATTERBOMB = 2,  /* the glove: the wrench's grip, and its hand pose */
+};
+
+/* The counts (shots, grenade_throws, equips, wrench_throws, wrench_catches) are running totals
+   the host keeps: one that changed since the last update starts its layer. The first update
+   after ratchet_anim_new or ratchet_anim_reset only takes them in. */
+typedef struct RatchetAnimInput {
+    float dt;              /* seconds since the last update */
+    float scale;           /* the sim's size, as given to ratchet_new or ratchet_set_scale; <= 0 or not
+                              a number: the sim's own */
+    RatchetVec3 velocity;  /* how he really moves, m/s, sim axes: the step's velocity, or the host's
+                              own where its movement moves him instead (Skyrim's on the ground);
+                              else the feet slide */
+    RatchetVec3 feet;      /* his feet, sim coordinates: the aim offsets look from 0.85 m (x scale) above */
+    uint8_t has_ground_distance;
+    float ground_distance; /* feet to ground, metres, as the last RatchetContact had it: a swing fired
+                              under 0.9 m (x scale) up starts with the pull in */
+    uint32_t events;       /* RATCHET_EVENT_* of every ratchet_step since the last update, or'ed
+                              (RATCHET_EVENT_LEDGE_DROPPED plays the let-go clip) */
+    uint8_t respawned;     /* he was put somewhere else since the last update: no landing or let-go
+                              clip from where he was */
+    uint8_t slot;          /* RATCHET_SLOT_*: the weapon out */
+    uint8_t aiming;        /* the aim button held */
+    uint8_t trigger;       /* the fire button held */
+    float stance;          /* seconds left of strafing after the newest shot (> 0: still strafing) */
+    uint32_t shots;        /* gun shots so far: each restarts the recoil layer */
+    uint32_t grenade_throws; /* Shatterbomb throws so far: each plays the underhand throw over his move */
+    uint8_t cooking;       /* a Shatterbomb throw winding up (the fire button held) */
+    uint32_t equips;       /* weapons drawn so far: each plays the draw for its grip */
+    RatchetVec3 aim_target; /* what the crosshair points at, sim coordinates */
+    uint8_t wrench_throwing; /* the wrench is out of his hand, from the throw until just after the catch:
+                                the melee grip, whatever weapon is out */
+    uint32_t wrench_throws;  /* wrench throws so far: each plays the throw layer */
+    uint32_t wrench_catches; /* catches so far: each plays the catch */
+} RatchetAnimInput;
+
+enum {
+    RATCHET_LAYER_BASE = 0,            /* blended with the other base layers by weight */
+    RATCHET_LAYER_BASE_UPPER_BODY = 1, /* a base layer for the spine_1 branch only (the wrench catch) */
+    RATCHET_LAYER_ADDITIVE = 2,        /* added on top of the blended base layers */
+};
+
+typedef struct RatchetAnimLayer {
+    uint16_t clip; /* index into the clips given to ratchet_anim_new */
+    uint8_t kind;  /* RATCHET_LAYER_* */
+    float time;    /* seconds into the clip, within its length */
+    float weight;
+} RatchetAnimLayer;
+
+/* The picked move clip's clock for the sounds it calls for, as the sandbox reads it: before the
+   update moves the clocks on, so the sounds come a frame after the pose. A sound t seconds into
+   the clip is due when: restarted ? t <= time : time >= previous ? (previous < t && t <= time)
+   : (t > previous || t <= time) (around a loop's end). ratchet_anim_sound_due tells. */
+typedef struct RatchetAnimClock {
+    uint16_t clip;     /* index into the clips given to ratchet_anim_new */
+    uint8_t restarted; /* 1: new since the last update (another clip, or the first) */
+    float previous;    /* its time at the last update, when restarted is 0 */
+    float time;        /* its time now (a one-shot that's over may be a little past its end) */
+} RatchetAnimClock;
+
+/* An animator for the host's clips, matched by name. Null if clips is null with count > 0, or
+   count > 65536. Free with ratchet_anim_free. */
+RatchetAnim *ratchet_anim_new(const RatchetClipInfo *clips, uint32_t count);
+void ratchet_anim_free(RatchetAnim *anim);
+/* After a load or a teleport: nothing playing, no clip picked; the next update takes the counts in. */
+void ratchet_anim_reset(RatchetAnim *anim);
+/* Once a frame, after that frame's ratchet_step calls: picks the clips and writes up to max layers
+   to out (may be null), the base layers in blend order, then the additive ones; returns how many.
+   There are never more than the clips given to ratchet_anim_new. The sim is only read. */
+uint32_t ratchet_anim_update(RatchetAnim *anim, const RatchetSim *sim, const RatchetAnimInput *input,
+                             RatchetAnimLayer *out, uint32_t max);
+/* The move clip picked last ("swing_loop" for the Swingshot's blend of five clips), "" before the
+   first update. Valid until the animator's next update, reset or free. */
+const char *ratchet_anim_clip_name(const RatchetAnim *anim);
+/* The picked clip's clock from the last update into out (may be null): 1, or 0 if there's no
+   clip to sound (none yet; the swing loop is a blend). */
+uint8_t ratchet_anim_clock(const RatchetAnim *anim, RatchetAnimClock *out);
+/* 1 if a sound t seconds into the picked clip is due this frame (see RatchetAnimClock). */
+uint8_t ratchet_anim_sound_due(const RatchetAnim *anim, float t);
 
 #ifdef __cplusplus
 }
