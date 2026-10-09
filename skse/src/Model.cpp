@@ -715,7 +715,9 @@ namespace Model
 			in.ground_distance = a_drive.groundDistance.value_or(0.0f);
 			in.events = a_drive.events;
 			in.respawned = respawned ? 1 : 0;
-			in.slot = static_cast<std::uint8_t>(weapons.shatterbomb ? RATCHET_SLOT_SHATTERBOMB : RATCHET_SLOT_BURST_PISTOL);
+			in.slot = static_cast<std::uint8_t>(weapons.gun == Combat::Gun::kShatterbomb ? RATCHET_SLOT_SHATTERBOMB :
+			                                    weapons.gun == Combat::Gun::kBurstPistol ? RATCHET_SLOT_BURST_PISTOL :
+			                                                                               RATCHET_SLOT_NONE);
 			in.aiming = weapons.aiming ? 1 : 0;
 			in.trigger = weapons.trigger ? 1 : 0;
 			in.stance = weapons.stance;

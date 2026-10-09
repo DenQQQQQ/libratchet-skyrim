@@ -979,3 +979,60 @@ Another agent compared the sandbox's `simulate()` and level queries with `Jump.c
   sandbox lands only on a top under his box); the old edge rule went with the single ray, and
   bringing it back is for a careful day.
 
+## 2026-10-09 (evening): his guns as Skyrim weapons
+
+The owner: "make the guns into weapons you have to equip in Skyrim", and with no gun "he should
+just have a wrench available to use". The OmniWrench is always his; the guns are given once (bolts
+and a weapons vendor come later; another agent is on the sandbox).
+
+### The plugin file
+
+`RatchetMovement.esl`, written by `skse/tools/ratchet_plugin.py` record by record (no Creation Kit,
+nothing of the game's in it): a light master on Skyrim.esm with two weapons, `RatchetBurstPistol`
+(0x800) and `RatchetShatterbomb` (0x801). One-handed (a dagger's animation type, for off foot),
+either hand, `VendorItemWeapon` (merchants buy them), their models Ratchet's own NIFs. The script
+reads the file back and checks every record's and group's size and the fixed-size fields. The
+game loads it as FE xxx 800 and FE xxx 801.
+
+`build.ps1` writes it with every build; `-Install` copies it to the mod's root and adds it to the
+Spire profile's `plugins.txt` and `loadorder.txt`. MO2 keeps its own list while it runs and wrote
+it back over the files when the test game closed (the plugin had loaded for that run): it has to
+be refreshed (F5) and the plugin ticked once, as the owner did.
+
+### How they work
+
+- **Given once a game:** both go into his inventory the first frame he's on foot, with Skyrim's
+  own "added" note. Whether a game has had them is kept in SKSE's co-save (a global in the plugin
+  would carry over into a new game started after a load: a co-save is reverted then).
+- **The gun is the one equipped** (either hand, the right first). Fill follows it each frame, as
+  the sandbox's pick: not while the wrench is out of his hand (it comes out after the catch), and
+  a Shatterbomb already leaving his hand goes first. Equipping is Skyrim's: the inventory, or a
+  favorite's hotkey; the plugin's own two keys and its hold on those favorites are off with the
+  file loaded.
+- **Neither equipped:** the sandbox without an arsenal. The wrench is in his hand throughout, the
+  aim and fire buttons do nothing (no strafing, no shots, melee swings with aim held), the
+  animator gets `RATCHET_SLOT_NONE` (the empty-handed set; the switch draws the wrench), and the
+  crosshair is hidden (the sandbox's: "shown while a gun is out").
+- Skyrim's own swing of them never comes on foot (its attacks and drawing are off there); the
+  equipped item's mesh is hidden with the Dragonborn's.
+
+### Tests
+
+- **The guns are given** (first): the file loaded, given this game, one of each in his inventory.
+- Each case gets its gun equipped before it starts (the Burst Pistol unless it says otherwise),
+  and the door case equips it again in the new place (a loaded save has its own gun equipped).
+- **No gun, the wrench alone:** aim and fire held through it, melee with them: no shots, no
+  strafing, the wrench in his hand every frame, and a hit. Against the cow 1.3 m out, it missed:
+  the cow, 2.5 m long, overlapped him as it was placed and shoved him 0.9 m aside, turning him
+  away (the combo and the Hyper-Strike see that shove too, but walk into the cow). The case uses a
+  hunter with his AI off instead (0.00 m shove).
+- The owner's latest save had a 9200 bounty in Whiterun: guards attacked on sight and hitting one
+  was no new crime. The run drops the bounty and the alarm on him at the load (clearing the bounty
+  alone left the guards hostile: `ProcessLists::StopCombatAndAlarmOnActor` too), and again before
+  the guard case. Nothing is saved.
+- A case name with a colon wrote its screenshots into an NTFS stream of a file `no_gun`: shot
+  names leave out what Windows keeps out of a file name now.
+- The owner's playtest: given once, the guns switched by equipping several times, and after a
+  save and a reload the co-save remembered they'd been given.
+- The full run: 46/46.
+

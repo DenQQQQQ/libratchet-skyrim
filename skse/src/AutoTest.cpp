@@ -6,6 +6,7 @@
 #include "Combat.h"
 #include "Fx.h"
 #include "Input.h"
+#include "Items.h"
 #include "Model.h"
 #include "Settings.h"
 #include "Physics.h"
@@ -103,6 +104,11 @@ namespace AutoTest
 			// The ledge case's top is a hair above his jump: he has to end up on it (the sandbox's
 			// step up onto a top within 0.35 m), not slide down its face.
 			bool        onTop = false;
+			// No gun out for this fight (with RatchetMovement.esl: neither equipped): the wrench in his
+			// hand throughout, and the aim and fire buttons doing nothing (no strafing, no shots).
+			bool        noGun = false;
+			// With RatchetMovement.esl: both guns have to be in his inventory, given this game.
+			bool        given = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -112,6 +118,7 @@ namespace AutoTest
 		// Pistol shot 11.36 at 6 shots/s from the hip and 3 aimed. The targets stand where every
 		// scale from 1 reaches.
 		constexpr Case kCases[] = {
+			{ .name = "the guns are given", .hold = -1.0f, .given = true },
 			{ "tap", 0.0f },
 			{ "short hold", 0.1f },
 			{ "medium hold", 0.15f },
@@ -155,6 +162,11 @@ namespace AutoTest
 			{ .name = "wrench thrown in a dash", .hold = -1.0f, .dashAt = 0.0f, .duration = 3.0f, .targetAt = 10.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.15f },
 			// Melee while aiming throws the wrench (Rift Apart's, and the sandbox's).
 			{ .name = "melee while aiming throws", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .melee = { 0.4f, -1.0f, -1.0f }, .aim = true, .minDamage = 25.0f, .minHits = 1 },
+			// No gun out: the fire and aim buttons held do nothing, and melee with them swings the
+			// wrench (the sandbox without an arsenal), at a hunter (EncHunterNordM, his AI off)
+			// ahead. (The cow that close overlapped him as it was placed, and shoved him aside.)
+			{ .name = "no gun, the wrench alone", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.3f, -1.0f, -1.0f }, .fireFrom = 0.0f,
+				.fireTo = 0.8f, .aim = true, .minDamage = 15.0f, .minHits = 1, .target = 0x00073FBF, .bombs = 0, .noGun = true },
 			// A Shatterbomb (170.5 damage within 1 m of its blast, 85.25 at 6 m): wound up 0.4 s,
 			// thrown at the cow 8 m ahead.
 			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
@@ -276,6 +288,12 @@ namespace AutoTest
 			bool                        climbed = false;
 			bool                        dropped = false;   // let go of it (a drop case)
 			int                         fightState = -1;   // the sim's state, last logged in a fight
+			// The case's gun: 0 not asked for yet, 1 asked for, 2 given up on (it never came out).
+			int                         gunStep = 0;
+			bool                        doorGunAsked = false;  // asked for again in a door case's new place
+			// A no-gun fight: whether he strafed, and whether the wrench was ever out of his hand.
+			bool                        strafed = false;
+			bool                        wrenchLeftHand = false;
 			// A door case: its step (0 shots, 1 through, 2 shots there), the time in it, how long he's
 			// stood in the new cell, where he was, the games loaded, and what the effects did there.
 			int                 doorStep = 0;
@@ -537,6 +555,10 @@ namespace AutoTest
 			s.climbed = false;
 			s.dropped = false;
 			s.fightState = -1;
+			s.gunStep = 0;
+			s.doorGunAsked = false;
+			s.strafed = false;
+			s.wrenchLeftHand = false;
 			s.wallPlaced = false;
 			s.onWall = -1.0f;
 			s.wallPress = 0.0f;
@@ -869,6 +891,24 @@ namespace AutoTest
 			return player && whiterun ? player->GetCrimeGoldValue(whiterun) : 0;
 		}
 
+		// A save he's wanted in: Whiterun's guards attack on sight, and a hit on one is no new
+		// crime. Forgiven for the run (nothing is saved): the bounty there, and the alarm everyone
+		// has raised on him (the guards stayed hostile with the bounty gone).
+		void Pardon()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* whiterun = RE::TESForm::LookupByID<RE::TESFaction>(0x000267EA);
+			auto* lists = RE::ProcessLists::GetSingleton();
+			if (!player || !whiterun || !lists) {
+				return;
+			}
+			if (const std::uint32_t bounty = player->GetCrimeGoldValue(whiterun); bounty > 0) {
+				player->ClearAllCrimeGold(whiterun);
+				SKSE::log::info("autotest: the save's bounty in Whiterun ({}) cleared for the run", bounty);
+			}
+			lists->StopCombatAndAlarmOnActor(player, false);
+		}
+
 		// What Skyrim multiplies the player's damage by at the save's difficulty (Master: 0.5).
 		float DifficultyMult()
 		{
@@ -879,6 +919,24 @@ namespace AutoTest
 			auto* settings = RE::GameSettingCollection::GetSingleton();
 			auto* setting = settings ? settings->GetSetting(kSettings[difficulty]) : nullptr;
 			return setting ? setting->GetFloat() : 1.0f;
+		}
+
+		const char* GunName(Combat::Gun a_gun)
+		{
+			return a_gun == Combat::Gun::kBurstPistol ? "Burst Pistol" : a_gun == Combat::Gun::kShatterbomb ? "Shatterbomb" : "no gun";
+		}
+
+		// The given case: with RatchetMovement.esl loaded, both guns in his inventory, given this game.
+		void JudgeGiven(const Case& a_case)
+		{
+			const int  pistols = Items::Count(Combat::Gun::kBurstPistol);
+			const int  bombs = Items::Count(Combat::Gun::kShatterbomb);
+			const auto equipped = Items::Equipped();
+			const bool ok = Items::Available() && Items::Given() && pistols >= 1 && bombs >= 1;
+			++(ok ? s.passed : s.failed);
+			SKSE::log::info("autotest: {} {}: RatchetMovement.esl {}, given {}, he carries {} Burst Pistol(s) and {} Shatterbomb(s), equipped: {}", ok ? "PASS" : "FAIL",
+				a_case.name, Items::Available() ? "loaded" : "NOT loaded", Items::Given() ? "yes" : "no", pistols, bombs,
+				equipped ? GunName(*equipped) : "neither");
 		}
 
 		// A fight is over: what the target lost against what it should have.
@@ -913,6 +971,20 @@ namespace AutoTest
 				SKSE::log::info("autotest: {}: the {}'s own clips: {}", a_case.name, a_case.weaponClipOnPistol ? "pistol" : "wrench", clips.empty() ? "none" : clips);
 				if (std::ranges::find(s.weaponClipsSeen, a_case.weaponClip) == s.weaponClipsSeen.end()) {
 					bad += " weapon-clip";
+				}
+			}
+			if (a_case.noGun) {
+				// The buttons a gun would take did nothing; the wrench never left his hand.
+				SKSE::log::info("autotest: {}: {} shots, {}strafed, the wrench {}", a_case.name, tally.shots, s.strafed ? "" : "never ",
+					s.wrenchLeftHand ? "out of his hand at times" : "in his hand throughout");
+				if (tally.shots > 0 || tally.throws > 0) {
+					bad += " fired";
+				}
+				if (s.strafed) {
+					bad += " strafed";
+				}
+				if (s.wrenchLeftHand) {
+					bad += " no-wrench";
 				}
 			}
 			if (a_case.crime) {
@@ -993,9 +1065,6 @@ namespace AutoTest
 				Combat::SetTestAim(player->GetPosition() + RE::NiPoint3{ std::sin(h), std::cos(h), 0.0f } * (3.0f * Units()));
 				Combat::SetTestButtons(Combat::TestButtons{ .fire = s.doorTime < 0.4f });
 			}
-			if (s.doorStep == 0 && s.doorTime == 0.0f) {
-				Combat::Select(Combat::Gun::kBurstPistol);
-			}
 			s.doorTime += a_dt;
 			const auto where = [](RE::TESObjectCELL* a_cell) { return a_cell ? std::string(a_cell->GetFormEditorID()) : std::string("?"); };
 			switch (s.doorStep) {
@@ -1027,7 +1096,12 @@ namespace AutoTest
 					auto*      loaded = cell ? cell->GetRuntimeData().loadedData : nullptr;
 					const bool through = std::string_view(a_case.door) == "load" ? s.loads > s.loadsBefore : cell != s.doorFrom;
 					s.doorSettle = through && loaded && loaded->cell3D && a_grounded && !a_busy ? s.doorSettle + a_dt : 0.0f;
-					if (s.doorSettle >= 1.0f) {
+					// The Burst Pistol out there too (a save loaded has its own gun equipped).
+					if (s.doorSettle >= 1.0f && Combat::Selected() != Combat::Gun::kBurstPistol && !s.doorGunAsked) {
+						s.doorGunAsked = true;
+						Combat::Select(Combat::Gun::kBurstPistol);
+					}
+					if (s.doorSettle >= 1.0f && Combat::Selected() == Combat::Gun::kBurstPistol) {
 						ThirdPerson();  // (a coc or a load can leave the camera in first person)
 						s.fxLeft = Fx::Live();
 						SKSE::log::info("autotest: {}: in {} now, {} effects alive", a_case.name, where(cell), s.fxLeft);
@@ -1315,7 +1389,11 @@ namespace AutoTest
 	void OnGameLoaded()
 	{
 		++s.loads;
-		if (!s.active || s.then.empty()) {
+		if (!s.active) {
+			return;
+		}
+		Pardon();
+		if (s.then.empty()) {
 			return;
 		}
 		// From the loaded game to the test place (no new-game questions on the way).
@@ -1419,6 +1497,9 @@ namespace AutoTest
 			// A fight's target, in place while he settles.
 			if (c.targetAt > 0.0f && s.startPos && !s.targetPlaced && s.settle > 0.0f) {
 				s.targetPlaced = true;
+				if (c.crime) {
+					Pardon();  // (he may be wanted again: the run's other fights, or the save)
+				}
 				PlaceTarget(c.targetAt, c.target);
 			}
 			if (c.wallAt > 0.0f && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
@@ -1439,8 +1520,25 @@ namespace AutoTest
 				PlacePlatform(c);
 				return {};
 			}
+			// The case's gun (the Burst Pistol unless it says), out before it starts: with
+			// RatchetMovement.esl it's equipped, which Skyrim does a frame or so later.
+			const Combat::Gun gun = c.noGun ? Combat::Gun::kNone : c.shatterbomb ? Combat::Gun::kShatterbomb : Combat::Gun::kBurstPistol;
+			if (s.gunStep == 0 && s.settle > 0.0f) {
+				s.gunStep = 1;
+				if (Combat::Selected() != gun) {
+					SKSE::log::info("autotest: {}: the {} out (from the {})", c.name, GunName(gun), GunName(Combat::Selected()));
+				}
+				Combat::Select(gun);  // (asked for even if it seems out: the first frames on foot still follow what's equipped)
+			}
 			if (s.settle < kSettle) {
 				return {};
+			}
+			if (s.gunStep == 1 && Combat::Selected() != gun) {
+				if (s.settle < kSettle + 2.0f) {
+					return {};
+				}
+				s.gunStep = 2;
+				Fail(std::format("the {} wasn't out 2 s after it was asked for (the {} is)", GunName(gun), GunName(Combat::Selected())));
 			}
 			// Standing still (before the second jump: right after a load the screen is still
 			// fading in).
@@ -1482,7 +1580,6 @@ namespace AutoTest
 				MeasureAhead(c);
 			}
 			if (c.duration > 0.0f) {
-				Combat::Select(c.shatterbomb ? Combat::Gun::kShatterbomb : Combat::Gun::kBurstPistol);
 				if (c.firstPerson) {
 					if (auto* camera = RE::PlayerCamera::GetSingleton()) {
 						camera->ForceFirstPerson();
@@ -1559,6 +1656,11 @@ namespace AutoTest
 		if (Clank::CurrentClip() == "glide" && std::ranges::find(s.shotsThisCase, "heli") == s.shotsThisCase.end()) {
 			OnMove("heli");
 		}
+		if (c.given) {
+			JudgeGiven(c);
+			NextCase();
+			return {};
+		}
 		if (c.door) {
 			Door(c, a_dt, a_grounded, a_busy);
 			return {};
@@ -1576,6 +1678,10 @@ namespace AutoTest
 			if (static_cast<int>(a_state) != s.fightState) {
 				SKSE::log::info("autotest: {} {:.3f} s: state {}", c.name, t, a_state);
 				s.fightState = static_cast<int>(a_state);
+			}
+			if (c.noGun) {
+				s.strafed = s.strafed || Combat::Strafing();
+				s.wrenchLeftHand = s.wrenchLeftHand || Combat::InHand() != Combat::Hand::kWrench;
 			}
 			// A fight: the wrench presses and the trigger on their times, then the verdict. A press
 			// is the one frame whose span [t, t + dt) holds its time (frames tile the clock, so it's
@@ -1730,8 +1836,9 @@ namespace AutoTest
 			what += "2";
 		}
 		s.shotsThisCase.push_back(what);
+		// (A file name: no spaces, and nothing Windows keeps out of one: a colon would write an NTFS stream.)
 		std::string name = kCases[s.index].name;
-		std::ranges::replace(name, ' ', '_');
+		std::ranges::replace_if(name, [](char a_c) { return a_c == ' ' || std::string_view("<>:\"/\\|?*").contains(a_c); }, '_');
 		TestWindow::Shot(name + "_" + what);
 	}
 

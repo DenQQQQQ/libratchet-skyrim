@@ -39,7 +39,14 @@ repository is unchanged.
   crimes, kills, difficulty). The wrench and the pistol are in his hand by the sandbox's rules,
   playing their own clips (the wrench's squash and stretch, the pistol's slide), the
   Shatterbomb's glove while it's picked. In third person the sandbox's "+" crosshair is drawn
-  (Skyrim shows none with no weapon drawn; INI `bCrosshair = 0` leaves it out).
+  while a gun is out (Skyrim shows none with no weapon drawn; INI `bCrosshair = 0` leaves it out).
+- **His guns are Skyrim weapons** (`RatchetMovement.esl`): the Burst Pistol and the Shatterbomb
+  are put in his inventory once a game ("added", as Skyrim says it), and the one equipped, in
+  either hand, is the gun he uses: from the inventory, or a favorite's hotkey. With neither
+  equipped he has his OmniWrench alone, always in his hand: swings, the combo, the Hyper-Strike
+  and the throw, with the aim and fire buttons doing nothing (the sandbox without an arsenal).
+  Merchants who deal in weapons will buy them (none sells them yet). Without the file the plugin
+  picks them on its own two keys as before.
 - **Rift Apart's look and sound:** the game's own effects for his shots, blasts and swings (with
   their lights), its sounds mixed and looped as the sandbox mixes them, and its follow camera
   (framing, field of view, shakes, the wheel's zoom). See the sections below.
@@ -56,14 +63,14 @@ repository is unchanged.
 | dash, air dash | Left Alt | LB | Sprint (`sDashControl`) |
 | wrench (press again for the combo; in the air: Hyper-Strike) | R | X | Ready Weapon (`sMeleeControl`) |
 | fire the Burst Pistol (hold), or wind up a Shatterbomb (hold, let go to throw) | left mouse | RT | Right Attack/Block (`sFireControl`) |
-| pick the Burst Pistol / the Shatterbomb | 1 / 2 | D-pad left / right | Hotkey1 / Hotkey2 (`sPistolControl`, `sShatterbombControl`) |
+| pick the Burst Pistol / the Shatterbomb | equip it (the inventory, or a favorite's hotkey) | the same | Skyrim's own; without `RatchetMovement.esl`: Hotkey1 / Hotkey2 (`sPistolControl`, `sShatterbombControl`) |
 | aim | right mouse | LT | Left Attack/Block (`sAimControl`) |
 | throw the wrench | Z | RB | Shout (`sThrowControl`) |
 | let go of a ledge | Ctrl | left stick | Sneak |
 
 On foot, Skyrim's own jump, sprint, attacks, blocks, weapon drawing and shouts are off (`bCombat
-= 0` gives the fighting back), and so are the favorites on the two hotkeys that pick his guns. On
-a horse everything is Skyrim's.
+= 0` gives the fighting back). Without `RatchetMovement.esl`, so are the favorites on the two
+hotkeys that pick his guns. On a horse everything is Skyrim's (an equipped gun is a dagger there).
 
 ## Build
 Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, and vcpkg (`VCPKG_ROOT`, or
@@ -85,6 +92,13 @@ off), with the extracted Rift Apart configs from `riftapart-configs/` in
 `SKSE\Plugins\RatchetMovement\` and Ratchet's converted model. These are game data: they stay on
 this PC. It keeps an INI that's already there. Enable the mod in MO2's left pane and start Skyrim
 through SKSE.
+
+Every build also writes `RatchetMovement.esl` (`skse/tools/ratchet_plugin.py`, record by record:
+no Creation Kit, no game data): a light plugin with the two guns as weapons (`RatchetBurstPistol`
+0x800, `RatchetShatterbomb` 0x801; one-handed, either hand, on Ratchet's own models).
+`-Install` puts it in the mod's root and enables it in the MO2 profile (`-Mo2Profile`, Spire). MO2
+keeps its own list while it runs and writes it over the files when the game closes: refresh it
+(F5) and check the plugin is ticked. Whether a game has had the guns is kept in SKSE's co-save.
 
 ## Ratchet's model
 `build.ps1 -Install` converts `riftapart-assets/ratchet.glb` (made by
@@ -151,7 +165,10 @@ it at start, so the next start is a normal game), starts SKSE through MO2 with t
 selected, and follows the log.
 - From the main menu the plugin loads the most recent save, then runs `coc Whiterun` (`-Start`
   for another place; `-Start "coc qasmoke"` is flat but too small for the running jump). No save
-  is written, and timed autosaves are off for the run (in memory only).
+  is written, and timed autosaves are off for the run (in memory only). A bounty in Whiterun the
+  save has, and the guards' alarm on him, are dropped for the run.
+- First, with `RatchetMovement.esl`: both guns have to be in his inventory, given this game. Each
+  case then has its gun equipped before it starts (the Burst Pistol unless it says otherwise).
 - It moves by itself: a tap, 0.1 s, 0.15 s and a full hold, a standing jump steered forward, a
   running jump, aimed jumps (in place, and strafe flips right, left and back: their clips have to
   play), a double jump, a glide and a long glide off an 8 m platform, a ground dash and an air
@@ -165,8 +182,10 @@ selected, and follows the log.
   wrench's own clips have to play), a Hyper-Strike, the pistol from the hip (its fire clip too)
   and aimed, aimed 0.15 m past the cow's side (the bolts' 0.25 m has to hit), a wrench throw, melee
   while aiming (a throw) and a Shatterbomb (also in first person). Each passes if the cow lost at
-  least the expected damage (× the save's difficulty multiplier) from enough hits. Then hunters
-  and a guard: a shot and a hit have to make them fight, and hitting the guard is a crime.
+  least the expected damage (× the save's difficulty multiplier) from enough hits. With no gun
+  out, a hunter: the aim and fire buttons held mustn't shoot or strafe, the wrench has to stay in
+  his hand, and melee with them held has to swing and hit. Then hunters and a guard: a shot and a
+  hit have to make them fight, and hitting the guard is a crime.
 - The camera's zoom: wheel notches sent through Skyrim's own camera input (out 3 m, in to 2 m,
   one more into first person, back at the game's distance).
 - Last, a cell change with effects alive: shots at the floor, through the Bannered Mare's door

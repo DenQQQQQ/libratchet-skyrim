@@ -2,12 +2,15 @@
 # Builds the SKSE plugin (and ratchet.dll through cargo) and optionally installs it as an MO2 mod.
 #
 #   powershell -File skse\build.ps1            # configure + build
-#   powershell -File skse\build.ps1 -Install   # ... then copy into the MO2 mod folder
+#   powershell -File skse\build.ps1 -Install   # ... then copy into the MO2 mod folder, and enable
+#                                              # RatchetMovement.esl in the MO2 profile
 #
-# Output: target\skse\cmake\stage\SKSE\Plugins (RatchetMovement.dll + .pdb, ratchet.dll, the INI).
+# Output: target\skse\cmake\stage\SKSE\Plugins (RatchetMovement.dll + .pdb, ratchet.dll, the INI),
+# target\skse\plugin\RatchetMovement.esl (his guns as Skyrim weapons).
 param(
     [switch]$Install,
     [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
+    [string]$Mo2Profile = "Spire",
     [string]$ConfigsDir = "",
     [string]$VsDir = "G:\dev\VS2022BuildTools",
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "G:\dev\tools\vcpkg" })
@@ -47,6 +50,28 @@ try {
 
 $stage = Join-Path $here "..\target\skse\cmake\stage\SKSE\Plugins"
 Write-Host "Built: $((Resolve-Path $stage).Path)"
+
+# His guns as Skyrim weapons (skse\tools\ratchet_plugin.py), written record by record.
+$pluginOut = Join-Path $here "..\target\skse\plugin"
+uv run --quiet python -I (Join-Path $here "tools\ratchet_plugin.py") --out $pluginOut | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "writing RatchetMovement.esl failed" }
+
+# A plugin enabled in an MO2 profile: in plugins.txt (enabled: a leading *) and loadorder.txt, at
+# the end, each file's own line ends kept. MO2 reads them again at its next refresh (F5); while it
+# runs it may write its own list over them before then.
+function Enable-Plugin([string]$profileDir, [string]$name) {
+    foreach ($file in @(@{ Name = "plugins.txt"; Line = "*$name" }, @{ Name = "loadorder.txt"; Line = $name })) {
+        $path = Join-Path $profileDir $file.Name
+        if (-not (Test-Path $path)) { Write-Warning "No $path`: enable $name in MO2"; return }
+        $text = [IO.File]::ReadAllText($path)
+        $lines = $text -split "\r?\n"
+        if ($lines | Where-Object { $_.TrimStart('*') -ieq $name }) { continue }
+        $eol = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text += $eol }
+        [IO.File]::WriteAllText($path, $text + $file.Line + $eol, [Text.Encoding]::ASCII)
+        Write-Host "$name added to $path"
+    }
+}
 
 if ($Install) {
     $dest = Join-Path $ModDir "SKSE\Plugins"
@@ -93,7 +118,7 @@ if ($Install) {
         $stale = -not (Test-Path $nif)
         if (-not $stale) {
             $made = (Get-Item $nif).LastWriteTime
-            $stale = (Get-Item $glb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0
+            $stale = (Get-Item $glb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
         }
         if ($stale) {
             Write-Host "Converting Ratchet from $glb..."
@@ -117,7 +142,7 @@ if ($Install) {
             $wstale = -not (Test-Path $wnif)
             if (-not $wstale) {
                 $made = (Get-Item $wnif).LastWriteTime
-                $wstale = (Get-Item $wglb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0
+                $wstale = (Get-Item $wglb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
             }
             if ($wstale) {
                 Write-Host "Converting $($w.Name) from $wglb..."
@@ -172,7 +197,7 @@ if ($Install) {
         $vstale = -not (Test-Path $fxIni)
         if (-not $vstale) {
             $made = (Get-Item $fxIni).LastWriteTime
-            $vstale = @(Get-ChildItem $vfxSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0
+            $vstale = @(Get-ChildItem $vfxSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
         }
         if ($vstale) {
             Write-Host "Converting his weapons' effect art from $vfxSrc..."
@@ -188,6 +213,13 @@ if ($Install) {
         Write-Host "His weapons' effects from $vfxOut"
     } else {
         Write-Warning "No $vfxSrc`: no effect art for his weapons (tools\extract_riftapart_vfx.py makes it)"
+    }
+
+    # His guns as Skyrim weapons: the plugin file in the mod's root, enabled in the profile.
+    Copy-Item (Join-Path $pluginOut "RatchetMovement.esl") $ModDir -Force
+    Enable-Plugin (Join-Path (Split-Path (Split-Path $ModDir)) "profiles\$Mo2Profile") "RatchetMovement.esl"
+    if (Get-Process ModOrganizer -ErrorAction SilentlyContinue) {
+        Write-Host "MO2 is running: refresh it (F5) and check RatchetMovement.esl is ticked"
     }
     Write-Host "Installed to $dest"
 }

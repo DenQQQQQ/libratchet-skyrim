@@ -9,16 +9,21 @@
 // yet): the Burst Pistol's rates, damage and spread from wpn_burstpistol_weapon.json, its shots
 // riding a Skyrim bolt; the Shatterbomb's cooked throw, lob and blast from
 // wpn_protogrenade_weapon.json.
+//
+// Which gun is out: with RatchetMovement.esl loaded, the one he has equipped as a Skyrim weapon
+// (Items); with neither, none, and he has his OmniWrench alone (the sandbox without an arsenal:
+// the wrench always in his hand, nothing to aim). Without the file, his own two keys pick.
 namespace Combat
 {
 	// His guns (the OmniWrench isn't one: it swings and flies whichever is out).
 	enum class Gun
 	{
+		kNone,
 		kBurstPistol,
 		kShatterbomb,
 	};
 	Gun Selected();
-	// Tests: pick one.
+	// Tests: pick one (with RatchetMovement.esl, equip it: it's out a frame or so later).
 	void Select(Gun a_gun);
 	// The Shatterbomb: a throw winding up (the fire button held), and throws so far (his throw
 	// pose restarts on a change).
@@ -67,7 +72,7 @@ namespace Combat
 	// arsenal and wrench keep it).
 	struct AnimState
 	{
-		bool          shatterbomb = false;  // the Shatterbomb out (else the Burst Pistol)
+		Gun           gun = Gun::kNone;     // the gun out
 		bool          aiming = false;       // the aim button held
 		bool          trigger = false;      // the fire button held
 		float         stance = 0.0f;        // seconds left of strafing after the newest shot

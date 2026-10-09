@@ -5,6 +5,7 @@
 #include "Camera.h"
 #include "Fx.h"
 #include "Input.h"
+#include "Items.h"
 #include "Jump.h"
 #include "Model.h"
 #include "Physics.h"
@@ -145,7 +146,8 @@ namespace Combat
 			std::uint32_t  catches = 0;
 			std::uint32_t  equips = 0;          // weapons drawn so far
 			std::optional<Gun> requested;       // a pick waiting for a Shatterbomb to leave his hand
-			// The guns: which is out, and the Shatterbomb's trigger as libarsenal's Weapon keeps it.
+			// The guns: which is out (kNone: the wrench alone), and the Shatterbomb's trigger as
+			// libarsenal's Weapon keeps it.
 			Gun               gun = Gun::kBurstPistol;
 			bool              pickHeld[2] = {};
 			bool              bombTrigger = false;  // the trigger at its last step (the throw goes on its release)
@@ -448,7 +450,8 @@ namespace Combat
 					c.blocked = 1;
 					if (!c.turned) {
 						c.turned = true;
-						SKSE::log::info("combat: the wrench hit {} {:.1f} m out and turns back", wall ? (hit->ref ? hit->ref->GetName() : "the world") : "someone",
+						const char* name = wall && hit->ref ? hit->ref->GetName() : nullptr;
+						SKSE::log::info("combat: the wrench hit {} {:.1f} m out and turns back", !wall ? "someone" : name && *name ? name : "the world",
 							now.GetDistance(c.thrownFrom) / Units());
 					}
 				}
@@ -495,8 +498,12 @@ namespace Combat
 				return;
 			}
 			c.gun = a_gun;
-			++c.equips;
-			SKSE::log::info("combat: the {} is out", a_gun == Gun::kShatterbomb ? "Shatterbomb" : "Burst Pistol");
+			++c.equips;  // (with none, his draw is the wrench's)
+			if (a_gun == Gun::kNone) {
+				SKSE::log::info("combat: no gun: the OmniWrench alone");
+			} else {
+				SKSE::log::info("combat: the {} is out", a_gun == Gun::kShatterbomb ? "Shatterbomb" : "Burst Pistol");
+			}
 		}
 
 		// The guns don't fire: he's swinging, dashing, on a wall, a ledge or a swing, or the
@@ -504,8 +511,8 @@ namespace Combat
 		// and the wrench's throwing).
 		bool GunsBusy() { return !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f; }
 
-		// The Burst Pistol put away (the Shatterbomb out): its wait runs down and its spread
-		// settles back (libarsenal's Weapon::stow, at the hip's rate).
+		// The Burst Pistol put away (the Shatterbomb out, or neither): its wait runs down and its
+		// spread settles back (libarsenal's Weapon::stow, at the hip's rate).
 		void StowPistol(float a_dt)
 		{
 			c.cooldown = std::max(0.0f, c.cooldown - a_dt);
@@ -808,7 +815,7 @@ namespace Combat
 		// The sandbox's: the gun out, empty for a moment (REFILL_AFTER), refills both.
 		void Refill(float a_dt)
 		{
-			const bool empty = c.gun == Gun::kBurstPistol ? c.pistolAmmo == 0 : c.bombAmmo == 0;
+			const bool empty = c.gun == Gun::kBurstPistol ? c.pistolAmmo == 0 : c.gun == Gun::kShatterbomb && c.bombAmmo == 0;
 			c.bombEmpty = empty ? c.bombEmpty + a_dt : 0.0f;
 			if (c.bombEmpty > kBombRefill) {
 				c.pistolAmmo = kPistolAmmo;
@@ -952,13 +959,17 @@ namespace Combat
 			off += off.empty() ? " shouts" : ", shouts";
 		}
 		const auto& s = Settings::Get();
-		if (s.pistolControl.starts_with("Hotkey") || s.shatterbombControl.starts_with("Hotkey")) {
+		// With his guns as Skyrim weapons, Skyrim's favorites equip them: its hotkeys stay its own.
+		const bool items = Items::Available();
+		if (!items && (s.pistolControl.starts_with("Hotkey") || s.shatterbombControl.starts_with("Hotkey"))) {
 			REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_FavoritesHandler[0] };
 			HotkeysOnFoot::_CanProcess = vtbl.write_vfunc(0x1, HotkeysOnFoot::CanProcess);
 			off += off.empty() ? " favorites on those hotkeys" : ", favorites on those hotkeys";
 		}
-		SKSE::log::info("combat: fire on {}, aim on {}, wrench on {}, throw on {}, the Burst Pistol on {}, the Shatterbomb on {}; Skyrim's own{} are off on foot",
-			s.fireControl, s.aimControl, s.meleeControl, s.throwControl, s.pistolControl, s.shatterbombControl, off);
+		const std::string guns = items ? std::string("the gun the one equipped") :
+		                                 std::format("the Burst Pistol on {}, the Shatterbomb on {}", s.pistolControl, s.shatterbombControl);
+		SKSE::log::info("combat: fire on {}, aim on {}, wrench on {}, throw on {}, {}; Skyrim's own{} are off on foot", s.fireControl, s.aimControl,
+			s.meleeControl, s.throwControl, guns, off);
 	}
 
 	void Fill(RatchetInput& a_in, const RE::NiPoint2& a_view, std::uint32_t a_state, float a_dt)
@@ -970,24 +981,35 @@ namespace Combat
 			return;
 		}
 		const TestButtons t = c.test.value_or(TestButtons{});
-		c.melee = t.melee || Input::ControlHeld(s.meleeControl);
-		c.aim = t.aim || Input::ControlHeld(s.aimControl);
-		c.fire = t.fire || Input::ControlHeld(s.fireControl);
+		Items::GiveOnce();
 		// Picking a gun. Not while the wrench is out of his hand, from the throw until just after
-		// the catch: the press does nothing (the sandbox's, as in the game). A Shatterbomb already
-		// leaving his hand goes first, the switch right after it.
-		const bool picks[2] = { Input::ControlHeld(s.pistolControl), Input::ControlHeld(s.shatterbombControl) };
+		// the catch, and a Shatterbomb already leaving his hand goes first, the switch right after
+		// it. As Skyrim weapons (Items), the one equipped comes out once he's free (neither: none,
+		// the wrench alone); on his own keys, a press while the wrench is out does nothing (the
+		// sandbox's, as in the game).
 		const bool wrenchOut = c.thrown != nullptr || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
-		for (int i = 0; i < 2; ++i) {
-			if (picks[i] && !c.pickHeld[i] && !wrenchOut) {
-				c.requested = i == 0 ? Gun::kBurstPistol : Gun::kShatterbomb;
+		if (Items::Available()) {
+			const Gun equipped = Items::Equipped().value_or(Gun::kNone);
+			c.requested = equipped != c.gun && !wrenchOut ? std::optional(equipped) : std::nullopt;
+		} else {
+			const bool picks[2] = { Input::ControlHeld(s.pistolControl), Input::ControlHeld(s.shatterbombControl) };
+			for (int i = 0; i < 2; ++i) {
+				if (picks[i] && !c.pickHeld[i] && !wrenchOut) {
+					c.requested = i == 0 ? Gun::kBurstPistol : Gun::kShatterbomb;
+				}
+				c.pickHeld[i] = picks[i];
 			}
-			c.pickHeld[i] = picks[i];
 		}
 		if (c.requested && c.bombIn < 0.0f) {
 			Pick(*c.requested);
 			c.requested.reset();
 		}
+		// With no gun out there's nothing to aim or fire (the sandbox without an arsenal): those
+		// buttons do nothing, and melee swings with the aim button held.
+		const bool armed = c.gun != Gun::kNone;
+		c.melee = t.melee || Input::ControlHeld(s.meleeControl);
+		c.aim = armed && (t.aim || Input::ControlHeld(s.aimControl));
+		c.fire = armed && (t.fire || Input::ControlHeld(s.fireControl));
 		// The throw: on its press, or melee pressed while aiming (Rift Apart's, and the sandbox's
 		// throw_button), unless the wrench is out already or he's busy (swinging, on a wall or
 		// ledge). His throw clip and the wrench in his hand start at the press; it leaves his hand
@@ -1020,7 +1042,7 @@ namespace Combat
 		const bool throwing = c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
 		if (c.aim) {
 			a_in.aiming = 1;
-		} else if (!throwing && (c.fire || c.sinceShot < kStrafeAfterShot)) {
+		} else if (armed && !throwing && (c.fire || c.sinceShot < kStrafeAfterShot)) {
 			a_in.aiming = 2;
 		}
 		if (a_in.aiming) {
@@ -1069,16 +1091,16 @@ namespace Combat
 			Shatterbomb(a_dt, false, standing);
 		} else {
 			StowPistol(a_dt);
-			Shatterbomb(a_dt, true, standing);
-			if (WindingUp()) {
-				DrawThrowArc(a_player);
-				if (c.arcFor < 0.25f && c.arcFor + a_dt >= 0.25f) {
-					AutoTest::OnMove("throw_arc");
-				}
-				c.arcFor += a_dt;
-			} else {
-				c.arcFor = 0.0f;
+			Shatterbomb(a_dt, c.gun == Gun::kShatterbomb, standing);
+		}
+		if (WindingUp()) {
+			DrawThrowArc(a_player);
+			if (c.arcFor < 0.25f && c.arcFor + a_dt >= 0.25f) {
+				AutoTest::OnMove("throw_arc");
 			}
+			c.arcFor += a_dt;
+		} else {
+			c.arcFor = 0.0f;
 		}
 		FlyBolts(a_player, a_dt);
 		for (auto& [target, in] : c.shotAt) {
@@ -1143,7 +1165,14 @@ namespace Combat
 
 	Gun Selected() { return c.gun; }
 
-	void Select(Gun a_gun) { Pick(a_gun); }
+	void Select(Gun a_gun)
+	{
+		if (Items::Available()) {
+			Items::Equip(a_gun);  // (Fill takes it out once Skyrim has it equipped)
+		} else {
+			Pick(a_gun);
+		}
+	}
 
 	bool WindingUp() { return c.gun == Gun::kShatterbomb && c.cooking; }
 
@@ -1168,7 +1197,7 @@ namespace Combat
 	AnimState ForAnimation()
 	{
 		AnimState a;
-		a.shatterbomb = c.gun == Gun::kShatterbomb;
+		a.gun = c.gun;
 		a.aiming = c.aim;
 		a.trigger = c.fire;
 		a.stance = std::max(0.0f, kStrafeAfterShot - c.sinceShot);
@@ -1202,8 +1231,9 @@ namespace Combat
 		if (c.thrown || dashing || holstered) {
 			return Hand::kNone;
 		}
-		// The wrench: while he swings and 0.35 s after (SHOW_AFTER), and on its way out of his hand.
-		if (swinging || c.sinceWrench < 0.35f || c.releaseIn >= 0.0f) {
+		// The wrench: while he swings and 0.35 s after (SHOW_AFTER), on its way out of his hand, and
+		// always with no gun out (the sandbox's without an arsenal).
+		if (swinging || c.sinceWrench < 0.35f || c.releaseIn >= 0.0f || c.gun == Gun::kNone) {
 			return Hand::kWrench;
 		}
 		// The Burst Pistol: whenever it's the weapon, unless the wrench's throw has his hand (from
@@ -1219,7 +1249,7 @@ namespace Combat
 		// As Fill hands it to the sim: aiming; or the trigger held or just after a shot, unless the
 		// wrench's throw has his hand.
 		const bool throwing = c.thrown || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
-		return Settings::Get().combat && (c.aim || (!throwing && (c.fire || c.sinceShot < kStrafeAfterShot)));
+		return Settings::Get().combat && c.gun != Gun::kNone && (c.aim || (!throwing && (c.fire || c.sinceShot < kStrafeAfterShot)));
 	}
 
 	void SetTestButtons(std::optional<TestButtons> a_buttons) { c.test = a_buttons; }

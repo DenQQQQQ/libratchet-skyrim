@@ -4,6 +4,7 @@
 #include "Clank.h"
 #include "Combat.h"
 #include "Fx.h"
+#include "Items.h"
 #include "Jump.h"
 #include "Model.h"
 #include "RatchetDll.h"
@@ -27,6 +28,9 @@ namespace
 		case SKSE::MessagingInterface::kDataLoaded:
 			Jump::Install();
 			Camera::Install(ConfigsDirectory());
+			if (Settings::Get().combat) {
+				Items::Install();  // (before Combat's: it asks whether his guns are Skyrim weapons)
+			}
 			Combat::Install();
 			AutoTest::Install();
 			break;
@@ -84,6 +88,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 		}
 	}
 	Sounds::Load(dir);
+	Items::Register();
 	const auto& e = Ratchet::Expected();
 	SKSE::log::info("sandbox numbers at scale {}: tap apex {:.3f} m at {:.3f} s, full-hold apex {:.3f} m at {:.3f} s, air time {:.3f} s",
 		settings.scale, e.tapApex, e.tapTime, e.fullApex, e.fullTime, e.fullAirTime);

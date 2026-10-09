@@ -516,9 +516,10 @@ namespace Camera
 					camera->cameraRoot->Update(update);
 				}
 				// The sandbox's crosshair, in front of the camera as it's turned this frame (its
-				// shake in: GetRotation's), while he has his weapons.
+				// shake in: GetRotation's), while a gun is out.
 				const auto& settings = Settings::Get();
-				Fx::Crosshair(settings.combat && settings.crosshair ? std::optional(CrosshairAt(at, Anim::Multiply(look, g.turn))) : std::nullopt);
+				const bool  gun = settings.combat && settings.crosshair && Combat::Selected() != Combat::Gun::kNone;
+				Fx::Crosshair(gun ? std::optional(CrosshairAt(at, Anim::Multiply(look, g.turn))) : std::nullopt);
 			}
 
 			static inline REL::Relocation<decltype(GetRotation)> _GetRotation;
