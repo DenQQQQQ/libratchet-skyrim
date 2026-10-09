@@ -9,7 +9,7 @@
 # found in the effects' particle data (not decoded; picked by offset, checked to look like colours).
 #
 # Usage:
-#   python tools/extract_riftapart_vfx.py --game "<Rift Apart folder>" --alert "<ALERT clone>"
+#   python tools/extract_riftapart_vfx.py --game "<Rift Apart folder>" --alert "<ALERT clone>" [--only a,b,...]
 import argparse
 import json
 import os
@@ -48,6 +48,9 @@ TEXTURES = {
     "trail_basic": "textures/visualeffect/trail/trail_basic_01/trail_basic_01.texture",
     "blast_masks": "textures/visualeffect/smoke/smoke_blast_masks_3d_x4.texture",
     "crater": "textures/tbarlow/tb_raft_crater/tb_raft_crater_01_c.texture",
+    # Bolts: the star-shaped glint that twinkles on a bolt while it's out (the pup_bolt_vfx conduit
+    # starts pup_bolt_glow, whose pup_bolt_glint_sub_oneshot draws it with pup_bolt_glow_v2).
+    "bolt_glint": "textures/visualeffect/lens_flare/beacon_spike_flare_grey_sm.texture",
 }
 
 # name -> model asset (exported as plain meshes; the sandbox gives them effect materials)
@@ -173,7 +176,11 @@ def main():
     ap.add_argument("--alert", required=True)
     ap.add_argument("--out", default="riftapart-assets")
     ap.add_argument("--gdeflate-dll", default=os.path.join(here, "..", "target", "release", "gdeflate_ffi.dll"))
+    ap.add_argument("--only", help="comma-separated texture/model names (merged into an existing vfx.json)")
     a = ap.parse_args()
+    only = set(n.strip() for n in a.only.split(",")) if a.only else None
+    if only and only - set(TEXTURES) - set(MODELS):
+        sys.exit("unknown names: " + ", ".join(sorted(only - set(TEXTURES) - set(MODELS))))
 
     from extract_riftapart_ratchet import Game, convert
 
@@ -181,8 +188,16 @@ def main():
     out_dir = os.path.join(a.out, "vfx")
     os.makedirs(out_dir, exist_ok=True)
     manifest = {"textures": {}, "models": {}}
+    json_path = os.path.join(out_dir, "vfx.json")
+    if only and os.path.exists(json_path):
+        with open(json_path) as f:
+            old = json.load(f)
+        manifest["textures"] = {k: v for k, v in old.get("textures", {}).items() if k in TEXTURES}
+        manifest["models"] = {k: v for k, v in old.get("models", {}).items() if k in MODELS}
 
     for name, src in TEXTURES.items():
+        if only and name not in only:
+            continue
         if isinstance(src, tuple):
             color, alpha = (game.texture(p, 1024) for p in src)
             if color is None or alpha is None:
@@ -217,6 +232,8 @@ def main():
 
     args = SimpleNamespace(out=a.out, look=0, lod=0, tex_size=1024, no_anims=True)
     for name, model in MODELS.items():
+        if only and name not in only:
+            continue
         preset = {"model": model, "out": f"vfx/{name}.glb", "clips": {}, "clip_dir": "", "vfx": True}
         try:
             convert(game, args, preset)
@@ -242,7 +259,9 @@ def main():
     manifest["palette"] = palette
     print(f"  palette: {len(palette)} colours")
 
-    with open(os.path.join(out_dir, "vfx.json"), "w") as f:
+    manifest["textures"] = {k: manifest["textures"][k] for k in TEXTURES if k in manifest["textures"]}
+    manifest["models"] = {k: manifest["models"][k] for k in MODELS if k in manifest["models"]}
+    with open(json_path, "w") as f:
         json.dump(manifest, f, indent=2)
     print(f"wrote {len(manifest['textures'])} textures and {len(manifest['models'])} meshes to {out_dir}")
 

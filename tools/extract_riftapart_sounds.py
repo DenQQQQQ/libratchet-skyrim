@@ -108,6 +108,12 @@ MOMENTS = {
     "bolt_impact": {"events": [("wpn_burst_pistol", "Play_WPN_Burst_Pistol_projectile_hit")], "trigger": "gameplay"},
     "grenade_throw": {"events": [("wpn_protogrenade", "Play_WPN_ProroGrenade_throw")], "trigger": "gameplay"},
     "grenade_explode": {"events": [("wpn_protogrenade", "Play_WPN_ProtoGrenade_Explo")], "trigger": "gameplay"},
+    # Bolts, the currency (the pup_bolt_aud conduit): collecting one (its PickupBoltEvent with the
+    # default BoltId; the other ids are the unlockable coin, orb, ruby and overcharge looks), and the
+    # sound of one flying to Ratchet (FlewByStartEvent; FlewByStopEvent's Stop event has no actions).
+    # The conduit has no event for a bolt dropping or bouncing.
+    "bolt_collect": {"events": [("pup_bolts", "Play_PUP_bolt_collect")], "trigger": "gameplay"},
+    "bolt_approach": {"events": [("pup_bolts", "Play_OBJ_Pickup_Bolt_Approach")], "trigger": "gameplay"},
 }
 
 # Sound events the sandbox's clips fire that exist in no soundbank (silent in the game too).

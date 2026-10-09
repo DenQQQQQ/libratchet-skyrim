@@ -8,7 +8,7 @@
 #        cargo build -p gdeflate-ffi --release   (GDeflate decoder for the high-res data)
 # Usage:
 #   python tools/extract_riftapart_ratchet.py --game "<Rift Apart folder>" --alert "<ALERT clone>"
-#          [--character ratchet|clank|all] [--out riftapart-assets] [--tex-size 2048]
+#          [--character ratchet|clank|bolts|...|all] [--out riftapart-assets] [--tex-size 2048]
 import argparse
 import base64
 import io
@@ -182,6 +182,50 @@ def roughness_map(img):
     out = np.zeros(g.shape + (3,), np.uint8)
     out[..., 1] = r.astype(np.uint8)
     return Image.fromarray(out, "RGB")
+
+
+def srgb_to_linear(v):
+    return np.where(v <= 0.04045, v / 12.92, ((v + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(v):
+    v = np.clip(v, 0.0, 1.0)
+    return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055)
+
+
+def spec_gloss_maps(color, spec, mask):
+    """Materials painted in specular colour (the bolts'): _c is the diffuse colour (black on bare
+    metal), _g the specular colour in RGB with the gloss in alpha, _m an emissive mask in red and
+    ambient occlusion in blue. Returns glTF metal/rough maps: the base colour (RGBA), one
+    occlusion/roughness/metallic texture (R/G/B) and the emissive colour (None if nothing glows).
+    Metallic and the base colour are solved the way glTF's spec/gloss to metal/rough converter
+    does it (KHR_materials_pbrSpecularGlossiness)."""
+    size = spec.size
+    rgba = np.asarray(color.convert("RGBA").resize(size)).astype(np.float32) / 255.0
+    sg = np.asarray(spec.convert("RGBA")).astype(np.float32) / 255.0
+    mk = np.asarray(mask.convert("RGBA").resize(size)).astype(np.float32) / 255.0
+    diffuse, specular = srgb_to_linear(rgba[..., :3]), srgb_to_linear(sg[..., :3])
+    f0 = 0.04  # a dielectric's reflectance
+
+    def brightness(c):
+        return np.sqrt(0.299 * c[..., 0] ** 2 + 0.587 * c[..., 1] ** 2 + 0.114 * c[..., 2] ** 2)
+
+    one_minus = 1.0 - specular.max(axis=-1)
+    d, s = brightness(diffuse), brightness(specular)
+    b = d * one_minus / (1 - f0) + s - 2 * f0
+    metallic = np.where(s < f0, 0.0, np.clip((-b + np.sqrt(np.maximum(b * b - 4 * f0 * (f0 - s), 0))) / (2 * f0), 0, 1))
+    m = metallic[..., None]
+    from_diffuse = diffuse * (one_minus[..., None] / (1 - f0) / np.maximum(1 - m, 1e-6))
+    from_specular = (specular - f0 * (1 - m)) / np.maximum(m, 1e-6)
+    base = from_diffuse + (from_specular - from_diffuse) * m * m
+    base = np.dstack([linear_to_srgb(base), rgba[..., 3]])
+    orm = np.dstack([mk[..., 2], 1.0 - sg[..., 3], metallic])
+    glow = diffuse * mk[..., :1]
+
+    def image(v, mode):
+        return Image.fromarray((np.clip(v, 0, 1) * 255 + 0.5).astype(np.uint8), mode)
+
+    return image(base, "RGBA"), image(orm, "RGB"), image(linear_to_srgb(glow), "RGB") if glow.max() > 1 / 255 else None
 
 
 COMPONENT_DTYPES = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
@@ -655,6 +699,22 @@ PRESETS = {
     },
 }
 
+# Bolts, the currency: the plain pickup (pup_bolt_item's ItemActor) and the twelve the loot drop
+# config scatters (system_lootdrop's CashPickups: bronze, silver, golden and platinum, three shapes
+# each). Each actor shows its _art model; their materials are painted in specular colour (the
+# tier's metal is in _g, _c is black), see spec_gloss_maps. A bolt is about 0.2 m across, so its
+# maps are kept small: each file has its own copy, and many bolts are out at once.
+BOLT_DIR = "equipment/pickup/"
+PRESETS["bolt"] = {"model": BOLT_DIR + "pup_bolt_01/pup_bolt_01_art.model", "out": "bolt.glb", "spec_gloss": True,
+                   "tex_size": 512, "clip_dir": "", "clips": {}}
+for _tier in ("bronze", "silver", "golden", "platinum"):
+    for _n in ("01", "02", "03"):
+        _name = f"pup_bolt_{_tier}_{_n}"
+        PRESETS[f"bolt_{_tier}_{_n}"] = {"model": f"{BOLT_DIR}{_name}/{_name}_art.model", "out": f"bolt_{_tier}_{_n}.glb",
+                                         "spec_gloss": True, "tex_size": 512, "clip_dir": "", "clips": {}}
+# Names --character takes for several presets at once.
+GROUPS = {"bolts": [name for name in PRESETS if name.startswith("bolt")]}
+
 
 # The game drives Ratchet's eyes with a layer of their own (the animset's Eye_Aim and blink
 # clips) over the body clips. Some body clips carry eye scales that never show in the game (the
@@ -672,6 +732,8 @@ def add_animations(game, w, model, preset):
     """Decodes the preset's clips from the install and adds them as named glTF animations."""
     import riftapart_anim
 
+    if not preset["clips"]:
+        return {}  # also for models without a skeleton (the bolts)
     g = w.gltf
     joints = model.dat1.get_section(0x15DF9D3B).joints
     node_of_hash = {j.hash: g.skins[0].joints[i] for i, j in enumerate(joints)}
@@ -774,7 +836,7 @@ def main():
     ap.add_argument("--game", required=True)
     ap.add_argument("--alert", required=True)
     ap.add_argument("--out", default="riftapart-assets")
-    ap.add_argument("--character", default="all", choices=["all", *PRESETS], help="which character(s) to convert")
+    ap.add_argument("--character", default="all", choices=["all", *GROUPS, *PRESETS], help="which character(s) to convert")
     ap.add_argument("--look", type=int, default=0)
     ap.add_argument("--lod", type=int, default=0)
     ap.add_argument("--tex-size", type=int, default=2048)
@@ -785,7 +847,7 @@ def main():
     a = ap.parse_args()
 
     game = Game(a.game, a.alert, a.gdeflate_dll)
-    names = list(PRESETS) if a.character == "all" else [a.character]
+    names = list(PRESETS) if a.character == "all" else GROUPS.get(a.character, [a.character])
     for name in names:
         print(f"== {name}")
         convert(game, a, PRESETS[name])
@@ -891,12 +953,13 @@ def convert(game, a, preset):
     texture_cache = {}
     material_index = {}
     manifest = {"model": preset["model"], "looks": looks, "lod": a.lod, "materials": {}}
+    tex_size = min(a.tex_size, preset.get("tex_size", a.tex_size))
 
     def add_texture(path, kind):
         key = (path, kind)
         if key in texture_cache:
             return texture_cache[key]
-        got = game.texture(path, a.tex_size if kind == "color" else max(512, a.tex_size // 2))
+        got = game.texture(path, tex_size if kind == "color" else max(512, tex_size // 2))
         if got is None:
             texture_cache[key] = None
             return None
@@ -913,11 +976,37 @@ def convert(game, a, preset):
                 rgba = np.asarray(img).astype(np.float32)
                 rgba[..., :3] = np.clip(lo * 255 + gain * rgba[..., :3], 0, 255)
                 img = Image.fromarray(rgba.astype(np.uint8), "RGBA")
-        g.images.append(pygltflib.Image(uri=image_uri(img, alpha), name=os.path.basename(path)))
-        g.textures.append(pygltflib.Texture(source=len(g.images) - 1))
-        texture_cache[key] = (len(g.textures) - 1, alpha)
+        texture_cache[key] = (add_image(img, alpha, os.path.basename(path)), alpha)
         print(f"    {kind:6} {img.size[0]}x{img.size[1]} fmt {fmt} {'alpha ' if alpha else ''}{path}")
         return texture_cache[key]
+
+    def add_image(img, alpha, name):
+        g.images.append(pygltflib.Image(uri=image_uri(img, alpha), name=name))
+        g.textures.append(pygltflib.Texture(source=len(g.images) - 1))
+        return len(g.textures) - 1
+
+    def add_spec_gloss(mat, pbr, c, gl, m, entry):
+        """The specular-colour maps (see spec_gloss_maps) as glTF base colour, occlusion /
+        roughness / metallic and emissive textures. False if a map is missing."""
+        got = [game.texture(p, tex_size) for p in (c, gl, m)]
+        if not all(got):
+            return False
+        base, orm, glow = spec_gloss_maps(*(img for img, _ in got))
+        alpha = np.asarray(base)[..., 3].min() < 250
+        pbr.baseColorTexture = pygltflib.TextureInfo(index=add_image(base, alpha, os.path.basename(gl)))
+        if alpha:
+            mat.alphaMode = pygltflib.MASK
+            mat.alphaCutoff = 0.4
+        orm_index = add_image(orm, False, os.path.basename(m))
+        pbr.metallicRoughnessTexture = pygltflib.TextureInfo(index=orm_index)
+        pbr.metallicFactor = pbr.roughnessFactor = 1.0
+        mat.occlusionTexture = pygltflib.OcclusionTextureInfo(index=orm_index)
+        if glow is not None:
+            mat.emissiveTexture = pygltflib.TextureInfo(index=add_image(glow, False, os.path.basename(c)))
+            mat.emissiveFactor = [1.0, 1.0, 1.0]
+        entry.update(color=c, specular_gloss=gl, mask=m)
+        print(f"    spec/gloss {base.size[0]}x{base.size[1]} {'alpha ' if alpha else ''}{'emissive ' if glow else ''}{gl}")
+        return True
 
     for mesh in g.meshes:
         mpath = mesh_material.get(mesh.name)
@@ -945,7 +1034,10 @@ def convert(game, a, preset):
             if preset.get("metal") and not special:
                 pbr.metallicFactor = preset["metal"]["metallic"]
             c = pick(texs, "c", mpath)
-            if c and (t := add_texture(c, "color")):
+            gl = pick(texs, "g", mpath)
+            m = pick(texs, "m", mpath)
+            spec_gloss = preset.get("spec_gloss") and c and gl and m and add_spec_gloss(mat, pbr, c, gl, m, entry)
+            if not spec_gloss and c and (t := add_texture(c, "color")):
                 pbr.baseColorTexture = pygltflib.TextureInfo(index=t[0])
                 entry["color"] = c
                 if t[1]:
@@ -955,8 +1047,7 @@ def convert(game, a, preset):
             if n and (t := add_texture(n, "normal")):
                 mat.normalTexture = pygltflib.NormalMaterialTexture(index=t[0])
                 entry["normal"] = n
-            gl = pick(texs, "g", mpath)
-            if gl and (t := add_texture(gl, "rough")):
+            if not spec_gloss and gl and (t := add_texture(gl, "rough")):
                 pbr.metallicRoughnessTexture = pygltflib.TextureInfo(index=t[0])
                 pbr.roughnessFactor = 1.0
                 entry["gloss"] = gl
