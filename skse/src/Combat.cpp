@@ -116,6 +116,7 @@ namespace Combat
 			bool           throwHeld = false;   // the button, for its press
 			float          releaseIn = -1.0f;   // winding up: seconds until it leaves his hand
 			RE::NiPoint2   throwView;           // the camera's flat forward at the press
+			bool           faceThrow = false;   // he turns that way at the next step
 			RatchetWrench* thrown = nullptr;    // in the air
 			RE::NiPoint3   wrenchAt;            // where it is, game units
 			float          wrenchSpin = 0.0f;
@@ -880,6 +881,7 @@ namespace Combat
 			c.releaseIn = kThrowRelease;
 			c.throwAnim = 1.4f;  // the sandbox's THROW_ANIM
 			c.throwView = a_view;
+			c.faceThrow = true;
 		}
 		c.throwHeld = throwHeld;
 		// No swings while aiming, or while the wrench is out of his hand (the sandbox's rule).
@@ -902,6 +904,12 @@ namespace Combat
 		}
 		c.simState = a_r.state;
 		c.throwAnim = std::max(0.0f, c.throwAnim - a_dt);
+		if (c.faceThrow) {
+			// The throw turns him along it at once (the sandbox's start_throw); the sim's yaw is
+			// atan2(x, z) with z south.
+			c.faceThrow = false;
+			ratchet_set_facing(a_sim, std::atan2(c.throwView.x, -c.throwView.y));
+		}
 		DropIfCarriedOff(a_player);
 		Refill(a_dt);
 		const bool wrench = a_r.state == RATCHET_STATE_MELEE || a_r.state == RATCHET_STATE_SMASH || a_r.state == RATCHET_STATE_SMASH_LAND;

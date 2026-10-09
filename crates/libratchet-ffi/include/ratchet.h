@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#define RATCHET_API_VERSION 2u
+#define RATCHET_API_VERSION 3u
 
 #ifdef __cplusplus
 extern "C" {
@@ -199,6 +199,9 @@ void ratchet_set_scale(RatchetSim *sim, float scale);
 
 RatchetStepResult ratchet_step(RatchetSim *sim, float dt, RatchetInput input, RatchetContact contact, RatchetVec3 feet);
 void ratchet_set_velocity(RatchetSim *sim, RatchetVec3 velocity);
+/* Turns him to face yaw (radians, atan2(x, z)) at once (API version 3): the sandbox does it as the
+   wrench is thrown, along the camera. */
+void ratchet_set_facing(RatchetSim *sim, float yaw);
 /* Ledges and the Swingshot need the host's level; the callbacks must stay valid while the sim steps. */
 void ratchet_set_world(RatchetSim *sim, RatchetWorld world);
 void ratchet_reset(RatchetSim *sim);

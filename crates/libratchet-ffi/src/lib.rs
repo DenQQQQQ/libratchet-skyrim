@@ -331,7 +331,7 @@ fn state_code(s: MoveState) -> u32 {
 /// The C API's version (`RATCHET_API_VERSION` in ratchet.h): raised with every change to its
 /// structs or functions. Fields are only ever added at the end of a struct, never moved or
 /// removed. 2: the animation (`ratchet_anim_*`).
-pub const RATCHET_API_VERSION: u32 = 2;
+pub const RATCHET_API_VERSION: u32 = 3;
 
 /// The API version this library was built with, for a host to check against the header it was
 /// built with (`RATCHET_API_VERSION`) before using anything else.
@@ -622,6 +622,18 @@ pub unsafe extern "C" fn ratchet_wrench_free(wrench: *mut RatchetWrench) {
 pub unsafe extern "C" fn ratchet_set_velocity(sim: *mut RatchetSim, v: RatchetVec3) {
     if let Some(sim) = unsafe { sim.as_mut() } {
         sim.sim.set_velocity(Vec3::new(v.x, v.y, v.z));
+    }
+}
+
+/// Turns him to face `yaw` (radians, `atan2(x, z)`) at once: as the sandbox does when the
+/// wrench is thrown, along the camera.
+///
+/// # Safety
+/// `sim` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ratchet_set_facing(sim: *mut RatchetSim, yaw: f32) {
+    if let Some(sim) = unsafe { sim.as_mut() } {
+        sim.sim.set_facing_yaw(yaw);
     }
 }
 
