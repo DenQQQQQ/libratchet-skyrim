@@ -540,3 +540,7 @@ The owner asked for Clank on his back.
 - Test log: each fight now logs where he and its target are. Moved back for a later fight, the
   cow ends up 6.1 m away, not 8 m (not looked into; an earlier stagger may still be moving
   it). The fights pass either way.
+- **Fixed: the caught wrench floated off his hand.** After a throw the wrench was hung back on his
+  hand with the flight's transform still on it, so every swing after the first throw showed it
+  about 1.5 m to his right (the test screenshots since the throw went in show it). It's put back
+  in his hand's own space now; the swing after the throw has it in his hand.

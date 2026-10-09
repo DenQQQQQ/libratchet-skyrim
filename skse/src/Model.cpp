@@ -235,6 +235,9 @@ namespace Model
 					a_weapon.node->parent->DetachChild(a_weapon.node.get());
 				}
 				a_hand->AttachChild(a_weapon.node.get(), true);
+				// Back in his hand's own space with no offset: a throw left its flight's place,
+				// turn and size on it, and the caught wrench was drawn a metre or more off his hand.
+				a_weapon.node->local = RE::NiTransform{};
 			}
 			if (a_weapon.node->GetAppCulled() == a_show) {
 				a_weapon.node->SetAppCulled(!a_show);
