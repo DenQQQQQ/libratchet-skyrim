@@ -13,6 +13,10 @@ namespace Camera
 	// Skyrim's third-person camera.
 	void Install(const std::filesystem::path& a_configs);
 
+	// Once a frame: outside Skyrim's third-person camera on foot (first person, a horse,
+	// furniture), Skyrim's own field of view and no shakes.
+	void Update();
+
 	// The Burst Pistol's recoil shake (each shot).
 	void Recoil();
 	// The Shatterbomb's blast shake: full within its inner radius of him, fading out to its outer

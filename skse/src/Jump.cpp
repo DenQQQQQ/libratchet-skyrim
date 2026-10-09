@@ -1041,6 +1041,7 @@ namespace Jump
 					const bool swinging = state == RATCHET_STATE_MELEE || state == RATCHET_STATE_SMASH || state == RATCHET_STATE_SMASH_LAND;
 					Fx::Swipe(swinging ? Model::HeldWrench() : std::nullopt);
 					Fx::Update(dt);
+					Camera::Update();
 				}
 			}
 			static inline REL::Relocation<decltype(Update)> _Update;

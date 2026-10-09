@@ -254,6 +254,7 @@ namespace Camera
 			if (auto* camera = RE::PlayerCamera::GetSingleton(); camera && g.savedFov > 0.0f) {
 				camera->GetRuntimeData2().worldFOV = g.savedFov;
 			}
+			SKSE::log::info("camera: Skyrim's own again (FOV {:.0f})", g.savedFov);
 		}
 
 		// Skyrim's FOV value for a horizontal field of view on this screen. Skyrim's value isn't the
@@ -273,6 +274,7 @@ namespace Camera
 
 		void Start(RE::PlayerCamera* a_camera, const RE::NiPoint3& a_feet)
 		{
+			SKSE::log::info("camera: Rift Apart's");
 			g.active = true;
 			g.focus = a_feet;
 			g.savedFov = a_camera->GetRuntimeData2().worldFOV;
@@ -444,6 +446,18 @@ namespace Camera
 		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_ThirdPersonState[0] };
 		ThirdPersonHook::_Update = vtbl.write_vfunc(0x3, ThirdPersonHook::Update);
 		ThirdPersonHook::_GetRotation = vtbl.write_vfunc(0x4, ThirdPersonHook::GetRotation);
+	}
+
+	void Update()
+	{
+		if (!g.active) {
+			return;
+		}
+		const auto* camera = RE::PlayerCamera::GetSingleton();
+		const bool  third = camera && camera->currentState && camera->currentState->id == RE::CameraStates::kThirdPerson;
+		if (!third || !Wanted()) {
+			Stop();
+		}
 	}
 
 	void Recoil()

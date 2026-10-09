@@ -128,6 +128,7 @@ namespace Combat
 			float          throwAnim = 0.0f;    // seconds left of his throw's clip (the sandbox's throw_anim)
 			std::uint32_t  catches = 0;
 			std::uint32_t  equips = 0;          // weapons drawn so far
+			std::optional<Gun> requested;       // a pick waiting for a Shatterbomb to leave his hand
 			// The guns: which is out, and the Shatterbomb's trigger as libarsenal's Weapon keeps it.
 			Gun               gun = Gun::kBurstPistol;
 			bool              pickHeld[2] = {};
@@ -857,13 +858,20 @@ namespace Combat
 		c.melee = t.melee || Input::ControlHeld(s.meleeControl);
 		c.aim = t.aim || Input::ControlHeld(s.aimControl);
 		c.fire = t.fire || Input::ControlHeld(s.fireControl);
-		// Picking a gun (not while the wrench is out of his hand: the game waits for the catch).
+		// Picking a gun. Not while the wrench is out of his hand, from the throw until just after
+		// the catch: the press does nothing (the sandbox's, as in the game). A Shatterbomb already
+		// leaving his hand goes first, the switch right after it.
 		const bool picks[2] = { Input::ControlHeld(s.pistolControl), Input::ControlHeld(s.shatterbombControl) };
+		const bool wrenchOut = c.thrown != nullptr || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
 		for (int i = 0; i < 2; ++i) {
-			if (picks[i] && !c.pickHeld[i] && !c.thrown) {
-				Pick(i == 0 ? Gun::kBurstPistol : Gun::kShatterbomb);
+			if (picks[i] && !c.pickHeld[i] && !wrenchOut) {
+				c.requested = i == 0 ? Gun::kBurstPistol : Gun::kShatterbomb;
 			}
 			c.pickHeld[i] = picks[i];
+		}
+		if (c.requested && c.bombIn < 0.0f) {
+			Pick(*c.requested);
+			c.requested.reset();
 		}
 		// The throw: on its press, unless the wrench is out already or he's busy (dashing,
 		// swinging, on a wall or ledge).
