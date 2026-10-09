@@ -674,7 +674,7 @@ namespace Jump
 			in.jump = test.jump || Input::JumpHeld() ? 1 : 0;
 			in.dash = test.dash || Input::DashHeld() ? 1 : 0;
 			// Crouch lets go of a ledge: Skyrim's Sneak.
-			in.crouch = Input::SneakHeld() ? 1 : 0;
+			in.crouch = test.crouch || Input::SneakHeld() ? 1 : 0;
 			// The stick, turned by the camera: Rift Apart's controls are camera-relative.
 			const View view = CameraView();
 			RE::NiPoint2 stick = Input::MoveStick();
@@ -935,6 +935,9 @@ namespace Jump
 									   g_along.velocity.z, g_along.step) :
 								   "");
 			}
+			if (r.state == RATCHET_STATE_LEDGE_HANG && g.last.state != RATCHET_STATE_LEDGE_HANG) {
+				SKSE::log::info("jump: hanging from a ledge");
+			}
 			g.last = r;
 			g.lastDt = a_dt;
 			g.lastZ = z;
@@ -1003,6 +1006,24 @@ namespace Jump
 				auto* player = RE::PlayerCharacter::GetSingleton();
 				const auto* ctrl = player ? player->GetCharController() : nullptr;
 				if (g.sim && ctrl && OnFootInControl(player, ctrl)) {
+					return false;
+				}
+				return _CanProcess(a_this, a_event);
+			}
+			static inline REL::Relocation<decltype(CanProcess)> _CanProcess;
+		};
+
+		// Skyrim's sneak, when its button lets go of a ledge (the sim's crouch): not toggled then, or
+		// he'd come down from the ledge sneaking (Rift Apart's crouch is only held, and the sandbox's).
+		struct SneakHandlerHook
+		{
+			static bool CanProcess(RE::SneakHandler* a_this, RE::InputEvent* a_event)
+			{
+				auto*      player = RE::PlayerCharacter::GetSingleton();
+				const auto* ctrl = player ? player->GetCharController() : nullptr;
+				const auto state = g.last.state;
+				const bool ledge = state >= RATCHET_STATE_LEDGE_HANG && state <= RATCHET_STATE_LEDGE_JUMP;
+				if (g.sim && ctrl && ledge && OnFootInControl(player, ctrl)) {
 					return false;
 				}
 				return _CanProcess(a_this, a_event);
@@ -1106,6 +1127,8 @@ namespace Jump
 
 		REL::Relocation<std::uintptr_t> jumpVtbl{ RE::VTABLE_JumpHandler[0] };
 		JumpHandlerHook::_CanProcess = jumpVtbl.write_vfunc(0x1, JumpHandlerHook::CanProcess);
+		REL::Relocation<std::uintptr_t> sneakVtbl{ RE::VTABLE_SneakHandler[0] };
+		SneakHandlerHook::_CanProcess = sneakVtbl.write_vfunc(0x1, SneakHandlerHook::CanProcess);
 
 		if (DashOnSprint()) {
 			REL::Relocation<std::uintptr_t> sprintVtbl{ RE::VTABLE_SprintHandler[0] };

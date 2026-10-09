@@ -929,3 +929,14 @@ Clank and his weapons). They're loaded as the game loads now: his six models (0.
 effect templates (0.3 s, every NIF in the mod's fx folder), once a session. The full run's worst
 frame since: 2.3 ms.
 
+### Letting go of a ledge, and not sneaking after
+
+Crouch lets go of a ledge (the sandbox's C), on Skyrim's Sneak. But Sneak is a toggle in Skyrim:
+letting go of a ledge left him sneaking (at half speed) until it was pressed again. Skyrim's sneak
+handler sits out while he's on a ledge now (hang, climb, drop, jump), like its jump and sprint on
+foot. A new case catches the lip and holds crouch (the test's own button) 1.5 s on: he lets go and
+comes back down, and mustn't be sneaking. Checked with the real key too (WinDrive, scan codes:
+Skyrim's keyboard is DirectInput's), 1.2 s into the hang (the catch's own move takes no buttons):
+he dropped half a second sooner than on the test's crouch, and wasn't sneaking. The jump log says
+when he starts hanging from a ledge.
+

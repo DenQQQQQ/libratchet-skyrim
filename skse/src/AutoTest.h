@@ -25,6 +25,7 @@ namespace AutoTest
 	{
 		bool jump = false;
 		bool dash = false;
+		bool crouch = false;  // the sim's crouch (Skyrim's Sneak): lets go of a ledge
 	};
 	Buttons Press(float a_dt, bool a_grounded, bool a_busy, std::uint32_t a_state);
 

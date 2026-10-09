@@ -97,6 +97,9 @@ namespace AutoTest
 			RE::NiPoint2 stick{ 0.0f, 1.0f };
 			// A fight: exactly this many Shatterbombs thrown (< 0: not checked).
 			int         bombs = -1;
+			// The ledge case: this long on the lip (s), crouch is held instead of the climb's press
+			// (0: not): he has to let go and come back down.
+			float       dropAfter = 0.0f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -174,6 +177,8 @@ namespace AutoTest
 			// metre short of the wall, inside the catch's reach (1.2 m) and outside the wall
 			// stick's (0.775 m).
 			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f },
+			// And letting go of it (crouch: Skyrim's Sneak, the sandbox's C).
+			{ .name = "ledge drop", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f, .dropAfter = 1.5f },
 			{ .name = "camera zoom", .hold = -1.0f, .zoom = true },
 			{ .name = "sound lab", .hold = -1.0f, .soundLab = true },
 			// The effects hang under the player's cell's 3D, which goes at a load door or a load:
@@ -263,6 +268,7 @@ namespace AutoTest
 			float                       climbPress = 0.0f; // seconds the climb's jump has been held
 			std::optional<RE::NiPoint3> hungAt;
 			bool                        climbed = false;
+			bool                        dropped = false;   // let go of it (a drop case)
 			// A door case: its step (0 shots, 1 through, 2 shots there), the time in it, how long he's
 			// stood in the new cell, where he was, the games loaded, and what the effects did there.
 			int                 doorStep = 0;
@@ -522,6 +528,7 @@ namespace AutoTest
 			s.climbPress = 0.0f;
 			s.hungAt.reset();
 			s.climbed = false;
+			s.dropped = false;
 			s.wallPlaced = false;
 			s.onWall = -1.0f;
 			s.wallPress = 0.0f;
@@ -776,7 +783,19 @@ namespace AutoTest
 			if (!s.hungAt) {
 				bad += " no-catch";
 			}
-			if (!s.climbed) {
+			if (a_case.dropAfter > 0.0f) {
+				// Let go: down again, not up on the ledge.
+				if (!s.dropped) {
+					bad += " no-drop";
+				}
+				if (s.climbed || a_jump.landDz > a_case.ledgeUp * 0.5f) {
+					bad += " not-down";
+				}
+				// Sneak let him go, and didn't leave him sneaking.
+				if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->IsSneaking()) {
+					bad += " sneaking";
+				}
+			} else if (!s.climbed) {
 				bad += " no-climb";
 			}
 			if (bad.empty()) {
@@ -1640,12 +1659,20 @@ namespace AutoTest
 				s.onLedge += a_dt;
 			}
 			s.climbed = s.climbed || a_state == RATCHET_STATE_LEDGE_CLIMB;
-			if (s.onLedge >= c.climbAfter && s.climbPress < 0.15f) {
+			if (c.dropAfter > 0.0f) {
+				// Letting go: crouch held a moment, and then he's falling (or dropping with a turn).
+				if (s.onLedge >= c.dropAfter && s.climbPress < 0.2f) {
+					s.climbPress += a_dt;
+					b.crouch = true;
+				}
+				// (Let go by this crouch, or by Skyrim's own Sneak pressed sooner.)
+				s.dropped = s.dropped || (s.onLedge >= 0.0f && (a_state == RATCHET_STATE_FALL || a_state == RATCHET_STATE_LEDGE_DROP));
+			} else if (s.onLedge >= c.climbAfter && s.climbPress < 0.15f) {
 				s.climbPress += a_dt;
 				b.jump = true;
 			}
 		}
-		if (b.jump || b.dash) {
+		if (b.jump || b.dash || b.crouch) {
 			return b;
 		}
 		if (s.landed || (!s.launched && a_grounded && !a_busy)) {
