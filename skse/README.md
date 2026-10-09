@@ -29,9 +29,11 @@ repository is unchanged.
   [MODLOG.md](MODLOG.md)).
 - A glide comes down softly: the height it sinks doesn't count toward fall damage.
 - **He fights:** the OmniWrench (the sim's three-swing combo with its lunges, the Hyper-Strike in
-  the air, the throw) and the Burst Pistol (hip fire and aimed, strafing). Hits are spells cast by
-  the player, so Skyrim's rules follow (the target fights back, crimes, kills, difficulty). The
-  wrench and the pistol are in his hand when he uses them.
+  the air, the throw), the Burst Pistol (hip fire and aimed, strafing) and the Shatterbomb (hold
+  fire to wind the throw up, let go to lob it onto the crosshair; its blast hurts everyone within
+  6 m). Hits are spells cast by the player, so Skyrim's rules follow (the target fights back,
+  crimes, kills, difficulty). The wrench and the pistol are in his hand when he uses them, the
+  Shatterbomb's glove while it's picked.
 
 ## Controls
 | | keyboard / mouse | gamepad | Skyrim control (INI) |
@@ -39,13 +41,15 @@ repository is unchanged.
 | jump, double jump, glide (hold) | Space | Y | Jump |
 | dash, air dash | Left Alt | LB | Sprint (`sDashControl`) |
 | wrench (press again for the combo; in the air: Hyper-Strike) | R | X | Ready Weapon (`sMeleeControl`) |
-| fire the Burst Pistol (hold) | left mouse | RT | Right Attack/Block (`sFireControl`) |
+| fire the Burst Pistol (hold), or wind up a Shatterbomb (hold, let go to throw) | left mouse | RT | Right Attack/Block (`sFireControl`) |
+| pick the Burst Pistol / the Shatterbomb | 1 / 2 | | Hotkey1 / Hotkey2 (`sPistolControl`, `sShatterbombControl`) |
 | aim | right mouse | LT | Left Attack/Block (`sAimControl`) |
 | throw the wrench | Z | RB | Shout (`sThrowControl`) |
 | let go of a ledge | Ctrl | left stick | Sneak |
 
 On foot, Skyrim's own jump, sprint, attacks, blocks, weapon drawing and shouts are off (`bCombat
-= 0` gives the fighting back). On a horse everything is Skyrim's.
+= 0` gives the fighting back), and so are the favorites on the two hotkeys that pick his guns. On
+a horse everything is Skyrim's.
 
 ## Build
 Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, and vcpkg (`VCPKG_ROOT`, or
@@ -119,8 +123,9 @@ selected, and follows the log.
   bear: he mustn't take its body for a wall. Last, a ledge: from a platform placed 4 m up he
   jumps at a capped wall 2.5 m ahead, and has to catch its lip and climb up on a new press.
 - Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
-  Hyper-Strike, the pistol from the hip and aimed, and a wrench throw. Each passes if the cow lost
-  at least the expected damage (× the save's difficulty multiplier) from enough hits.
+  Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb. Each passes
+  if the cow lost at least the expected damage (× the save's difficulty multiplier) from enough
+  hits.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor

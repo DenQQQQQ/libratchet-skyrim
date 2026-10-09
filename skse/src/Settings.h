@@ -31,6 +31,10 @@ struct Settings
 	std::string aimControl = "Left Attack/Block";
 	std::string meleeControl = "Ready Weapon";
 	std::string throwControl = "Shout";
+	// The controls that pick his guns (the keyboard's 1 and 2: Skyrim's favorites on those two
+	// hotkeys don't equip on foot then).
+	std::string pistolControl = "Hotkey1";
+	std::string shatterbombControl = "Hotkey2";
 	// Rift Apart's damage numbers times this, on Skyrim's health.
 	float damageMult = 1.0f;
 	// Rift Apart's sounds on his moves (skse/tools/ratchet_sounds_to_skyrim.py), and how loud.

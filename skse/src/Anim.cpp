@@ -226,6 +226,41 @@ namespace Anim
 		}
 	}
 
+	void Library::Overlay(const Clip& a_clip, float a_t, bool a_loop, float a_weight, Pose& a_pose) const
+	{
+		if (a_weight <= 0.0f || a_pose.t.size() != _joints.size()) {
+			return;
+		}
+		const float last = static_cast<float>(a_clip.frames > 0 ? a_clip.frames - 1 : 0);
+		float       f = a_t * a_clip.rate;
+		if (a_loop && last > 0.0f) {
+			f = std::fmod(f, last);
+		} else {
+			f = std::clamp(f, 0.0f, last);
+		}
+		const auto  i0 = static_cast<std::uint32_t>(std::max(f, 0.0f));
+		const auto  i1 = std::min(i0 + 1, a_clip.frames > 0 ? a_clip.frames - 1 : 0);
+		const float w = f - static_cast<float>(i0);
+		const float k = std::min(a_weight, 1.0f);
+		for (const auto& tr : a_clip.tracks) {
+			const float* v = tr.values.data();
+			if (tr.path == 0) {
+				const float*       a = v + (tr.constant ? 0 : i0 * 3);
+				const float*       b = v + (tr.constant ? 0 : i1 * 3);
+				const RE::NiPoint3 p{ a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w };
+				a_pose.t[tr.joint] = a_pose.t[tr.joint] + (p - a_pose.t[tr.joint]) * k;
+			} else if (tr.path == 1) {
+				const float* a = v + (tr.constant ? 0 : i0 * 4);
+				const float* b = v + (tr.constant ? 0 : i1 * 4);
+				a_pose.r[tr.joint] = Nlerp(a_pose.r[tr.joint], Nlerp({ a[3], a[0], a[1], a[2] }, { b[3], b[0], b[1], b[2] }, w), k);
+			} else {
+				const float a = v[tr.constant ? 0 : i0];
+				const float b = v[tr.constant ? 0 : i1];
+				a_pose.s[tr.joint] = a_pose.s[tr.joint] + (a + (b - a) * w - a_pose.s[tr.joint]) * k;
+			}
+		}
+	}
+
 	void Blend(Pose& a_a, const Pose& a_b, float a_w)
 	{
 		if (a_w <= 0.0f || a_a.t.size() != a_b.t.size()) {

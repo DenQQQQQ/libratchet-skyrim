@@ -52,6 +52,9 @@ namespace AutoTest
 			float       ledgeUp = 2.0f;
 			float       ledgeFrom = 4.0f;
 			float       climbAfter = 0.8f;  // past the catch's own move, which takes no buttons
+			// The Shatterbomb out for this fight (fire held winds a throw up, let go throws); the
+			// Burst Pistol again after it.
+			bool        shatterbomb = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -78,6 +81,9 @@ namespace AutoTest
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
+			// A Shatterbomb (170.5 damage within 1 m of its blast, 85.25 at 6 m): wound up 0.4 s,
+			// thrown at the cow 8 m ahead.
+			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
 			// Then a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
 			// owner: hits raised no hostility until a kill).
 			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },
@@ -625,9 +631,9 @@ namespace AutoTest
 			} else {
 				++s.failed;
 			}
-			SKSE::log::info("autotest: {} {}: the target lost {:.1f} health (at least {:.1f} at difficulty x{:.2f}), {} wrench hits (at least {}), {} shots, {} throws{}",
+			SKSE::log::info("autotest: {} {}: the target lost {:.1f} health (at least {:.1f} at difficulty x{:.2f}), {} wrench hits (at least {}), {} shots, {} throws, {} Shatterbombs ({} hit){}",
 				bad.empty() ? "PASS" : "FAIL", a_case.name, lost, minDamage, DifficultyMult(), tally.hits, a_case.minHits, tally.shots,
-				tally.throws, bad.empty() ? "" : " - off:" + bad);
+				tally.throws, tally.bombs, tally.blasted, bad.empty() ? "" : " - off:" + bad);
 			if (a_case.throwAt >= 0.0f && Combat::ThrownWrench()) {
 				SKSE::log::info("autotest: {}: the wrench is still out after {:.1f} s", a_case.name, a_case.duration);
 			}
@@ -927,6 +933,7 @@ namespace AutoTest
 				MeasureLedge(c);
 			}
 			if (c.duration > 0.0f) {
+				Combat::Select(c.shatterbomb ? Combat::Gun::kShatterbomb : Combat::Gun::kBurstPistol);
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
 				s.bounty = WhiterunBounty();
@@ -936,6 +943,11 @@ namespace AutoTest
 				if (auto* target = Target(); target && (c.fireFrom >= 0.0f || c.throwAt >= 0.0f)) {
 					// The shots (and the throw) go for its middle.
 					Combat::SetTestAim(target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() });
+				}
+				if (auto* target = Target(); target && player && s.startPos) {
+					SKSE::log::info("autotest: {}: he's {:.2f} m from the start, the target {:.2f} m from him ({:.2f} m from the start)", c.name,
+						player->GetPosition().GetDistance(*s.startPos) / Units(), target->GetPosition().GetDistance(player->GetPosition()) / Units(),
+						target->GetPosition().GetDistance(*s.startPos) / Units());
 				}
 			}
 			SKSE::log::info("autotest: {} ({}{}{}{}{}{})", c.name,

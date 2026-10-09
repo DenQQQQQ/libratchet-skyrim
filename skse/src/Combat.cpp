@@ -48,6 +48,38 @@ namespace Combat
 		constexpr Spread kHipSpread{ 0.1f, 0.05f, 4.0f, 25.0f };
 		constexpr Spread kAimedSpread{ 0.1f, 0.01f, 0.65f, 5.0f };
 
+		// The Shatterbomb (wpn_protogrenade_weapon.json, as libarsenal reads it: its level-1
+		// upgrades win). A cooked throw: holding fire winds it up, letting go throws, 0.8 a second,
+		// 6 in the glove (filled again 1.5 s after the last, the sandbox's convenience). Lobbed at
+		// 30 m/s under 30 m/s² to come down on the aimed point, aimed 30 m out at most, 8 s in the
+		// air at most. Its blast: 170.5 damage within 1 m, falling to 85.25 at 6 m; knocked back
+		// 3.5 m within 3 m, 1.5 m further out. Distances and speeds × scale. It leaves his hand
+		// 0.1 s into the throw (the sandbox's, without the clip's event).
+		constexpr float kBombRate = 0.8f;
+		constexpr int   kBombAmmo = 6;
+		constexpr float kBombRefill = 1.5f;
+		constexpr float kBombSpeed = 30.0f;
+		constexpr float kBombGravity = 30.0f;
+		constexpr float kBombRange = 30.0f;
+		constexpr float kBombLife = 8.0f;
+		constexpr float kBombSpin = 500.0f;  // degrees/s, for its look
+		constexpr float kBombRelease = 0.1f;
+		constexpr float kBlastInner = 1.0f;
+		constexpr float kBlastOuter = 6.0f;
+		constexpr float kBlastInnerDamage = 170.5f;
+		constexpr float kBlastOuterDamage = 85.25f;
+		constexpr float kBlastHardPush = 3.0f;  // metres: the strongest knockback tier, a full stagger
+		// The gun counts as ready this close to the end of its wait (libarsenal's, float rounding).
+		constexpr float kReady = 1e-5f;
+
+		struct Bomb
+		{
+			RE::NiPoint3 at;        // game units
+			RE::NiPoint3 velocity;  // m/s, Skyrim's axes
+			float        age = 0.0f;
+			float        spin = 0.0f;
+		};
+
 		struct State
 		{
 			std::optional<TestButtons> test;
@@ -76,6 +108,18 @@ namespace Combat
 			float          thrownFor = 0.0f;    // seconds out
 			float          thrownFar = 0.0f;    // metres out at most
 			std::vector<RE::ActorHandle> struck;  // hit by this throw already
+			// The guns: which is out, and the Shatterbomb's trigger as libarsenal's Weapon keeps it.
+			Gun               gun = Gun::kBurstPistol;
+			bool              pickHeld[2] = {};
+			bool              bombTrigger = false;  // the trigger at its last step (the throw goes on its release)
+			float             bombCooldown = 0.0f;
+			int               bombAmmo = kBombAmmo;
+			float             bombEmpty = 0.0f;     // seconds the glove has been empty
+			float             bombIn = -1.0f;       // a throw: seconds until the bomb leaves his hand
+			bool              cooking = false;
+			std::vector<Bomb> bombs;
+			std::uint32_t     bombThrows = 0;
+			float             sinceBlast = 100.0f;
 			// For his poses.
 			std::optional<RE::NiPoint3> aimAt;
 			std::uint32_t               shots = 0;
@@ -342,7 +386,153 @@ namespace Combat
 			}
 		}
 
-		void Gun(RE::PlayerCharacter* a_player, float a_dt)
+		// Launch velocity at a_speed that comes down on a_to under a_gravity: the lower of the two
+		// arcs; out of reach, 45° (the longest throw) toward it (libarsenal's lob_velocity).
+		// Metres and m/s, Skyrim's axes (z up).
+		RE::NiPoint3 LobVelocity(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, float a_speed, float a_gravity)
+		{
+			const RE::NiPoint3 d = a_to - a_from;
+			const float        flat = std::sqrt(d.x * d.x + d.y * d.y);
+			const RE::NiPoint2 dir = flat > 1e-4f ? RE::NiPoint2{ d.x / flat, d.y / flat } : RE::NiPoint2{ 0.0f, 1.0f };
+			const float        v2 = a_speed * a_speed;
+			const float        g = std::max(a_gravity, 1e-4f);
+			const float        disc = v2 * v2 - g * (g * flat * flat + 2.0f * d.z * v2);
+			const float        angle = disc >= 0.0f && flat > 1e-4f ? std::atan((v2 - std::sqrt(disc)) / (g * flat)) : 0.78539816f;
+			const float        up = std::sin(angle), across = std::cos(angle);
+			return { dir.x * across * a_speed, dir.y * across * a_speed, up * a_speed };
+		}
+
+		void Pick(Gun a_gun)
+		{
+			if (a_gun == c.gun) {
+				return;
+			}
+			c.gun = a_gun;
+			// No throw kept through a switch (the sandbox: a throw wound up, switched away and back,
+			// went at once).
+			c.bombTrigger = false;
+			c.cooking = false;
+			SKSE::log::info("combat: the {} is out", a_gun == Gun::kShatterbomb ? "Shatterbomb" : "Burst Pistol");
+		}
+
+		// The Shatterbomb's trigger, run the way libarsenal's Weapon runs a cooked one: holding
+		// fire winds the throw up, letting go throws (the bomb leaves his hand a moment later).
+		void Shatterbomb(float a_dt)
+		{
+			c.bombEmpty = c.bombAmmo == 0 ? c.bombEmpty + a_dt : 0.0f;
+			if (c.bombEmpty > kBombRefill) {
+				c.bombAmmo = kBombAmmo;
+				c.bombEmpty = 0.0f;
+			}
+			// Busy (dashing, swinging, on a wall, the wrench out of his hand), a throw being wound
+			// up waits: it would go on the release otherwise (the sandbox's).
+			const bool busy = !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f;
+			if (!busy) {
+				const bool released = !c.fire && c.bombTrigger;
+				c.bombTrigger = c.fire;
+				const bool wasReady = c.bombCooldown <= kReady;
+				c.bombCooldown -= a_dt;
+				if (released && c.bombCooldown <= kReady && c.bombAmmo >= 1 && c.bombIn < 0.0f) {
+					--c.bombAmmo;
+					// A throw due part-way through the step passes the rest on to the next wait.
+					c.bombCooldown = (wasReady ? 0.0f : c.bombCooldown) + 1.0f / kBombRate;
+					c.bombIn = kBombRelease;
+					++c.bombThrows;
+				} else {
+					c.bombCooldown = std::max(c.bombCooldown, 0.0f);
+				}
+			}
+			c.cooking = c.bombTrigger && c.bombAmmo >= 1 && c.bombCooldown <= kReady;
+		}
+
+		// The bomb leaves his hand, lobbed to come down where the crosshair is (aimed no further
+		// than kBombRange).
+		void ThrowBomb(RE::PlayerCharacter* a_player)
+		{
+			const float        s = Settings::Get().scale;
+			const float        u = Units();
+			const RE::NiPoint3 hand = HandAt(a_player);
+			RE::NiPoint3       target = AimPoint().first;
+			RE::NiPoint3       to = target - hand;
+			if (to.Length() > kBombRange * s * u) {
+				to.Unitize();
+				target = hand + to * (kBombRange * s * u);
+			}
+			const RE::NiPoint3 v = LobVelocity(hand / u, target / u, kBombSpeed * s, kBombGravity * s);
+			c.bombs.push_back({ hand, v });
+			c.sinceShot = 0.0f;
+			++c.tally.bombs;
+			Sounds::Play("grenade_throw", hand);
+			AutoTest::OnMove("bomb_thrown");
+			SKSE::log::info("combat: a Shatterbomb leaves his hand for a point {:.1f} m away ({:.1f} m/s, {:.0f}° up)", to.Length() / u,
+				v.Length(), std::asin(std::clamp(v.z / std::max(v.Length(), 1e-4f), -1.0f, 1.0f)) * 57.29578f);
+		}
+
+		// A Shatterbomb goes off at a_at: everyone in the blast's reach takes its damage, full
+		// close by and falling off further out (measured to the nearest point of their body at
+		// its middle height), and a stagger. Ratchet himself isn't hurt (Rift Apart's own).
+		void Blast(RE::PlayerCharacter* a_player, const RE::NiPoint3& a_at)
+		{
+			const float s = Settings::Get().scale;
+			const float u = Units();
+			int         hits = 0;
+			float       total = 0.0f;
+			ForEachTarget(a_player, [&](RE::Actor* a_target) {
+				const RE::NiPoint3 body = NearestOfBody(a_target, a_at) + RE::NiPoint3{ 0.0f, 0.0f, a_target->GetHeight() * 0.5f };
+				const float        d = body.GetDistance(a_at) / (u * s);  // metres at his size
+				if (d > kBlastOuter) {
+					return;
+				}
+				const float t = std::clamp((d - kBlastInner) / (kBlastOuter - kBlastInner), 0.0f, 1.0f);
+				const float damage = (kBlastInnerDamage + (kBlastOuterDamage - kBlastInnerDamage) * t) * Settings::Get().damageMult;
+				Spells::Hit(a_target, damage, d <= kBlastHardPush ? 1.0f : 0.5f);
+				++hits;
+				total += damage;
+			});
+			c.tally.blasted += hits;
+			c.sinceBlast = 0.0f;
+			c.tally.damage += total;
+			Spells::Blast(a_at);
+			Sounds::Play("grenade_explode", a_at);
+			// The game's explosion shake reaches him in full within 30 m (MediumExplosion's radii).
+			if (a_player->GetPosition().GetDistance(a_at) < 30.0f * s * u) {
+				RE::ShakeCamera(0.5f, a_at, 0.4f);
+			}
+			AutoTest::OnMove("blast");
+			SKSE::log::info("combat: a Shatterbomb goes off {:.1f} m from him, hitting {} ({:.1f} damage in all)",
+				a_player->GetPosition().GetDistance(a_at) / u, hits, total);
+		}
+
+		// The bombs fly (exactly, under constant gravity: libarsenal's Projectile::step) and go off
+		// on the first thing they touch (the ray meets bodies too), or at the end of their life.
+		void FlyBombs(RE::PlayerCharacter* a_player, float a_dt)
+		{
+			const float s = Settings::Get().scale;
+			const float u = Units();
+			const float g = kBombGravity * s;
+			for (auto it = c.bombs.begin(); it != c.bombs.end();) {
+				Bomb&              b = *it;
+				const RE::NiPoint3 from = b.at;
+				b.at += (b.velocity * a_dt + RE::NiPoint3{ 0.0f, 0.0f, -0.5f * g * a_dt * a_dt }) * u;
+				b.velocity.z -= g * a_dt;
+				b.age += a_dt;
+				b.spin = std::fmod(b.spin + kBombSpin * (3.14159265f / 180.0f) * a_dt, 2.0f * 3.14159265f);
+				std::optional<RE::NiPoint3> blast;
+				if (const auto hit = Physics::Ray(from, b.at)) {
+					blast = hit->point;
+				} else if (b.age >= kBombLife) {
+					blast = b.at;
+				}
+				if (blast) {
+					Blast(a_player, *blast);
+					it = c.bombs.erase(it);
+				} else {
+					++it;
+				}
+			}
+		}
+
+		void Pistol(RE::PlayerCharacter* a_player, float a_dt)
 		{
 			const Spread& spread = c.aim ? kAimedSpread : kHipSpread;
 			c.cooldown = std::max(0.0f, c.cooldown - a_dt);
@@ -407,6 +597,24 @@ namespace Combat
 			const auto& s = Settings::Get();
 			return s.fireControl == a_control || s.aimControl == a_control || s.meleeControl == a_control || s.throwControl == a_control;
 		}
+
+		// The favorites hotkeys that pick his guns don't also equip Skyrim's favorites on foot (the
+		// other hotkeys still do).
+		struct HotkeysOnFoot
+		{
+			static bool CanProcess(RE::FavoritesHandler* a_this, RE::InputEvent* a_event)
+			{
+				if (Jump::OnFoot() && a_event && a_event->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
+					const std::string_view event = a_event->QUserEvent().c_str();
+					const auto&            s = Settings::Get();
+					if (!event.empty() && (event == s.pistolControl || event == s.shatterbombControl)) {
+						return false;
+					}
+				}
+				return _CanProcess(a_this, a_event);
+			}
+			static inline REL::Relocation<decltype(CanProcess)> _CanProcess;
+		};
 	}
 
 	void Install()
@@ -429,8 +637,13 @@ namespace Combat
 			off += off.empty() ? " shouts" : ", shouts";
 		}
 		const auto& s = Settings::Get();
-		SKSE::log::info("combat: fire on {}, aim on {}, wrench on {}, throw on {}; Skyrim's own{} are off on foot", s.fireControl,
-			s.aimControl, s.meleeControl, s.throwControl, off);
+		if (s.pistolControl.starts_with("Hotkey") || s.shatterbombControl.starts_with("Hotkey")) {
+			REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_FavoritesHandler[0] };
+			HotkeysOnFoot::_CanProcess = vtbl.write_vfunc(0x1, HotkeysOnFoot::CanProcess);
+			off += off.empty() ? " favorites on those hotkeys" : ", favorites on those hotkeys";
+		}
+		SKSE::log::info("combat: fire on {}, aim on {}, wrench on {}, throw on {}, the Burst Pistol on {}, the Shatterbomb on {}; Skyrim's own{} are off on foot",
+			s.fireControl, s.aimControl, s.meleeControl, s.throwControl, s.pistolControl, s.shatterbombControl, off);
 	}
 
 	void Fill(RatchetInput& a_in, const RE::NiPoint2& a_view, std::uint32_t a_state, float a_dt)
@@ -445,6 +658,14 @@ namespace Combat
 		c.melee = t.melee || Input::ControlHeld(s.meleeControl);
 		c.aim = t.aim || Input::ControlHeld(s.aimControl);
 		c.fire = t.fire || Input::ControlHeld(s.fireControl);
+		// Picking a gun (not while the wrench is out of his hand: the game waits for the catch).
+		const bool picks[2] = { Input::ControlHeld(s.pistolControl), Input::ControlHeld(s.shatterbombControl) };
+		for (int i = 0; i < 2; ++i) {
+			if (picks[i] && !c.pickHeld[i] && !c.thrown) {
+				Pick(i == 0 ? Gun::kBurstPistol : Gun::kShatterbomb);
+			}
+			c.pickHeld[i] = picks[i];
+		}
 		// The throw: on its press, unless the wrench is out already or he's busy (dashing,
 		// swinging, on a wall or ledge).
 		const bool throwHeld = t.throwWrench || Input::ControlHeld(s.throwControl);
@@ -489,8 +710,42 @@ namespace Combat
 		if (c.thrown) {
 			Fly(a_player, a_dt);
 		}
-		Gun(a_player, a_dt);
+		if (c.gun == Gun::kBurstPistol) {
+			Pistol(a_player, a_dt);
+		} else {
+			Shatterbomb(a_dt);
+		}
+		if (c.bombIn >= 0.0f) {
+			c.bombIn -= a_dt;
+			if (c.bombIn < 0.0f) {
+				ThrowBomb(a_player);
+			}
+		}
+		FlyBombs(a_player, a_dt);
+		// A moment after a blast, its flash (for the tests' pictures).
+		if (c.sinceBlast < 0.15f && c.sinceBlast + a_dt >= 0.15f) {
+			AutoTest::OnMove("blast_flash");
+		}
+		c.sinceBlast += a_dt;
 		c.aimAt = Strafing() ? std::optional(AimPoint().first) : std::nullopt;
+	}
+
+	Gun Selected() { return c.gun; }
+
+	void Select(Gun a_gun) { Pick(a_gun); }
+
+	bool WindingUp() { return c.gun == Gun::kShatterbomb && c.cooking && CanFire(c.simState); }
+
+	std::uint32_t BombThrows() { return c.bombThrows; }
+
+	std::vector<std::pair<RE::NiPoint3, float>> Bombs()
+	{
+		std::vector<std::pair<RE::NiPoint3, float>> out;
+		out.reserve(c.bombs.size());
+		for (const auto& b : c.bombs) {
+			out.emplace_back(b.at, b.spin);
+		}
+		return out;
 	}
 
 	std::optional<RE::NiPoint3> AimTarget() { return c.aimAt; }
@@ -515,10 +770,10 @@ namespace Combat
 		if (c.sinceWrench < 0.5f || c.releaseIn >= 0.0f) {
 			return Hand::kWrench;
 		}
-		if (c.aim || c.sinceShot < 2.0f) {
+		if (c.gun == Gun::kBurstPistol && (c.aim || c.sinceShot < 2.0f)) {
 			return Hand::kPistol;
 		}
-		return Hand::kNone;
+		return Hand::kNone;  // (the Shatterbomb's glove is on his hand while it's out)
 	}
 
 	bool Strafing()

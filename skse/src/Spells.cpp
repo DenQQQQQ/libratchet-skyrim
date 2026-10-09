@@ -8,10 +8,13 @@ namespace Spells
 		constexpr RE::FormID kDamageHealth = 0x0003EB42;  // AlchDamageHealth
 		constexpr RE::FormID kStagger = 0x0007809B;       // StaggerAttackFFContact
 		constexpr RE::FormID kBolt = 0x00012E84;          // FireboltProjectile01
+		constexpr RE::FormID kRuneBlast = 0x000665BB;     // ExplosionRuneShock01
+		constexpr RE::FormID kMarker = 0x0000003B;        // XMarker
 
-		RE::SpellItem* g_hit = nullptr;      // health damage on the target (the magnitude per cast)
-		RE::SpellItem* g_stagger = nullptr;  // a stagger (the magnitude per cast)
-		RE::SpellItem* g_shot = nullptr;     // a bolt that does health damage where it lands
+		RE::SpellItem*    g_hit = nullptr;      // health damage on the target (the magnitude per cast)
+		RE::SpellItem*    g_stagger = nullptr;  // a stagger (the magnitude per cast)
+		RE::SpellItem*    g_shot = nullptr;     // a bolt that does health damage where it lands
+		RE::BGSExplosion* g_blast = nullptr;    // a blast's look only
 
 		template <class T>
 		T* New()
@@ -87,8 +90,22 @@ namespace Spells
 		g_hit = Spell(Damage(damage, Delivery::kTargetActor, nullptr), 0.0f, Delivery::kTargetActor);
 		g_stagger = Spell(stagger, 0.0f, Delivery::kTargetActor);
 		g_shot = Spell(Damage(damage, Delivery::kAimed, bolt), 0.0f, Delivery::kAimed);
-		SKSE::log::info("combat: spells built (hit {:08X}, stagger {:08X}, shot {:08X})", g_hit ? g_hit->GetFormID() : 0,
-			g_stagger ? g_stagger->GetFormID() : 0, g_shot ? g_shot->GetFormID() : 0);
+		if (auto* rune = RE::TESForm::LookupByID<RE::BGSExplosion>(kRuneBlast); rune && (g_blast = New<RE::BGSExplosion>())) {
+			// Its parts by hand: Copy leaves an explosion's model behind. Not its screen effect (a
+			// radial blur over the whole screen: too much for a grenade thrown every second).
+			g_blast->data = rune->data;
+			g_blast->SetModel(rune->GetModel());
+			g_blast->data.damage = 0.0f;
+			g_blast->data.force = 0.0f;
+			g_blast->data.sound1 = nullptr;
+			g_blast->data.sound2 = nullptr;
+			g_blast->data.spawnProjectile = nullptr;
+			g_blast->data.impactPlacedObject = nullptr;
+			g_blast->formEnchanting = nullptr;
+		}
+		SKSE::log::info("combat: spells built (hit {:08X}, stagger {:08X}, shot {:08X}, blast {:08X} looking like {})", g_hit ? g_hit->GetFormID() : 0,
+			g_stagger ? g_stagger->GetFormID() : 0, g_shot ? g_shot->GetFormID() : 0, g_blast ? g_blast->GetFormID() : 0,
+			g_blast ? g_blast->GetModel() : "nothing");
 		return g_hit && g_stagger && g_shot;
 	}
 
@@ -146,5 +163,28 @@ namespace Spells
 		const RE::Projectile::ProjectileRot angles{ -std::asin(std::clamp(a_dir.z, -1.0f, 1.0f)), std::atan2(a_dir.x, a_dir.y) };
 		RE::ProjectileHandle handle;
 		RE::Projectile::LaunchSpell(&handle, player, g_shot, a_from, angles);
+	}
+
+	void Blast(const RE::NiPoint3& a_at)
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* handler = RE::TESDataHandler::GetSingleton();
+		auto* marker = RE::TESForm::LookupByID<RE::TESBoundObject>(kMarker);
+		if (!player || !handler || !marker || !g_blast) {
+			return;
+		}
+		// Set off at a marker placed there for the moment (as a script would: marker.PlaceAtMe).
+		const auto at = handler->CreateReferenceAtLocation(marker, a_at, RE::NiPoint3{}, player->GetParentCell(), player->GetWorldspace(), nullptr,
+			nullptr, {}, false, false);
+		if (const auto ref = at.get()) {
+			const auto blast = ref->PlaceObjectAtMe(g_blast, false);
+			static bool logged = false;
+			if (!logged) {
+				logged = true;
+				SKSE::log::info("combat: the first blast's look is {} ({:08X})", blast ? "placed" : "not placed", blast ? blast->GetFormID() : 0);
+			}
+			ref->Disable();
+			ref->SetDelete(true);
+		}
 	}
 }

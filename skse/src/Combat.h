@@ -5,11 +5,28 @@
 // and the Burst Pistol, on Skyrim's attack, block and draw buttons (Settings). Hits land on
 // Skyrim's actors as spells cast by the player (Spells), so Skyrim's own rules follow.
 //
-// The pistol's trigger is a small C++ stand-in for the sandbox's libarsenal (which has no C API
+// The guns' triggers are small C++ stand-ins for the sandbox's libarsenal (which has no C API
 // yet): the Burst Pistol's rates, damage and spread from wpn_burstpistol_weapon.json, its shots
-// riding a Skyrim bolt.
+// riding a Skyrim bolt; the Shatterbomb's cooked throw, lob and blast from
+// wpn_protogrenade_weapon.json.
 namespace Combat
 {
+	// His guns (the OmniWrench isn't one: it swings and flies whichever is out).
+	enum class Gun
+	{
+		kBurstPistol,
+		kShatterbomb,
+	};
+	Gun Selected();
+	// Tests: pick one.
+	void Select(Gun a_gun);
+	// The Shatterbomb: a throw winding up (the fire button held), and throws so far (his throw
+	// pose restarts on a change).
+	bool WindingUp();
+	std::uint32_t BombThrows();
+	// The bombs in the air: where each is (game units) and how far it has tumbled (radians).
+	std::vector<std::pair<RE::NiPoint3, float>> Bombs();
+
 	// After the game's data has loaded: the hit spells, and Skyrim's own attacks, blocks and
 	// weapon drawing switched off on foot.
 	void Install();
@@ -58,6 +75,8 @@ namespace Combat
 		float damage = 0.0f;
 		int   shots = 0;
 		int   throws = 0;
+		int   bombs = 0;    // Shatterbombs thrown
+		int   blasted = 0;  // actors their blasts hit
 	};
 	Tally TakeTally();
 }

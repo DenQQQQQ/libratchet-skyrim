@@ -84,7 +84,7 @@ namespace Model
 			}
 			return a_clip == "idle" || a_clip == "run" || a_clip == "walk" || a_clip == "fall" || a_clip == "glide" ||
 			       a_clip == "wall_slide_left" || a_clip == "wall_slide_right" || a_clip == "ledge_idle" || a_clip == "aim_idle" ||
-			       a_clip == "pistol_idle" || a_clip == "pistol_run";
+			       a_clip == "pistol_idle" || a_clip == "pistol_run" || a_clip == "glove_idle";
 		}
 
 		void Play(std::string_view a_name, float a_fade)
@@ -241,21 +241,34 @@ namespace Model
 			}
 		}
 
-		// The thrown wrench: under the player's root, where the sim has it, laid flat and spun
-		// about the up axis, at his size.
-		// Under his model, not the player's root: everything else under the root is the
-		// Dragonborn's, which HideDragonborn culls every frame (the first build hid the thrown
-		// wrench that way).
+		// Something flying (the thrown wrench, a Shatterbomb) under his model, at a_at in the world
+		// (game units) turned a_world in it, at his size. Under his model, not the player's root:
+		// everything else under the root is the Dragonborn's, which HideDragonborn culls every
+		// frame (the first build hid the thrown wrench that way).
+		void PlaceInWorld(RE::NiAVObject* a_node, RE::NiNode* a_root, const RE::NiPoint3& a_at, const RE::NiMatrix3& a_world)
+		{
+			if (a_node->parent != s.model.get()) {
+				if (a_node->parent) {
+					a_node->parent->DetachChild(a_node);
+				}
+				s.model->AttachChild(a_node, true);
+			}
+			// His model's world this frame (its local is set; Skyrim updates the world after).
+			const RE::NiTransform parent = a_root->world * s.model->local;
+			const RE::NiMatrix3   back = parent.rotate.Transpose();
+			a_node->local.translate = (back * (a_at - parent.translate)) / parent.scale;
+			a_node->local.rotate = back * a_world;
+			a_node->local.scale = UnitsPerMetre() * Settings::Get().scale / parent.scale;
+			if (a_node->GetAppCulled()) {
+				a_node->SetAppCulled(false);
+			}
+		}
+
+		// The thrown wrench: where the sim has it, laid flat and spun about the up axis.
 		void Throw(Weapon& a_weapon, RE::NiNode* a_root, const RE::NiPoint3& a_at, float a_spin)
 		{
 			if (!Load(a_weapon) || !a_root || !s.model) {
 				return;
-			}
-			if (a_weapon.node->parent != s.model.get()) {
-				if (a_weapon.node->parent) {
-					a_weapon.node->parent->DetachChild(a_weapon.node.get());
-				}
-				s.model->AttachChild(a_weapon.node.get(), true);
 			}
 			// glTF to Skyrim (Orientation's M), the handle (glTF +Y, Skyrim up after M) laid along
 			// the ground (90° about x), then the spin about up.
@@ -271,15 +284,134 @@ namespace Model
 			spin.entry[1][0] = sn;
 			spin.entry[1][1] = c;
 			spin.entry[2][2] = 1.0f;
-			const RE::NiMatrix3 world = spin * flat * Orientation(0.0f);
-			// His model's world this frame (its local is set; Skyrim updates the world after).
-			const RE::NiTransform parent = a_root->world * s.model->local;
-			const RE::NiMatrix3   back = parent.rotate.Transpose();
-			a_weapon.node->local.translate = (back * (a_at - parent.translate)) / parent.scale;
-			a_weapon.node->local.rotate = back * world;
-			a_weapon.node->local.scale = UnitsPerMetre() * Settings::Get().scale / parent.scale;
-			if (a_weapon.node->GetAppCulled()) {
-				a_weapon.node->SetAppCulled(false);
+			PlaceInWorld(a_weapon.node.get(), a_root, a_at, spin * flat * Orientation(0.0f));
+		}
+
+		// The Shatterbombs in the air (skse\tools\ratchet_to_skyrim.py --name shatterbomb): a copy
+		// of its model each, tumbling about Skyrim's east-west axis (the sandbox tumbles them about
+		// one axis too).
+		Weapon                                 g_bomb{ "RatchetMovement\\shatterbomb.nif" };
+		std::vector<RE::NiPointer<RE::NiNode>> g_bombs;  // one per bomb in the air; spares hidden
+
+		void ShowBombs(RE::NiNode* a_root)
+		{
+			const auto bombs = Combat::Bombs();
+			if (!a_root || (bombs.size() > g_bombs.size() && !Load(g_bomb))) {
+				return;
+			}
+			while (g_bombs.size() < bombs.size()) {
+				auto* copy = g_bomb.node->Clone();
+				auto* node = copy ? copy->AsNode() : nullptr;
+				if (!node) {
+					SKSE::log::warn("ratchet model: couldn't copy the Shatterbomb's model");
+					return;
+				}
+				g_bombs.emplace_back(node);
+			}
+			for (std::size_t i = 0; i < g_bombs.size(); ++i) {
+				if (i < bombs.size()) {
+					const float  c = std::cos(bombs[i].second), sn = std::sin(bombs[i].second);
+					RE::NiMatrix3 tumble;  // identity, made a turn about x
+					tumble.entry[1][1] = c;
+					tumble.entry[1][2] = -sn;
+					tumble.entry[2][1] = sn;
+					tumble.entry[2][2] = c;
+					PlaceInWorld(g_bombs[i].get(), a_root, bombs[i].first, tumble * Orientation(0.0f));
+				} else if (!g_bombs[i]->GetAppCulled()) {
+					g_bombs[i]->SetAppCulled(true);
+				}
+			}
+		}
+
+		// The Shatterbomb's glove (--name shatterbomb_glove), on in place of his own right glove
+		// (sm05) while the Shatterbomb is out, except on a wall, a ledge or a swing (the game
+		// holsters it there). Its shapes are skinned to its own copy of his skeleton; as the
+		// sandbox does, they're bound to his joints by name instead (his <joint>_scaled nodes where
+		// he has them, as his own skin is), so it moves with his hand.
+		struct Glove
+		{
+			RE::NiPointer<RE::NiNode> node;
+			bool                      failed = false;
+			RE::NiNode*               boundTo = nullptr;  // his model it's bound to
+			RE::NiAVObject*           bare = nullptr;     // his own right glove
+		};
+		Glove g_glove;
+
+		bool BindGlove()
+		{
+			int bound = 0;
+			int missing = 0;
+			RE::BSVisit::TraverseScenegraphGeometries(g_glove.node.get(), [&](RE::BSGeometry* a_geom) {
+				auto* skin = a_geom->GetGeometryRuntimeData().skinInstance.get();
+				if (!skin || !skin->skinData || !skin->bones) {
+					return RE::BSVisit::BSVisitControl::kContinue;
+				}
+				for (std::uint32_t i = 0; i < skin->skinData->GetBoneCount(); ++i) {
+					const std::string_view own = skin->bones[i] ? skin->bones[i]->name.c_str() : "";
+					if (!own.starts_with("RG_")) {
+						continue;
+					}
+					const std::string joint(own.substr(3));
+					RE::NiAVObject*   his = s.model->GetObjectByName(RE::BSFixedString("RC_" + joint + "_scaled"));
+					if (!his) {
+						his = s.model->GetObjectByName(RE::BSFixedString("RC_" + joint));
+					}
+					if (!his) {
+						++missing;
+						continue;
+					}
+					skin->bones[i] = his;
+					skin->boneWorldTransforms[i] = &his->world;
+					++bound;
+				}
+				// Its bound sits where its own skeleton rests; his hand reaches out from there.
+				a_geom->GetModelData().modelBound.radius = std::max(a_geom->GetModelData().modelBound.radius, 1.0f);
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+			SKSE::log::info("ratchet model: the Shatterbomb's glove bound to {} of his joints ({} not found)", bound, missing);
+			return bound > 0;
+		}
+
+		void WearGlove(const Drive& a_drive)
+		{
+			const bool out = Combat::Selected() == Combat::Gun::kShatterbomb;
+			if (!out && !g_glove.node) {
+				return;
+			}
+			if (!g_glove.node && !g_glove.failed) {
+				RE::NiPointer<RE::NiNode> loaded;
+				const RE::BSModelDB::DBTraits::ArgsType args{};
+				const auto err = RE::BSModelDB::Demand("RatchetMovement\\shatterbomb_glove.nif", loaded, args);
+				if (err != RE::BSResource::ErrorCode::kNone || !loaded) {
+					SKSE::log::warn("ratchet model: no meshes\\RatchetMovement\\shatterbomb_glove.nif (error {}): he throws with his own glove",
+						static_cast<int>(err));
+					g_glove.failed = true;
+					return;
+				}
+				g_glove.node = loaded;
+			}
+			if (!g_glove.node) {
+				return;
+			}
+			if (g_glove.boundTo != s.model.get()) {
+				g_glove.boundTo = s.model.get();
+				if (g_glove.node->parent) {
+					g_glove.node->parent->DetachChild(g_glove.node.get());
+				}
+				s.model->AttachChild(g_glove.node.get(), true);
+				g_glove.bare = s.model->GetObjectByName(RE::BSFixedString("RC_sm05"));
+				if (!BindGlove()) {
+					g_glove.failed = true;
+					g_glove.node->SetAppCulled(true);
+					return;
+				}
+			}
+			const bool on = out && !g_glove.failed && !(a_drive.simState >= RATCHET_STATE_WALL_STICK && a_drive.simState <= RATCHET_STATE_SWING_JUMP);
+			if (g_glove.node->GetAppCulled() == on) {
+				g_glove.node->SetAppCulled(!on);
+			}
+			if (g_glove.bare && g_glove.bare->GetAppCulled() != on) {
+				g_glove.bare->SetAppCulled(on);
 			}
 		}
 
@@ -319,8 +451,24 @@ namespace Model
 			float         throwTime = -1.0f;
 			std::uint32_t shotsSeen = 0;
 			std::uint32_t throwsSeen = 0;
+			// The Shatterbomb: its wind-up (and which version), its throw, and the glove's hand.
+			float         windupWeight = 0.0f;
+			float         windupTime = 0.0f;
+			int           windupVersion = 0;
+			float         bombTime = -1.0f;
+			int           bombVersion = 0;
+			std::uint32_t bombsSeen = 0;
+			float         gloveWeight = 0.0f;
+			float         gloveTime = 0.0f;
 		};
 		Layers g_layers;
+
+		// The game's grenade throws (underhand, additive), whole-body standing still and the arm's
+		// on the move or in the air, and their wind-ups while fire is held (the sandbox's
+		// GRENADE_LAYERS and WINDUP_LAYERS); the glove's hand pose over whatever he does.
+		constexpr std::string_view kBombThrow[] = { "grenade_throw_additive", "grenade_throw_arm_additive" };
+		constexpr std::string_view kBombWindup[] = { "grenade_windup_additive", "grenade_windup_arm_additive" };
+		constexpr float            kGloveFade = 0.2f;
 
 		constexpr float kAimUp = 90.0f;  // degrees the aim poses reach (the sandbox's)
 		constexpr float kAimDown = 45.0f;
@@ -379,7 +527,46 @@ namespace Model
 				}
 			}
 
-			// The throw, restarted by each one.
+			// The Shatterbomb's wind-up while fire is held, and its throw restarted by each one.
+			const bool standing = (a_drive.simJump ? a_drive.simState == RATCHET_STATE_GROUND : a_drive.grounded) && a_speed <= kMoving;
+			const bool winding = Combat::WindingUp();
+			if (winding && g_layers.windupWeight == 0.0f) {
+				g_layers.windupTime = 0.0f;
+				g_layers.windupVersion = standing ? 0 : 1;
+			}
+			g_layers.windupWeight = winding ? std::min(1.0f, g_layers.windupWeight + a_dt / kLayerFadeIn) :
+			                                  std::max(0.0f, g_layers.windupWeight - a_dt / kLayerFadeOut);
+			if (g_layers.windupWeight > 0.0f) {
+				g_layers.windupTime += a_dt;
+				play(kBombWindup[g_layers.windupVersion], g_layers.windupTime, g_layers.windupWeight);
+			}
+			if (Combat::BombThrows() != g_layers.bombsSeen) {
+				g_layers.bombsSeen = Combat::BombThrows();
+				g_layers.bombTime = 0.0f;
+				g_layers.bombVersion = standing ? 0 : 1;
+			}
+			if (g_layers.bombTime >= 0.0f) {
+				g_layers.bombTime += a_dt;
+				const Anim::Clip* clip = s.lib.Find(kBombThrow[g_layers.bombVersion]);
+				if (!clip || g_layers.bombTime >= clip->seconds) {
+					g_layers.bombTime = -1.0f;
+				} else {
+					const float t = g_layers.bombTime;
+					play(clip->name, t, std::min({ t / kLayerFadeIn, 1.0f, (clip->seconds - t) / kLayerFadeOut }));
+				}
+			}
+			// The glove's hand while it's on (his fingers round its grip).
+			const bool glove = Combat::Selected() == Combat::Gun::kShatterbomb && !(a_drive.simState >= RATCHET_STATE_WALL_STICK &&
+																				a_drive.simState <= RATCHET_STATE_SWING_JUMP);
+			g_layers.gloveWeight = glove ? std::min(1.0f, g_layers.gloveWeight + a_dt / kGloveFade) : std::max(0.0f, g_layers.gloveWeight - a_dt / kGloveFade);
+			if (g_layers.gloveWeight > 0.0f) {
+				g_layers.gloveTime += a_dt;
+				if (const Anim::Clip* clip = s.lib.Find("glove_hand")) {
+					s.lib.Overlay(*clip, g_layers.gloveTime, true, g_layers.gloveWeight, s.pose);
+				}
+			}
+
+			// The wrench's throw, restarted by each one.
 			if (a_drive.throws != g_layers.throwsSeen) {
 				g_layers.throwsSeen = a_drive.throws;
 				g_layers.throwTime = 0.0f;
@@ -481,7 +668,8 @@ namespace Model
 			} else if (s.landTimer > 0.0f) {
 				want = "land";
 			} else {
-				want = "idle";
+				// With the Shatterbomb out, his idle holds the glove up.
+				want = Combat::Selected() == Combat::Gun::kShatterbomb ? "glove_idle" : "idle";
 			}
 			const auto landing = [](std::string_view c) { return c.starts_with("land"); };
 			const bool quickFade = landing(want) || (s.cur.clip && landing(s.cur.clip->name));
@@ -629,6 +817,8 @@ namespace Model
 		s.model->local.rotate = Orientation(s.yaw);
 		s.model->local.scale = UnitsPerMetre() * scale;
 		HoldWeapons(a_player);
+		WearGlove(a_drive);
+		ShowBombs(a_player->Get3D(false) ? a_player->Get3D(false)->AsNode() : nullptr);
 		Clank::Update(s.model.get(), a_drive.simJump && a_drive.simState == RATCHET_STATE_GLIDE, a_dt);
 		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 		s.model->Update(update);

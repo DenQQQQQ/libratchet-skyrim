@@ -500,3 +500,43 @@ The owner asked for Clank on his back.
   jump traced frame by frame in the owner's own games) and none of the newer options listed.
   It's the current template now, with the owner's values (all the same as its defaults,
   `fScale = 1.0` among them) and tracing off.
+
+## 2026-10-09: the Shatterbomb (the owner: "I want guns")
+
+- **The second gun.** Keys 1 and 2 (Skyrim's Hotkey1 and Hotkey2, INI `sPistolControl` and
+  `sShatterbombControl`) pick the Burst Pistol or the Shatterbomb, as in the sandbox. Skyrim's
+  favorites on those two hotkeys don't equip on foot then; the other hotkeys still do.
+- **Its numbers** are the owner's `wpn_protogrenade_weapon.json`, read the way libarsenal reads
+  it (its level-1 upgrades win). It's a cooked trigger: fire held winds the throw up, letting go
+  throws, 0.8 throws a second, 6 in the glove (filled again 1.5 s after the last, the sandbox's
+  convenience). The throw is lobbed at 30 m/s under 30 m/s² to come down on the crosshair's point,
+  at most 30 m out, solved for the lower arc as libarsenal's `lob_velocity` does. It flies
+  exactly under constant gravity and goes off on the first thing a ray along its path meets
+  (bodies too), or after 8 s. The blast does 170.5 damage within 1 m, falling to 85.25 at 6 m
+  (measured to the nearest point of each body at its middle height), and a full stagger within
+  3 m, half one further out. Ratchet isn't hurt. Like the pistol's trigger, this is a C++ stand-in
+  for libarsenal, which has no C API yet (see the clip-choice proposal).
+- **His glove.** `shatterbomb_glove.glb` is skinned to its own copy of his skeleton. The plugin
+  hangs it under his model and points its skin's bones at his own nodes by name (his `_scaled`
+  joints where he has them, as his own skin uses), as the sandbox does: all 42 of its joints
+  were found. His own right glove (`sm05`) hides while it's on. It's off on walls, ledges and
+  swings, where the game holsters the weapon. His hand takes the glove's grip (`glove_hand`, a
+  clip of the hand's joints only, over whatever he does), and he idles with the glove up
+  (`glove_idle`).
+- **The throw's poses.** The game's grenade layers: the wind-up while fire is held, then the throw
+  on each one, whole-body standing still and the arm's alone on the move or in the air (the
+  sandbox's choice). The bomb leaves his hand 0.1 s in.
+- **The bomb and its blast.** Each bomb in the air is a copy of `shatterbomb.nif`
+  (`NiObject::Clone`), tumbling. The blast looks like Lightning Rune's (`ExplosionRuneShock01`):
+  a runtime copy with no damage, push, shock or sounds, set off at a marker placed for the
+  moment. `TESForm::Copy` left the explosion's model behind, so its data and model are copied by
+  hand. Its screen effect is left out (a radial blur over the whole screen, too much for a
+  grenade a second). The sounds are Rift Apart's (`grenade_throw`, `grenade_explode`), and the
+  camera shakes within 30 m.
+- In game: the Shatterbomb case winds up 0.4 s and throws at the cow. The bomb flies low (3°
+  up for 5 m at 30 m/s) and goes off on the cow: 170.5 damage, 85.2 at the save's Master
+  difficulty. Screenshots show the glove on his hand and the blast's white-blue burst at the
+  cow. **22/22 pass.**
+- Test log: each fight now logs where he and its target are. Moved back for a later fight, the
+  cow ends up 6.1 m away, not 8 m (not looked into; an earlier stagger may still be moving
+  it). The fights pass either way.

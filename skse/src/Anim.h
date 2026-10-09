@@ -58,6 +58,9 @@ namespace Anim
 		// Bevy's additive blend does it: translations added, rotations turned by
 		// slerp(identity, change, weight) after the pose's.
 		void AddAdditive(const Clip& a_clip, float a_t, float a_weight, Pose& a_pose) const;
+		// A partial clip (it keys only some joints) at a_t over a_pose, at a_weight: the joints it
+		// keys go that far toward its pose, the rest stay (the glove's hand on whatever he does).
+		void Overlay(const Clip& a_clip, float a_t, bool a_loop, float a_weight, Pose& a_pose) const;
 
 	private:
 		std::vector<Joint> _joints;
