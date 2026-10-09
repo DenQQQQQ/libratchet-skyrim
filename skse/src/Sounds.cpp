@@ -342,6 +342,39 @@ namespace Sounds
 		g_loops.clear();
 	}
 
+	namespace
+	{
+		RE::BSSoundHandle g_test;
+	}
+
+	void PlayTest(const std::string& a_file, const RE::NiPoint3& a_where, float a_volume)
+	{
+		StopTest();
+		auto* audio = RE::BSAudioManager::GetSingleton();
+		if (!audio) {
+			return;
+		}
+		RE::BSResource::ID id;
+		id.GenerateFromPath(a_file.c_str());
+		audio->GetSoundHandleByFile(g_test, id, 0x1A, 128);
+		if (!g_test.IsValid()) {
+			SKSE::log::warn("sounds: the lab's {} won't play", a_file);
+			return;
+		}
+		g_test.SetPosition(a_where);
+		g_test.SetVolume(a_volume);
+		const bool played = g_test.Play();
+		SKSE::log::info("sounds: the lab's sound {:08X}: {}, {}", g_test.soundID, played ? "played" : "not played", g_test.IsPlaying() ? "playing" : "not playing yet");
+	}
+
+	void StopTest()
+	{
+		if (g_test.IsValid()) {
+			g_test.Stop();
+		}
+		g_test = RE::BSSoundHandle{};
+	}
+
 	void Update(float a_dt)
 	{
 		g_clock += a_dt;

@@ -817,3 +817,46 @@ against `skse/src`, and ranked what a player would notice. Fixed from it so far:
   Once, the first run after the converter rewrote 73 MB of sounds, the combo's second swing came
   0.3 s late and its third never did; not again in three runs (first reads of the new files).
 
+### The weapons' own clips, the thrown wrench's roll, the crosshair
+
+- **The weapons' clips.** The OmniWrench and the Burst Pistol are converted with their clips now
+  (`wrench.anim`: 13 joints, 6 clips; `burstpistol.anim`: 24 joints, `fire`), and played on their
+  joints as the sandbox plays them (wrench.rs held_wrench, weapons.rs gun_clips): the wrench's
+  `melee_1/2/3` with each swing and `smash_intro`/`smash` with the Hyper-Strike, in over 0.05 s, and
+  its `idle` between, over 0.15 s (the squash and stretch: the third hit shrinks the back hammer,
+  the idle brings it back); the pistol's 0.33 s `fire` (the slide) from its start with each shot.
+  The combo and pistol cases check them: `idle, melee_1, melee_2, melee_3` and `fire` played.
+- **The thrown wrench** lies as the sandbox's (Ry(spin) Rz(90°): Rift Apart's ThrowOrientation
+  kXUp, the model's +x up); it was rolled 90° about its handle (+z up).
+- **The camera's framing** follows the pitch only as far as the sandbox's mouse look goes (-0.25 to
+  1.35 rad): further up, the framing stays (3.96 m back standing, not 3 m). Skyrim's look itself
+  isn't clamped (aiming up at a dragon).
+- **The crosshair.** Skyrim shows none in third person with no weapon drawn, and the plugin keeps
+  Skyrim's weapons away: there was nothing to aim with. The sandbox's "+" (white at 90%, its dark
+  shadow, 3.4% of the screen's height) is drawn now while the Rift Apart camera is on, a quad 30
+  units in front of the camera, turned with it (its shakes too), drawn over everything (the
+  converter makes the texture and a quad without the depth test; no game art). The aimed pistol's
+  picture shows it at the screen's middle; in first person it's Skyrim's view (no "+" of ours).
+- **The wheel zooms the Rift Apart camera** as the sandbox's does (main.rs camera_control): 0.6 m a
+  notch, 2 to 40 m; nearer than 45% of the game's distance it frames lower, toward his chest, and
+  stops pulling back while he runs. Zoomed in all the way, the next notch goes to first person
+  (Skyrim's zoom did that; before, the wheel did nothing else on foot), and back in third person
+  it's at the game's distance. Hooked on the third-person state's own input (its
+  `PlayerInputHandler::ProcessButton`): the zoom's notches only, on foot. A new case sends
+  notches through that handler: 5 out took the camera from 4.89 to 7.80 m from him, in to 2 m
+  (2.15 m from him), one more first person, back at 4.65 m.
+- Small numbers from the audit: the crosshair's ray reaches 80 m (the bolts still stop at 45 m:
+  a shot at something further still goes its way), and walking is the stick at 0.45 (was 0.5).
+- **Tests: 35/35.**
+
+### The sound lab: does Skyrim place the plugin's sounds?
+
+A case run only by name (`-Only "sound lab" -Audio`) plays one steady sound (the wrench's whir,
+looped) for 1.4 s at a time: near the camera, at him, 10, 20, 40 and 80 m ahead, near the camera
+at half volume, and 10 m to each side; `audio_check.py --each "sound lab:"` measures each. The
+answer: Skyrim plays these handles unplaced (`GetSoundHandleByFile`, flags 0x1A). Every distance
+measured the same (rms 0.025, 80 m as 0.3 m), left and right alike at either side, and half
+volume half the amplitude (0.0126 against 0.0251 once the background's 0.0056 is taken out). So
+the sandbox's own fade past 6 m from him (now in `Sounds.cpp`) is the only one, as in the sandbox,
+whose Bevy audio isn't placed either.
+

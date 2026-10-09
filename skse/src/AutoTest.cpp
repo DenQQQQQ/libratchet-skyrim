@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Camera.h"
 #include "Clank.h"
 #include "Combat.h"
 #include "Fx.h"
@@ -9,6 +10,7 @@
 #include "Settings.h"
 #include "Physics.h"
 #include "RatchetDll.h"
+#include "Sounds.h"
 #include "TestWindow.h"
 
 namespace AutoTest
@@ -77,6 +79,17 @@ namespace AutoTest
 			// He starts on a platform this far up (metres; 0: the ground), its edge half a metre
 			// ahead: a long glide off it, for Clank's heli-pack and its sounds.
 			float       platformUp = 0.0f;
+			// A fight: a clip of the weapon's own that has to have played on it (the wrench's, or
+			// with weaponClipOnPistol the pistol's).
+			const char* weaponClip = nullptr;
+			bool        weaponClipOnPistol = false;
+			// The wheel's zoom, notches sent through Skyrim's camera input: out 3 m, in to the
+			// closest, once more into first person, and back at the game's distance after.
+			bool        zoom = false;
+			// The sound lab: one steady file played at distances and volumes from the camera, for
+			// a recording (ingame.ps1 -Audio) to measure how Skyrim fades and pans the plugin's
+			// sounds. Run only when -Only names it.
+			bool        soundLab = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -109,9 +122,11 @@ namespace AutoTest
 			{ .name = "run up stairs", .hold = -1.0f, .runFor = 2.5f, .climb = 0x000C9B5D, .minClimb = 4.5f },
 			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
 			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.4f },
-			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
+			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3,
+				.weaponClip = "melee_3" },
 			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 1.5f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
-			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
+			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f, .weaponClip = "fire",
+				.weaponClipOnPistol = true },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
 			// Melee while aiming throws the wrench (Rift Apart's, and the sandbox's).
@@ -135,6 +150,8 @@ namespace AutoTest
 			// metre short of the wall, inside the catch's reach (1.2 m) and outside the wall
 			// stick's (0.775 m).
 			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f },
+			{ .name = "camera zoom", .hold = -1.0f, .zoom = true },
+			{ .name = "sound lab", .hold = -1.0f, .soundLab = true },
 			// The effects hang under the player's cell's 3D, which goes at a load door or a load:
 			// through the Bannered Mare's door, then a load of the most recent save. Last, as they
 			// leave him away from the start.
@@ -203,6 +220,7 @@ namespace AutoTest
 			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
 			bool            heliSeen = false;     // Clank's heli-pack came out during this case
 			std::vector<std::string> clipsSeen;   // his clips during this case
+			std::vector<std::string> weaponClipsSeen;  // the case's weapon's own clips
 			// The statics placed for this case (removed after it), and what he did on the wall.
 			std::vector<RE::ObjectRefHandle> placed;
 			bool                        wallPlaced = false;
@@ -234,6 +252,16 @@ namespace AutoTest
 			bool                fxUnder = false;
 			bool                ratchetThere = false;  // his model posed on the player there
 			bool                clankThere = false;    // and Clank playing on his back
+			// The zoom case: its step, the time in it, the wheel's distance at each step and the
+			// camera's from him (metres), and whether the last notch went to first person.
+			int                 zoomStep = 0;
+			float               zoomTime = 0.0f;
+			float               zoomFrom = 0.0f;
+			float               zoomOut = 0.0f;
+			float               zoomIn = 0.0f;
+			float               cameraFrom = 0.0f;
+			float               cameraOut = 0.0f;
+			bool                zoomFirst = false;
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -453,6 +481,7 @@ namespace AutoTest
 			s.targetPlaced = false;
 			s.heliSeen = false;
 			s.clipsSeen.clear();
+			s.weaponClipsSeen.clear();
 			for (const auto& placed : s.placed) {
 				if (const auto ref = placed.get()) {
 					ref->Disable();
@@ -487,6 +516,9 @@ namespace AutoTest
 			s.fxUnder = false;
 			s.ratchetThere = false;
 			s.clankThere = false;
+			s.zoomStep = 0;
+			s.zoomTime = 0.0f;
+			s.zoomFirst = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -812,6 +844,16 @@ namespace AutoTest
 			if (a_case.awake && !fighting) {
 				bad += " not-in-combat";
 			}
+			if (a_case.weaponClip) {
+				std::string clips;
+				for (const auto& clip : s.weaponClipsSeen) {
+					clips += (clips.empty() ? "" : ", ") + clip;
+				}
+				SKSE::log::info("autotest: {}: the {}'s own clips: {}", a_case.name, a_case.weaponClipOnPistol ? "pistol" : "wrench", clips.empty() ? "none" : clips);
+				if (std::ranges::find(s.weaponClipsSeen, a_case.weaponClip) == s.weaponClipsSeen.end()) {
+					bad += " weapon-clip";
+				}
+			}
 			if (a_case.crime) {
 				const std::uint32_t bounty = WhiterunBounty();
 				SKSE::log::info("autotest: {}: his bounty in Whiterun {} -> {}", a_case.name, s.bounty, bounty);
@@ -953,6 +995,141 @@ namespace AutoTest
 				}
 				return;
 			}
+		}
+
+		// The camera's distance from him (metres), and whether it's first person.
+		float CameraFromHim()
+		{
+			const auto* camera = RE::PlayerCamera::GetSingleton();
+			const auto* player = RE::PlayerCharacter::GetSingleton();
+			return camera && camera->cameraRoot && player ? camera->cameraRoot->world.translate.GetDistance(player->GetPosition()) / Units() : 0.0f;
+		}
+
+		// The zoom case: five notches out (3 m further back), in all the way to the closest (2 m),
+		// once more (first person, as Skyrim's zoom goes), and third person again: back at the
+		// game's distance. Each step half a second apart, for the camera to get there.
+		void ZoomSteps(const Case& a_case, float a_dt)
+		{
+			s.zoomTime += a_dt;
+			if (s.zoomStep > 0 && s.zoomTime < 0.5f) {
+				return;
+			}
+			s.zoomTime = 0.0f;
+			auto* camera = RE::PlayerCamera::GetSingleton();
+			switch (s.zoomStep++) {
+			case 0:
+				s.zoomFrom = Camera::ZoomDistance();
+				s.cameraFrom = CameraFromHim();
+				for (int i = 0; i < 5; ++i) {
+					Camera::TestWheel(false);
+				}
+				return;
+			case 1:
+				{
+					s.zoomOut = Camera::ZoomDistance();
+					s.cameraOut = CameraFromHim();
+					const int notches = static_cast<int>(std::ceil((s.zoomOut - 2.0f) / 0.6f - 1e-3f));
+					for (int i = 0; i < notches; ++i) {
+						Camera::TestWheel(true);
+					}
+					return;
+				}
+			case 2:
+				s.zoomIn = Camera::ZoomDistance();
+				SKSE::log::info("autotest: {}: zoomed in to {:.2f} m, the camera {:.2f} m from him", a_case.name, s.zoomIn, CameraFromHim());
+				Camera::TestWheel(true);
+				return;
+			case 3:
+				s.zoomFirst = camera && camera->IsInFirstPerson();
+				ThirdPerson();
+				return;
+			default:
+				{
+					const float back = Camera::ZoomDistance();
+					std::string bad;
+					if (std::abs(s.zoomOut - (s.zoomFrom + 3.0f)) > 0.01f) {
+						bad += " out";
+					}
+					if (s.cameraOut < s.cameraFrom + 2.0f) {
+						bad += " camera-out";
+					}
+					if (std::abs(s.zoomIn - 2.0f) > 0.01f) {
+						bad += " in";
+					}
+					if (!s.zoomFirst) {
+						bad += " no-first-person";
+					}
+					if (std::abs(back - s.zoomFrom) > 0.01f) {
+						bad += " back";
+					}
+					++(bad.empty() ? s.passed : s.failed);
+					SKSE::log::info("autotest: {} {}: the wheel's distance {:.2f} m, 5 notches out {:.2f} m (the camera {:.2f} -> {:.2f} m from him), in to {:.2f} m, then {}, back at {:.2f} m{}",
+						bad.empty() ? "PASS" : "FAIL", a_case.name, s.zoomFrom, s.zoomOut, s.cameraFrom, s.cameraOut, s.zoomIn,
+						s.zoomFirst ? "first person" : "NOT first person", back, bad.empty() ? "" : " - off:" + bad);
+					NextCase();
+					return;
+				}
+			}
+		}
+
+		// The sound lab's steps: a steady sound (the thrown wrench's 1.48 s whir, looped) for 1.4 s
+		// each, then 0.6 s quiet; where from the camera (metres: right, ahead) or at him, and how
+		// loud. Each logs its start ("autotest: sound lab: ..."): audio_check.py --each measures them.
+		struct LabStep
+		{
+			const char* label;
+			float       right, ahead;
+			bool        atHim;
+			float       volume;
+		};
+		constexpr LabStep kLab[] = {
+			{ "near the camera", 0.0f, 0.3f, false, 1.0f },
+			{ "at him", 0.0f, 0.0f, true, 1.0f },
+			{ "10 m ahead", 0.0f, 10.0f, false, 1.0f },
+			{ "20 m ahead", 0.0f, 20.0f, false, 1.0f },
+			{ "40 m ahead", 0.0f, 40.0f, false, 1.0f },
+			{ "80 m ahead", 0.0f, 80.0f, false, 1.0f },
+			{ "near the camera at half volume", 0.0f, 0.3f, false, 0.5f },
+			{ "10 m right", 10.0f, 0.0f, false, 1.0f },
+			{ "10 m left", -10.0f, 0.0f, false, 1.0f },
+		};
+		constexpr const char* kLabFile = "Sound\\FX\\RatchetMovement\\wrench_throw_loop\\900426063_loop.wav";
+		int   g_labStep = 0;
+		float g_labTime = 0.0f;
+
+		void LabSteps(float a_dt)
+		{
+			const bool playing = g_labStep % 2 == 1;  // odd: a step plays; even: quiet before the next
+			g_labTime += a_dt;
+			if (g_labTime < (playing ? 1.4f : 0.6f)) {
+				return;
+			}
+			g_labTime = 0.0f;
+			Sounds::StopTest();
+			const int next = (g_labStep + 1) / 2;  // the step to play now (after a quiet one)
+			++g_labStep;
+			if (playing) {
+				SKSE::log::info("autotest: sound lab: quiet");
+				return;
+			}
+			if (next >= static_cast<int>(std::size(kLab))) {
+				++s.passed;
+				SKSE::log::info("autotest: PASS sound lab: {} steps played (measure them in the recording)", std::size(kLab));
+				g_labStep = 0;
+				NextCase();
+				return;
+			}
+			const auto& step = kLab[next];
+			const auto* camera = RE::PlayerCamera::GetSingleton();
+			const auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!camera || !camera->cameraRoot || !player) {
+				return;
+			}
+			const auto&  view = camera->cameraRoot->world;
+			RE::NiPoint3 at = step.atHim ? player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, Units() } :
+			                               view.translate + view.rotate.GetVectorX() * (step.right * Units()) + view.rotate.GetVectorY() * (step.ahead * Units());
+			SKSE::log::info("autotest: sound lab: {} ({:.1f} m from the camera, volume {:.2f})", step.label, at.GetDistance(view.translate) / Units(), step.volume);
+			Sounds::PlayTest(kLabFile, at, step.volume);
 		}
 
 		void SetPref(const char* a_name, bool a_bool, float a_float, bool a_isFloat)
@@ -1144,7 +1321,7 @@ namespace AutoTest
 			return {};
 		}
 		const Case& c = kCases[s.index];
-		if (!Picked(c.name)) {
+		if (!Picked(c.name) || (c.soundLab && s.only.empty())) {
 			NextCase();
 			return {};
 		}
@@ -1286,6 +1463,11 @@ namespace AutoTest
 		if (const std::string clip(Model::CurrentClip()); !clip.empty() && std::ranges::find(s.clipsSeen, clip) == s.clipsSeen.end()) {
 			s.clipsSeen.push_back(clip);
 		}
+		if (c.weaponClip) {
+			if (const std::string clip(Model::WeaponClip(c.weaponClipOnPistol)); !clip.empty() && std::ranges::find(s.weaponClipsSeen, clip) == s.weaponClipsSeen.end()) {
+				s.weaponClipsSeen.push_back(clip);
+			}
+		}
 		if (a_state == RATCHET_STATE_WALL_STICK && !s.stuckSeen) {
 			s.stuckSeen = true;
 			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && c.ledgeAt > 0.0f) {
@@ -1298,6 +1480,14 @@ namespace AutoTest
 		}
 		if (c.door) {
 			Door(c, a_dt, a_grounded, a_busy);
+			return {};
+		}
+		if (c.zoom) {
+			ZoomSteps(c, a_dt);
+			return {};
+		}
+		if (c.soundLab) {
+			LabSteps(a_dt);
 			return {};
 		}
 		if (c.duration > 0.0f) {

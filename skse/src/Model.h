@@ -41,8 +41,9 @@ namespace Model
 	// His clips sound his steps, efforts, swishes and swings (clip_sounds.txt, on the sandbox's
 	// clip clock): the moves' own sounds are then only those the sandbox plays from them.
 	bool ClipSounds();
-	// What clip plays (for logs and tests).
+	// What clip plays (for logs and tests); on the wrench or the pistol (their own clips).
 	std::string_view CurrentClip();
+	std::string_view WeaponClip(bool a_pistol);
 	// Where his gun hand is (his igLoc_RT_gunAttach, game units), once his model is posed.
 	std::optional<RE::NiPoint3> GunHand();
 	// The OmniWrench in his hand (drawn there, not thrown): where it is in the world.

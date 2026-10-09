@@ -216,9 +216,69 @@ namespace Model
 			const char*               path;
 			RE::NiPointer<RE::NiNode> node;
 			bool                      failed = false;
+			// Its own clips (<name>.anim: the wrench's squash and stretch with his swings, the
+			// pistol's slide), played on its joints as the sandbox plays them.
+			Anim::Library                lib;
+			bool                         clips = false;
+			std::vector<RE::NiAVObject*> nodes;  // by joint, once its model is loaded
+			RE::NiNode*                  nodesOf = nullptr;
+			Anim::Player                 player;
+			std::vector<Anim::Layer>     layers;
+			Anim::Pose                   pose;
 		};
 		Weapon g_wrench{ "RatchetMovement\\wrench.nif" };
 		Weapon g_pistol{ "RatchetMovement\\burstpistol.nif" };
+		// The wrench's clip for each swing of the combo (wrench.rs CLIPS).
+		constexpr const char* kWrenchSwings[] = { "melee_1", "melee_2", "melee_3" };
+		std::uint32_t g_pistolShots = 0;  // shots its fire clip has played for
+
+		void LoadClips(Weapon& a_weapon, const std::filesystem::path& a_file)
+		{
+			a_weapon.clips = a_weapon.lib.Load(a_file);
+			if (a_weapon.clips) {
+				a_weapon.pose = a_weapon.lib.Rest();
+				SKSE::log::info("ratchet model: {} with its {} clips", a_weapon.path, a_weapon.lib.Clips().size());
+			}
+		}
+
+		// A clip on a weapon (from its start; a_fade over the one playing), if it isn't playing.
+		void PlayClip(Weapon& a_weapon, std::string_view a_clip, float a_fade, bool a_loop, bool a_again = false)
+		{
+			const Anim::Clip* clip = a_weapon.clips ? a_weapon.lib.Find(a_clip) : nullptr;
+			if (clip && (a_again || clip != a_weapon.player.Current())) {
+				a_weapon.player.Play(clip, a_weapon.player.Current() ? a_fade : 0.0f, a_loop);
+			}
+		}
+
+		// Its clips' pose on its joints (Bevy's mix, as Clank's).
+		void PoseWeapon(Weapon& a_weapon, float a_dt)
+		{
+			if (!a_weapon.clips || !a_weapon.node || !a_weapon.player.Current()) {
+				return;
+			}
+			if (a_weapon.nodesOf != a_weapon.node.get()) {
+				a_weapon.nodesOf = a_weapon.node.get();
+				const auto& joints = a_weapon.lib.Joints();
+				a_weapon.nodes.assign(joints.size(), nullptr);
+				std::size_t found = 0;
+				for (std::size_t i = 0; i < joints.size(); ++i) {
+					a_weapon.nodes[i] = a_weapon.node->GetObjectByName(RE::BSFixedString(joints[i].name));
+					found += a_weapon.nodes[i] ? 1 : 0;
+				}
+				SKSE::log::info("ratchet model: {}: {} of its {} joints found for its clips", a_weapon.path, found, joints.size());
+			}
+			a_weapon.player.Advance(a_dt);
+			a_weapon.layers.clear();
+			a_weapon.player.Layers(a_weapon.layers);
+			a_weapon.lib.Mix(a_weapon.layers, a_weapon.pose);
+			for (std::size_t i = 0; i < a_weapon.nodes.size(); ++i) {
+				if (auto* node = a_weapon.nodes[i]) {
+					node->local.translate = a_weapon.pose.t[i];
+					node->local.rotate = a_weapon.pose.r[i].ToRotation();
+					node->local.scale = a_weapon.pose.s[i];
+				}
+			}
+		}
 
 		bool Load(Weapon& a_weapon)
 		{
@@ -297,12 +357,18 @@ namespace Model
 			if (!Load(a_weapon) || !s.model) {
 				return;
 			}
-			// glTF to Skyrim (Orientation's M), the handle (glTF +Y, Skyrim up after M) laid along
-			// the ground (90° about x), then the spin about up.
-			RE::NiMatrix3 flat;  // identity, made a turn of 90° about x
+			// The sandbox's Ry(spin) * Rz(90°) in Skyrim's axes (Rift Apart's ThrowOrientation kXUp):
+			// the model's +X up, its handle (+Y) along the ground (Skyrim -x), its +Z Skyrim -y; then
+			// the spin about up.
+			RE::NiMatrix3 flat;
+			flat.entry[0][0] = 0.0f;
+			flat.entry[0][1] = -1.0f;
+			flat.entry[0][2] = 0.0f;
+			flat.entry[1][0] = 0.0f;
 			flat.entry[1][1] = 0.0f;
 			flat.entry[1][2] = -1.0f;
-			flat.entry[2][1] = 1.0f;
+			flat.entry[2][0] = 1.0f;
+			flat.entry[2][1] = 0.0f;
 			flat.entry[2][2] = 0.0f;
 			RE::NiMatrix3 spin;
 			const float c = std::cos(a_spin), sn = std::sin(a_spin);
@@ -311,7 +377,7 @@ namespace Model
 			spin.entry[1][0] = sn;
 			spin.entry[1][1] = c;
 			spin.entry[2][2] = 1.0f;
-			PlaceInWorld(a_weapon.node.get(), a_player, a_at, spin * flat * Orientation(0.0f));
+			PlaceInWorld(a_weapon.node.get(), a_player, a_at, spin * flat);
 		}
 
 		// The Shatterbombs in the air (skse\tools\ratchet_to_skyrim.py --name shatterbomb): a copy
@@ -442,7 +508,7 @@ namespace Model
 			}
 		}
 
-		void HoldWeapons(RE::PlayerCharacter* a_player)
+		void HoldWeapons(RE::PlayerCharacter* a_player, const Drive& a_drive, float a_dt)
 		{
 			static RE::NiNode* hand = nullptr;
 			static RE::NiNode* handOf = nullptr;
@@ -464,6 +530,22 @@ namespace Model
 				Hang(g_wrench, hand, held == Combat::Hand::kWrench);
 			}
 			Hang(g_pistol, hand, held == Combat::Hand::kPistol);
+
+			// Their own clips (the sandbox's held_wrench and gun_clips): the wrench's for each swing
+			// and the Hyper-Strike (in over 0.05 s), its idle between (over 0.15 s, looping); the
+			// pistol's fire clip from its start with each shot.
+			const auto state = a_drive.simState;
+			const char* swing = state == RATCHET_STATE_SMASH      ? "smash_intro" :
+			                    state == RATCHET_STATE_SMASH_LAND ? "smash" :
+			                    state == RATCHET_STATE_MELEE && a_drive.meleeSwing < std::size(kWrenchSwings) ? kWrenchSwings[a_drive.meleeSwing] :
+			                                                                                                   nullptr;
+			PlayClip(g_wrench, swing ? swing : "idle", swing ? 0.05f : 0.15f, !swing);
+			PoseWeapon(g_wrench, a_dt);
+			if (a_drive.shots != g_pistolShots) {
+				g_pistolShots = a_drive.shots;
+				PlayClip(g_pistol, "fire", 0.0f, false, true);
+			}
+			PoseWeapon(g_pistol, a_dt);
 		}
 
 		// Additive layers over the move clip, as the sandbox's graph adds them
@@ -825,6 +907,8 @@ namespace Model
 			if (s.anim && Settings::Get().sounds) {
 				SKSE::log::info("ratchet model: {} clip sounds in {} clips", count, s.clipSounds.size());
 			}
+			LoadClips(g_wrench, a_pluginDir / L"RatchetMovement" / L"wrench.anim");
+			LoadClips(g_pistol, a_pluginDir / L"RatchetMovement" / L"burstpistol.anim");
 		}
 		return s.enabled;
 	}
@@ -842,6 +926,12 @@ namespace Model
 	bool Enabled() { return s.enabled && !s.failed; }
 
 	std::string_view CurrentClip() { return s.clipName; }
+
+	std::string_view WeaponClip(bool a_pistol)
+	{
+		const auto* clip = (a_pistol ? g_pistol : g_wrench).player.Current();
+		return clip ? std::string_view(clip->name) : std::string_view{};
+	}
 
 	std::optional<RE::NiPoint3> GunHand()
 	{
@@ -992,7 +1082,7 @@ namespace Model
 		s.model->local.translate = {};
 		s.model->local.rotate = Orientation(s.yaw);
 		s.model->local.scale = UnitsPerMetre() * scale;
-		HoldWeapons(a_player);
+		HoldWeapons(a_player, a_drive, a_dt);
 		WearGlove(a_drive);
 		ShowBombs(a_player);
 		Clank::Update(s.model.get(), a_drive.simJump && a_drive.simState == RATCHET_STATE_GLIDE, a_dt);

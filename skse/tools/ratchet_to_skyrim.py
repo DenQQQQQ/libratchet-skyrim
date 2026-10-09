@@ -6,7 +6,8 @@ YOUR OWN Rift Apart install) into what the SKSE plugin draws in Skyrim SE:
   textures/RatchetMovement/ratchet/*.dds             their textures
   SKSE/Plugins/RatchetMovement/ratchet.anim          his clips, for the plugin to play
 
-The same for Clank (--name clank: clank.nif, clank.anim) and the weapons (models only).
+The same for Clank (--name clank: clank.nif, clank.anim) and the weapons (the wrench's and the
+pistol's with their clips; --no-clips for the Shatterbomb and its glove).
 
 The output is game data: it stays on this PC (the build installs it into the MO2 mod), never in
 the repository.
@@ -546,7 +547,7 @@ def main():
     ap.add_argument("--out", required=True, help="folder laid out like Skyrim's Data folder")
     ap.add_argument("--name", default="ratchet", help="meshes\\RatchetMovement\\<name>.nif, textures\\RatchetMovement\\<name>, <name>.anim")
     ap.add_argument("--prefix", default="RC_", help="put before every node name (keeps the models' nodes apart in one scene)")
-    ap.add_argument("--no-clips", action="store_true", help="the model only (his weapons: their own clips aren't played)")
+    ap.add_argument("--no-clips", action="store_true", help="the model only (the Shatterbomb and its glove have no clips of their own)")
     a = ap.parse_args()
     global PREFIX, MESH_PATH, TEXTURE_DIR, ANIM_FILE, ROOT_NAME
     PREFIX = a.prefix

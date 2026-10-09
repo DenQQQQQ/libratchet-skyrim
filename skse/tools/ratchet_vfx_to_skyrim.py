@@ -6,6 +6,7 @@ YOUR OWN Rift Apart install) into the templates the SKSE plugin builds its effec
   meshes/RatchetMovement/fx/quad_<texture>_add.nif      a unit quad per texture (and white), added
   meshes/RatchetMovement/fx/quad_<texture>_blend.nif    ... and blended
   meshes/RatchetMovement/fx/<mesh>_<i>.nif               the effect meshes, as the sandbox shades them
+  meshes/RatchetMovement/fx/crosshair_blend.nif         the sandbox's "+" (made here), drawn over everything
   SKSE/Plugins/RatchetMovement/fx.ini                   the colour palette ([Palette] name=r,g,b)
 
 The output is game data: it stays on this PC (the build installs it into the MO2 mod), never in
@@ -110,8 +111,9 @@ def default_vfx_dir():
 
 # --- shapes
 
-def write_shape_nif(path, name, pos, normal, uv, tris, texture, blend, zwrite):
-    """A NIF of one static shape: root NiNode `name`, BSTriShape "fx", its shader and alpha."""
+def write_shape_nif(path, name, pos, normal, uv, tris, texture, blend, zwrite, ztest=True):
+    """A NIF of one static shape: root NiNode `name`, BSTriShape "fx", its shader and alpha
+    (ztest off: drawn over everything, the crosshair)."""
     nv, nt = len(pos), len(tris)
     if nv > 65535 or nt > 65535:
         raise ValueError(f"{name}: too big for one shape ({nv} vertices, {nt} triangles)")
@@ -144,7 +146,7 @@ def write_shape_nif(path, name, pos, normal, uv, tris, texture, blend, zwrite):
     nf.blocks[root]["children"].append(shape)
     nf.blocks[shape]["shader"] = nf.add({
         "type": "BSEffectShaderProperty", "name": -1, "extra_data": [], "controller": -1,
-        "flags1": SLSF1_ZBUFFER_TEST,
+        "flags1": SLSF1_ZBUFFER_TEST if ztest else 0,
         "flags2": SLSF2_DOUBLE_SIDED | SLSF2_VERTEX_COLORS | (SLSF2_ZBUFFER_WRITE if zwrite else 0),
         "uv_offset": [0.0, 0.0], "uv_scale": [1.0, 1.0],
         "source_texture": f"textures\\{TEXTURE_DIR}\\{texture}.dds",
@@ -161,6 +163,31 @@ def write_shape_nif(path, name, pos, normal, uv, tris, texture, blend, zwrite):
     with open(path, "wb") as f:
         f.write(out)
     return nv, nt
+
+
+def crosshair_image(size=64):
+    """A "+" 44/64 of the image across, its arms 6/64 thick, with its shadow 4/64 down and right:
+    drawn 4 times larger and scaled down (smooth edges)."""
+    k = 4
+    n = size * k
+    a = np.zeros((n, n, 4), np.float64)
+
+    def plus(dx, dy, rgb, alpha):
+        c = n // 2
+        half, arm = 22 * k, 3 * k
+        m = np.zeros((n, n), bool)
+        m[c - arm + dy:c + arm + dy, c - half + dx:c + half + dx] = True
+        m[c - half + dy:c + half + dy, c - arm + dx:c + arm + dx] = True
+        # Over what's there (straight alpha).
+        out_a = alpha + a[..., 3] * (1 - alpha)
+        for i in range(3):
+            a[..., i] = np.where(m, (rgb[i] * alpha + a[..., i] * a[..., 3] * (1 - alpha)) / np.maximum(out_a, 1e-9), a[..., i])
+        a[..., 3] = np.where(m, out_a, a[..., 3])
+
+    plus(4 * k, 4 * k, (0.0, 0.0, 0.0), 0.8)
+    plus(0, 0, (1.0, 1.0, 1.0), 0.9)
+    big = Image.fromarray(np.round(a * 255).astype(np.uint8), "RGBA")
+    return big.resize((size, size), Image.LANCZOS)
 
 
 def glb_primitive(gl, mesh, path):
@@ -249,6 +276,12 @@ def main():
             name = f"quad_{t}_{blend}"
             write_shape_nif(os.path.join(mesh_dir, f"{name}.nif"), name, QUAD_POS, QUAD_NORMAL, QUAD_UV, QUAD_TRIS, t, blend, False)
             quads += 1
+
+    # The sandbox's crosshair (main.rs: a "+" at 28 px, white at 90%, its shadow 1.5 px down and
+    # right, black at 80%), made here (no game art): its own quad, drawn over everything.
+    R.write_dds(os.path.join(tex_dir, "crosshair.dds"), crosshair_image())
+    write_shape_nif(os.path.join(mesh_dir, "crosshair_blend.nif"), "crosshair_blend", QUAD_POS, QUAD_NORMAL, QUAD_UV, QUAD_TRIS,
+                    "crosshair", "blend", False, ztest=False)
 
     # The effect meshes.
     meshes = 0

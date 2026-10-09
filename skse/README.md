@@ -36,8 +36,10 @@ repository is unchanged.
   the air, the throw), the Burst Pistol (hip fire and aimed, strafing) and the Shatterbomb (hold
   fire to wind the throw up, let go to lob it onto the crosshair; its blast hurts everyone within
   6 m). Hits are spells cast by the player, so Skyrim's rules follow (the target fights back,
-  crimes, kills, difficulty). The wrench and the pistol are in his hand when he uses them, the
-  Shatterbomb's glove while it's picked.
+  crimes, kills, difficulty). The wrench and the pistol are in his hand by the sandbox's rules,
+  playing their own clips (the wrench's squash and stretch, the pistol's slide), the
+  Shatterbomb's glove while it's picked. In third person the sandbox's "+" crosshair is drawn
+  (Skyrim shows none with no weapon drawn).
 
 ## Controls
 | | keyboard / mouse | gamepad | Skyrim control (INI) |
@@ -86,9 +88,9 @@ the last conversion, and copies it into the mod:
 - `textures/RatchetMovement/*.dds`: colour, normal and specular maps;
 - `SKSE/Plugins/RatchetMovement/ratchet.anim`: his move clips.
 
-The same tool converts `wrench.glb` and `burstpistol.glb` (models only) and `clank.glb`
-(`clank.nif` with his heli-pack's shapes named `RK_heli_*`, and `clank.anim` with his backpack
-clips).
+The same tool converts `wrench.glb` and `burstpistol.glb` (with their own clips: `wrench.anim`,
+`burstpistol.anim`), the Shatterbomb and its glove (models only) and `clank.glb` (`clank.nif`
+with his heli-pack's shapes named `RK_heli_*`, and `clank.anim` with his backpack clips).
 
 The plugin hangs him under the player's third-person 3D, hides the Dragonborn's meshes, and
 picks and blends his clips by the sandbox's rules. Clank hangs on Ratchet's `ClankAttach` bone.
@@ -204,7 +206,9 @@ for clipping and dropouts: `test/audio_capture.cpp`, `test/audio_check.py`; `aud
   Hooks: `ThirdPersonState` vfuncs 3 (its update: the place goes into the state and the camera's
   root afterwards; its place isn't asked for through the vtable) and 4 (its turn: the shakes).
   It collides on Skyrim's camera layer. Skyrim's FOV value is the screen's horizontal angle
-  (measured from the world camera's frustum, logged once).
+  (measured from the world camera's frustum, logged once). The mouse wheel zooms it as the
+  sandbox's does (0.6 m a notch, 2 to 40 m; all the way in, the next notch is first person),
+  through the third-person state's input (`PlayerInputHandler::ProcessButton`, hooked).
 - **Animations.** With `bRatchet = 1` his own clips play, picked as the sandbox picks them:
   `crates/libratchet-anim` (through ratchet.dll's `ratchet_anim_*`) reads the sim's state and his
   weapons each frame and gives the clips to blend, each at a time and a weight, with the sandbox's

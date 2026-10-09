@@ -3,6 +3,7 @@
 
 #include "Anim.h"
 #include "Combat.h"
+#include "Fx.h"
 #include "Jump.h"
 #include "Physics.h"
 #include "Settings.h"
@@ -25,6 +26,10 @@ namespace Camera
 		// size) between which the camera moves to its running place. The sandbox's own.
 		constexpr float kPitchDown = 1.2f;
 		constexpr float kPitchUp = -0.6f;
+		// main.rs camera_control: the sandbox's mouse look stays within these (radians). Skyrim's
+		// look goes further (up at a dragon); the framing goes no further than the sandbox's.
+		constexpr float kFramingPitchMin = -0.25f;
+		constexpr float kFramingPitchMax = 1.35f;
 		constexpr float kTraversalFrom = 2.5f;
 		constexpr float kTraversalTo = 6.0f;
 		// main.rs camera_follow: the focus closes the gap to him at this rate (an exponent per
@@ -37,6 +42,17 @@ namespace Camera
 		// scale), and no nearer his pivot than kNearest.
 		constexpr float kWallMargin = 0.2f;
 		constexpr float kNearest = 0.4f;
+		// The sandbox's crosshair (main.rs: a "+" at 28 px in its 720 px window): its quad this far in
+		// front of the camera (game units, past the near plane), this much of the screen's height.
+		constexpr float kCrosshairAhead = 30.0f;
+		constexpr float kCrosshairSize = 0.034f;
+		// main.rs camera_control: the mouse wheel's zoom, metres (the world's) a notch, and its
+		// range; zoomed in closer than 45% of the game's distance, the camera looks lower, toward
+		// his chest (0.8 m up at Ratchet's size), and stops pulling back while he runs.
+		constexpr float kZoomStep = 0.6f;
+		constexpr float kZoomMin = 2.0f;
+		constexpr float kZoomMax = 40.0f;
+		constexpr float kChest = 0.8f;
 
 		// One camera context (camera.rs CameraContext). Offsets from the pivot, metres at
 		// Ratchet's size: x to his right, y up, z back.
@@ -128,8 +144,12 @@ namespace Camera
 			RE::NiQuaternion     turn{ 1.0f, 0.0f, 0.0f, 0.0f };  // this frame's shake, in the camera's own frame
 			float                savedFov = 0.0f;                 // Skyrim's own, given back when ours stops
 			float                fovScale = 0.0f;                 // tan(vertical/2) / tan(Skyrim's FOV/2), measured
+			float                distance = 0.0f;                 // the wheel's: metres back standing (0: the game's)
 		};
 		Rig g;
+
+		// The standing camera's own distance back (metres in the world, at his size).
+		float GameDistance() { return g_stand.level.z * Settings::Get().scale; }
 
 		// --- configs
 
@@ -277,6 +297,10 @@ namespace Camera
 			SKSE::log::info("camera: Rift Apart's");
 			g.active = true;
 			g.focus = a_feet;
+			// Back from first person (zoomed in all the way): the game's distance again.
+			if (g.distance <= kZoomMin + 1e-3f) {
+				g.distance = GameDistance();
+			}
 			g.savedFov = a_camera->GetRuntimeData2().worldFOV;
 			g.fovScale = 0.0f;
 			if (auto* world = RE::Main::WorldRootCamera(); world && g.savedFov > 1.0f) {
@@ -341,8 +365,15 @@ namespace Camera
 			g.wobble = std::max(0.0f, g.wobble - dt);
 			const float wobble = std::sin(g.clock * 20.0f * kTau) * std::min(g.wobble / 0.25f, 1.0f);
 
-			const auto         stand = g_stand.At(pitch + wobble * 0.004f, g.moving);
-			const auto         aim = g_aim.At(pitch + wobble * 0.004f, 0.0f);
+			const float        framing = std::clamp(pitch, kFramingPitchMin, kFramingPitchMax) + wobble * 0.004f;
+			// The wheel's zoom: the standing camera that much further back or nearer; nearer than
+			// 45% of the game's distance, lower toward his chest and no pulling back to run.
+			const float zoom = g.distance / std::max(GameDistance(), 0.01f);
+			const float gameFraming = std::clamp((zoom - 0.45f) / 0.55f, 0.0f, 1.0f);
+			auto        stand = g_stand.At(framing, g.moving * gameFraming);
+			stand.pivot = kChest + (stand.pivot - kChest) * gameFraming;
+			stand.offset.z *= zoom;
+			const auto aim = g_aim.At(framing, 0.0f);
 			const float        b = g.aim;
 			const float        pivot = (stand.pivot + (aim.pivot - stand.pivot) * b) * s * u;
 			const RE::NiPoint3 offset = (stand.offset + (aim.offset - stand.offset) * b) * (s * u);
@@ -384,6 +415,69 @@ namespace Camera
 			g.turn = Anim::Multiply(Anim::Multiply(about(yaw, 0.0f, 0.0f, 1.0f), about(tilt, 1.0f, 0.0f, 0.0f)), about(roll, 0.0f, 1.0f, 0.0f));
 		}
 
+		// The crosshair's quad in front of a camera at a_at turned a_turn: facing it (the quad's +z
+		// back at it, +x right, +y up), kCrosshairSize of the screen's height across.
+		RE::NiTransform CrosshairAt(const RE::NiPoint3& a_at, const RE::NiQuaternion& a_turn)
+		{
+			const RE::NiMatrix3 m = a_turn.ToRotation();
+			const RE::NiPoint3  right = m.GetVectorX(), forward = m.GetVectorY(), up = m.GetVectorZ();
+			RE::NiTransform     t;
+			const RE::NiPoint3  columns[3] = { right, up, -forward };
+			for (int c = 0; c < 3; ++c) {
+				t.rotate.entry[0][c] = columns[c].x;
+				t.rotate.entry[1][c] = columns[c].y;
+				t.rotate.entry[2][c] = columns[c].z;
+			}
+			t.translate = a_at + forward * kCrosshairAhead;
+			// The world camera's frustum: the tangent of half its height's angle.
+			auto*       world = RE::Main::WorldRootCamera();
+			const float tanUp = world && world->GetRuntimeData2().viewFrustum.fTop > 1e-3f ? world->GetRuntimeData2().viewFrustum.fTop : 0.47f;
+			t.scale = kCrosshairSize * 2.0f * kCrosshairAhead * tanUp;
+			return t;
+		}
+
+		// A wheel notch zooms the standing camera (main.rs camera_control); zoomed in all the way,
+		// the next one goes to first person, as Skyrim's zoom does. True: it was the zoom's.
+		bool Zoom(const RE::ButtonEvent& a_event)
+		{
+			const auto* events = RE::UserEvents::GetSingleton();
+			const auto& name = a_event.QUserEvent();
+			const bool  in = name == events->zoomIn;
+			if (!in && name != events->zoomOut) {
+				return false;
+			}
+			if (!a_event.IsDown()) {
+				return true;
+			}
+			if (g.distance <= 0.0f) {
+				g.distance = GameDistance();
+			}
+			if (in && g.distance <= kZoomMin + 1e-3f) {
+				SKSE::GetTaskInterface()->AddTask([] {
+					if (auto* camera = RE::PlayerCamera::GetSingleton()) {
+						camera->ForceFirstPerson();
+					}
+				});
+				return true;
+			}
+			g.distance = std::clamp(g.distance + (in ? -kZoomStep : kZoomStep), kZoomMin, kZoomMax);
+			return true;
+		}
+
+		// Its input: the wheel's zoom is ours while the Rift Apart camera is on.
+		struct ThirdPersonInputHook
+		{
+			static void ProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
+			{
+				if (g.active && a_event && Zoom(*a_event)) {
+					return;
+				}
+				_ProcessButton(a_this, a_event, a_data);
+			}
+
+			static inline REL::Relocation<decltype(ProcessButton)> _ProcessButton;
+		};
+
 		// Skyrim's third-person camera state: where it puts the camera, and how it turns it.
 		struct ThirdPersonHook
 		{
@@ -405,6 +499,7 @@ namespace Camera
 				RE::NiPoint3 at = a_this->translation;
 				Place(look, at);
 				if (!g.active) {
+					Fx::Crosshair(std::nullopt);
 					return;
 				}
 				a_this->translation = at;
@@ -413,6 +508,9 @@ namespace Camera
 					RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 					camera->cameraRoot->Update(update);
 				}
+				// The sandbox's crosshair, in front of the camera as it's turned this frame (its
+				// shake in: GetRotation's), while he has his weapons.
+				Fx::Crosshair(Settings::Get().combat ? std::optional(CrosshairAt(at, Anim::Multiply(look, g.turn))) : std::nullopt);
 			}
 
 			static inline REL::Relocation<decltype(GetRotation)> _GetRotation;
@@ -446,6 +544,9 @@ namespace Camera
 		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_ThirdPersonState[0] };
 		ThirdPersonHook::_Update = vtbl.write_vfunc(0x3, ThirdPersonHook::Update);
 		ThirdPersonHook::_GetRotation = vtbl.write_vfunc(0x4, ThirdPersonHook::GetRotation);
+		REL::Relocation<std::uintptr_t> input{ RE::VTABLE_ThirdPersonState[1] };
+		ThirdPersonInputHook::_ProcessButton = input.write_vfunc(0x4, ThirdPersonInputHook::ProcessButton);
+		g.distance = GameDistance();
 	}
 
 	void Update()
@@ -457,7 +558,28 @@ namespace Camera
 		const bool  third = camera && camera->currentState && camera->currentState->id == RE::CameraStates::kThirdPerson;
 		if (!third || !Wanted()) {
 			Stop();
+			Fx::Crosshair(std::nullopt);
 		}
+	}
+
+	float ZoomDistance() { return g.distance; }
+
+	void TestWheel(bool a_in)
+	{
+		auto* camera = RE::PlayerCamera::GetSingleton();
+		auto* controls = RE::PlayerControls::GetSingleton();
+		auto* events = RE::UserEvents::GetSingleton();
+		if (!camera || !controls || !events || !camera->currentState || camera->currentState->id != RE::CameraStates::kThirdPerson) {
+			return;
+		}
+		auto* state = static_cast<RE::ThirdPersonState*>(camera->currentState.get());
+		// The wheel's own ids (Skyrim's mouse: 8 up, 9 down), pressed this frame.
+		auto* event = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kMouse, a_in ? events->zoomIn : events->zoomOut, a_in ? 8u : 9u, 1.0f, 0.0f);
+		if (!event) {
+			return;
+		}
+		static_cast<RE::PlayerInputHandler*>(state)->ProcessButton(event, &controls->data);
+		RE::free(event);
 	}
 
 	void Recoil()

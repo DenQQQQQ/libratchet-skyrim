@@ -5,7 +5,8 @@ Reads the owner's extraction (riftapart-assets/sounds: sounds.json and its .ogg 
 tools/extract_riftapart_sounds.py) and writes, into a folder laid out like Skyrim's Data folder:
 
 - every file sounds.json names, as mono 16-bit PCM WAV, under Sound/FX/RatchetMovement/<folder>/
-  (mono: Skyrim places its sounds in the world, and it places mono ones);
+  (mono: Skyrim places mono sounds in the world; the plugin's file handles turned out unplaced,
+  measured in game: no fading or panning by where they are, as in the sandbox);
 - SKSE/Plugins/RatchetMovement/sounds.txt, the moments in lines simple enough to read in C++:
 
       moment <name> <level_db> <chance>

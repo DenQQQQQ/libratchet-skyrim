@@ -7,6 +7,8 @@ middle of a loud passage). Each moment is lined up with the plugin's log.
 
 --after: the loudness every 50 ms for that long (default 2 s) after the first log line matching
 the regex, and the strongest rate it pulses at (the glide's rotor chops: about 11 a second).
+--each <regex> [seconds]: for every log line matching, the loudness of each channel over that long
+(default 1 s) from 0.25 s after it, and in dB from the first (the sound lab's steps).
 """
 import re
 import struct
@@ -46,13 +48,17 @@ def read_log(path, day):
 
 
 def main():
-    args = sys.argv[1:]
-    after = None
-    if "--after" in args:
-        k = args.index("--after")
-        span = float(args[k + 2]) if len(args) > k + 2 else 2.0
-        after = (args[k + 1], span)
-        args = args[:k]
+    # <wav> [log] then the options, each a flag, a regex and maybe seconds.
+    args, opts, rest = [], {}, sys.argv[1:]
+    while rest:
+        a = rest.pop(0)
+        if a in ("--after", "--each"):
+            pattern = rest.pop(0)
+            span = float(rest.pop(0)) if rest and not rest[0].startswith("--") else (2.0 if a == "--after" else 1.0)
+            opts[a] = (pattern, span)
+        else:
+            args.append(a)
+    after, each = opts.get("--after"), opts.get("--each")
     wav = args[0]
     log = args[1] if len(args) > 1 else None
     x, rate = read_wav(wav)
@@ -104,6 +110,27 @@ def main():
         print(f"dropouts (a silent 20 ms between loud ones): {len(drops)}")
         for i in drops[:10]:
             print(f"  at {when(i * win / rate)}")
+
+    if each and start:
+        pattern, span = each
+        rows = []
+        for when_, text in events:
+            if not re.search(pattern, text):
+                continue
+            t0 = (when_ - start).total_seconds() + 0.25
+            a, b = int(t0 * rate), int((t0 + span) * rate)
+            seg = x[max(a, 0):min(b, len(x))]
+            if len(seg) == 0:
+                continue
+            rms = np.sqrt((seg ** 2).mean(axis=0))
+            rows.append((text, rms))
+        if rows:
+            ref = float(np.sqrt((rows[0][1] ** 2).mean()))
+            print(f"each '{pattern}' ({span:.1f} s from 0.25 s after it): rms left, right, dB from the first")
+            for text, rms in rows:
+                both = float(np.sqrt((rms ** 2).mean()))
+                db = 20 * np.log10(max(both, 1e-9) / max(ref, 1e-9))
+                print(f"  {rms[0]:.4f} {rms[-1]:.4f} {db:+6.1f} dB  {text[:90]}")
 
     if after and start:
         pattern, span = after

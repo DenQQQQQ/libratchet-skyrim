@@ -100,12 +100,12 @@ if ($Install) {
             uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $glb --out $converted | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "converting Ratchet failed" }
         }
-        # His OmniWrench, Burst Pistol and Shatterbomb (its bomb, and the glove that throws it,
-        # skinned to his own joints: models only), and Clank with his clips (he rides on
-        # Ratchet's back).
+        # His OmniWrench and Burst Pistol with their own clips (the wrench's squash and stretch, the
+        # pistol's slide), the Shatterbomb (its bomb, and the glove that throws it, skinned to his
+        # own joints: models only), and Clank with his clips (he rides on Ratchet's back).
         $others = @(
-            @{ Name = "wrench"; Prefix = "RW_"; Clips = $false; Without = "he'll fight without it in his hand" },
-            @{ Name = "burstpistol"; Prefix = "RP_"; Clips = $false; Without = "he'll fight without it in his hand" },
+            @{ Name = "wrench"; Prefix = "RW_"; Clips = $true; Without = "he'll fight without it in his hand" },
+            @{ Name = "burstpistol"; Prefix = "RP_"; Clips = $true; Without = "he'll fight without it in his hand" },
             @{ Name = "shatterbomb"; Prefix = "RS_"; Clips = $false; Without = "his Shatterbombs fly unseen" },
             @{ Name = "shatterbomb_glove"; Prefix = "RG_"; Clips = $false; Without = "he throws Shatterbombs with his bare glove" },
             @{ Name = "clank"; Prefix = "RK_"; Clips = $true; Without = "Ratchet goes without Clank on his back" }

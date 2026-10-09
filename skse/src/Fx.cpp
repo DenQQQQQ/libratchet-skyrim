@@ -853,6 +853,39 @@ namespace Fx
 		Unhang();
 	}
 
+	void Crosshair(const std::optional<RE::NiTransform>& a_at)
+	{
+		static Part crosshair;
+		if (!a_at) {
+			if (crosshair.node && !crosshair.node->GetAppCulled()) {
+				crosshair.node->SetAppCulled(true);
+			}
+			return;
+		}
+		if (!Available()) {
+			return;
+		}
+		auto* root = Root();
+		if (!root) {
+			return;
+		}
+		if (!crosshair.node) {
+			crosshair = Make("crosshair_blend", false, Color{ 1.0f, 1.0f, 1.0f });
+			if (!crosshair.node) {
+				return;
+			}
+			Tint(crosshair, crosshair.color, 1.0f);
+		}
+		// The root's local undoes its cell's transform: what's under it is placed in the world.
+		crosshair.node->local = *a_at;
+		if (crosshair.node->GetAppCulled()) {
+			crosshair.node->SetAppCulled(false);
+		}
+		// Now (the camera has just moved): the root too, in case it has just hung under a new cell.
+		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
+		root->Update(update);
+	}
+
 	std::size_t Live() { return g_pieces.size() + g_bolts.size(); }
 
 	bool UnderPlayersCell()

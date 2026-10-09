@@ -31,6 +31,9 @@ namespace Combat
 		constexpr float kAimedRate = 3.0f;
 		constexpr float kHipRate = 6.0f;
 		constexpr float kRange = 45.0f;
+		// The crosshair's ray reaches further than the bolts fly (weapons.rs AIM_RANGE): a shot at
+		// something past 45 m still goes its way.
+		constexpr float kAimRange = 80.0f;
 		// Its rounds (its level-1 kAmmo, one a shot): empty for a moment, both guns fill again.
 		constexpr int kPistolAmmo = 150;
 		// Its bolt (ShotPrius InitialMotion): 80 m/s, no gravity. With Rift Apart's effect art the
@@ -306,14 +309,14 @@ namespace Combat
 			SKSE::log::info("combat: slam hits {} ({:.1f} damage within {:.1f} m)", hits, damage * Settings::Get().damageMult, radius);
 		}
 
-		// Where the camera looks, as far as kRange × scale: the point the shot goes for, and
+		// Where the camera looks, as far as kAimRange × scale: the point the shot goes for, and
 		// whether something is there.
 		std::pair<RE::NiPoint3, bool> AimPoint()
 		{
 			if (c.testAim) {
 				return { *c.testAim, true };
 			}
-			const float reach = kRange * Settings::Get().scale * Units();
+			const float reach = kAimRange * Settings::Get().scale * Units();
 			auto* camera = RE::PlayerCamera::GetSingleton();
 			if (!camera || !camera->cameraRoot) {
 				auto* player = RE::PlayerCharacter::GetSingleton();
@@ -812,7 +815,7 @@ namespace Combat
 						c.shotAt.emplace_back(target->GetHandle(), hit->point.GetDistance(muzzle) / 2500.0f);
 					}
 				}
-				if (something) {
+				if (something && distance <= kRange * Settings::Get().scale * Units()) {
 					// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
 					Sounds::Play("bolt_impact", aim, distance / 2500.0f);
 				}

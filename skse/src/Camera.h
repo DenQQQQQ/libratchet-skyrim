@@ -24,4 +24,9 @@ namespace Camera
 	bool Explosion(const RE::NiPoint3& a_at);
 	// A short wobble (the Hyper-Strike's landing; the sandbox's own).
 	void Wobble(float a_seconds);
+
+	// Tests: the wheel's zoom (metres back standing, the world's), and a notch of the wheel sent
+	// through Skyrim's third-person camera's own input handler (a_in: Zoom In).
+	float ZoomDistance();
+	void  TestWheel(bool a_in);
 }

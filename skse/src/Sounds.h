@@ -25,6 +25,11 @@ namespace Sounds
 	// A load: everything stops.
 	void Reset();
 
+	// Tests (the sound lab): one file (under Data) at a_where, at a_volume (as Skyrim's handle
+	// takes it, nothing else on it), until StopTest.
+	void PlayTest(const std::string& a_file, const RE::NiPoint3& a_where, float a_volume);
+	void StopTest();
+
 	// Each frame: delayed layers, the loops and the retriggered layers.
 	void Update(float a_dt);
 }

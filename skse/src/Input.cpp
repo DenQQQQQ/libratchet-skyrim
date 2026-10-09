@@ -102,10 +102,11 @@ namespace Input
 			v.x /= len;
 			v.y /= len;
 		}
-		// Walking (Skyrim's run toggle off): half the stick, which is a walk for the sim.
+		// Walking (Skyrim's run toggle off): the stick at 0.45, a walk for the sim (the sandbox's
+		// walk key).
 		if (!controls->data.running && !g_testStick) {
-			v.x *= 0.5f;
-			v.y *= 0.5f;
+			v.x *= 0.45f;
+			v.y *= 0.45f;
 		}
 		return v;
 	}

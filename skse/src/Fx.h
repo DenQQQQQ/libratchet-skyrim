@@ -17,6 +17,10 @@ namespace Fx
 	std::size_t Live();
 	bool        UnderPlayersCell();
 
+	// The sandbox's crosshair, a "+" drawn over everything: a_at is its quad's world transform
+	// (in front of the camera, facing it, its size in its scale); nullopt hides it.
+	void Crosshair(const std::optional<RE::NiTransform>& a_at);
+
 	// The Burst Pistol's flash at its muzzle, shooting along a_dir (unit).
 	void MuzzleFlash(const RE::NiPoint3& a_at, const RE::NiPoint3& a_dir);
 	// A bolt's look leaving the muzzle at a_at along a_dir: its head (the game's tracer and glow
