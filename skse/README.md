@@ -39,7 +39,7 @@ repository is unchanged.
   crimes, kills, difficulty). The wrench and the pistol are in his hand by the sandbox's rules,
   playing their own clips (the wrench's squash and stretch, the pistol's slide), the
   Shatterbomb's glove while it's picked. In third person the sandbox's "+" crosshair is drawn
-  (Skyrim shows none with no weapon drawn).
+  (Skyrim shows none with no weapon drawn; INI `bCrosshair = 0` leaves it out).
 
 ## Controls
 | | keyboard / mouse | gamepad | Skyrim control (INI) |

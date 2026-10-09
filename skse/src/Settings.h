@@ -44,6 +44,8 @@ struct Settings
 	std::string shatterbombControl = "Hotkey2";
 	// Rift Apart's damage numbers times this, on Skyrim's health.
 	float damageMult = 1.0f;
+	// The sandbox's "+" crosshair while Rift Apart's camera is on.
+	bool crosshair = true;
 	// Rift Apart's sounds on his moves (skse/tools/ratchet_sounds_to_skyrim.py), and how loud.
 	bool  sounds = true;
 	float soundVolume = 1.0f;

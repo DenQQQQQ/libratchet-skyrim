@@ -65,6 +65,7 @@ void Settings::Load(const std::filesystem::path& a_ini)
 	pistolControl = Narrow(ReadString(a_ini, L"Combat", L"sPistolControl", L"Hotkey1"));
 	shatterbombControl = Narrow(ReadString(a_ini, L"Combat", L"sShatterbombControl", L"Hotkey2"));
 	damageMult = ReadFloat(a_ini, L"Combat", L"fDamageMult", damageMult);
+	crosshair = ReadBool(a_ini, L"Combat", L"bCrosshair", crosshair);
 	sounds = ReadBool(a_ini, L"General", L"bSounds", sounds);
 	soundVolume = ReadFloat(a_ini, L"General", L"fSoundVolume", soundVolume);
 	logJumps = ReadBool(a_ini, L"Debug", L"bLogJumps", logJumps);
