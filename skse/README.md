@@ -40,6 +40,14 @@ repository is unchanged.
   playing their own clips (the wrench's squash and stretch, the pistol's slide), the
   Shatterbomb's glove while it's picked. In third person the sandbox's "+" crosshair is drawn
   (Skyrim shows none with no weapon drawn; INI `bCrosshair = 0` leaves it out).
+- **Rift Apart's look and sound:** the game's own effects for his shots, blasts and swings (with
+  their lights), its sounds mixed and looped as the sandbox mixes them, and its follow camera
+  (framing, field of view, shakes, the wheel's zoom). See the sections below.
+- **On Skyrim's ground:** up slopes and stairs in Skyrim's own ground movement at Rift Apart's
+  speed; through load doors and loads with nothing left behind; out of the way when he's on a
+  horse, swimming, in furniture, knocked down or in a kill move.
+- **Cheap:** about 0.3 ms of the main thread a frame; his models and the effects load with the
+  game, not the first time they're used.
 
 ## Controls
 | | keyboard / mouse | gamepad | Skyrim control (INI) |
