@@ -10,11 +10,12 @@
 //!   --record <dir>    with --demo: also save every other frame (30 fps) as PNG for a video
 //!   --demo-part <part> with --demo: only that section (wrench, weapons, moves, combat, face,
 //!                     sounds, carry, dashjump, throwswitch, strafejump, walljump, ledges,
-//!                     swingshot, turns, grenadeswitch)
+//!                     swingshot, turns, grenadeswitch, bolts)
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 //!   --mute            start with the sound off (M toggles it); demos start muted unless
 //!                     --sound is given (a recording still gets its sounds from the log)
 
+mod bolts;
 mod camera;
 mod clank;
 mod combat;
@@ -270,7 +271,7 @@ fn main() {
             })
             .set(AssetPlugin { file_path: asset_root, ..default() }),
     )
-    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin, sound::plugin, swingshot::plugin))
+    .add_plugins((ratchet_model::plugin, clank::plugin, combat::plugin, dummy_model::plugin, wrench::plugin, weapons::plugin, vfx::plugin, sound::plugin, swingshot::plugin, bolts::plugin))
     .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
     // The sky: with HDR the clear colour goes through the tonemapper too, so this is the colour
     // that comes out as sRGB (0.55, 0.7, 0.9) after it.
@@ -1004,6 +1005,7 @@ fn update_hud(
     settings: Res<Settings>,
     hits: Res<combat::Hits>,
     arsenal: Option<Res<weapons::Arsenal>>,
+    bolts: Res<bolts::Bolts>,
     players: Query<&Player>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
@@ -1023,6 +1025,7 @@ fn update_hud(
          dash {:.1} m up to {:.1} m/s  |  air dash {:.1} m at {:.1} m/s\n\
          wrench: swings {}  |  Hyper-Strike hop {:.2} m, slam at {:.0} m/s², {:.1} m wide  |  throw {:.0} m/s out to {:.0} m\n\
          dummies hit: {}  {}\n\
+         {}\n\
          {}",
         settings.load_note,
         p.sim.state().name(),
@@ -1054,5 +1057,6 @@ fn update_hud(
         hits.count,
         if hits.last.is_empty() { String::new() } else { format!("(last: {})", hits.last) },
         arsenal.map_or(String::new(), |a| weapons::hud_line(&a)),
+        bolts::hud_line(&bolts),
     );
 }

@@ -57,8 +57,9 @@ def main():
     graph = []
     for i, (start, file, volume, speed, end, looped) in enumerate(sounds, start=1):
         # Each sound is read inside the filter graph (too many for the command line); paths
-        # use forward slashes, with the colons and quotes filters care about escaped.
-        path = os.path.join(a.assets, file).replace("\\", "/").replace(":", "\:").replace("'", "\'")
+        # use forward slashes, with the colons and quotes filters care about escaped twice (once
+        # for the filter's option, once for the graph), so an absolute Windows path (G:/...) works.
+        path = os.path.join(a.assets, file).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\\'")
         source = f"amovie={path}"
         if end is not None:
             # Cut where it stopped, in the file's own time (it plays at `speed`).

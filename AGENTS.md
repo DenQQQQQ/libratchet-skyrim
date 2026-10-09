@@ -21,12 +21,17 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
   movement configs as JSON.
 - `tools/extract_riftapart_ratchet.py` + `tools/riftapart_anim.py`: GPLv3. Convert Ratchet's
   model, textures and animation clips from the user's install into
-  `riftapart-assets/ratchet.glb` (gitignored game data). They need `tools/gdeflate-ffi` built
-  in release (GDeflate decoder for the high-res data).
+  `riftapart-assets/ratchet.glb` (gitignored game data), and the other models the sandbox
+  uses (Clank, the weapons, the test dummy, the twelve bolt pickups: `--character bolts`). They
+  need `tools/gdeflate-ffi` built in release (GDeflate decoder for the high-res data).
 - `crates/libratchet-ffi`: C API (`include/ratchet.h`) for the planned SKSE plugin.
 - `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
   falloff, shell and camera-shake data). Pure Rust like libratchet; the host does aiming,
   collision, damage and effects. Run `cargo test -p libarsenal` after weapon changes.
+- `crates/libbolts`: the bolts (currency): an enemy's reward and its split into pickups, the
+  burst, bounces, rest, the swarm to the hero, the caps, and the HUD's tally. Pure Rust like
+  libarsenal; the host gives it a segment query and draws, sounds and shows the results. Run
+  `cargo test -p libbolts` after bolt changes. It has no C API yet.
 - `tools/extract_riftapart_sounds.py` + `tools/riftapart_wwise.py`: GPLv3. Extract the game's
   sounds for the sandbox's moments into `riftapart-assets/sounds/` (gitignored) with
   `sounds.json`: Wwise banks and streamed .wem, Vorbis repacked (codebooks found in the user's

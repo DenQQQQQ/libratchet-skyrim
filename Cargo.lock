@@ -4604,6 +4604,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "libarsenal",
+ "libbolts",
  "libratchet",
  "serde_json",
 ]
