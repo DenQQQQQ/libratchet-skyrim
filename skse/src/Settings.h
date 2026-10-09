@@ -27,6 +27,9 @@ struct Settings
 	// small edges and hold on the ground, at the sim's speed). Off: the sim's velocity is set
 	// on the controller in its air state, slopes and steps followed by the plugin's own probes.
 	bool nativeGround = true;
+	// Rift Apart's follow camera on foot (its configs' framing, field of view and shakes), on
+	// Skyrim's third-person camera. Off: Skyrim's own.
+	bool riftCamera = true;
 	// Ratchet's combat: the OmniWrench and his gun on these Skyrim controls (Rift Apart's
 	// controller layout: R2 fires, L2 aims, Square swings, R1 throws). Skyrim's own attacks,
 	// blocks, weapon drawing and shouts are off on foot then.
@@ -60,3 +63,5 @@ struct Settings
 
 // The folder RatchetMovement.dll was loaded from (Data/SKSE/Plugins, as MO2 shows it).
 std::filesystem::path PluginDirectory();
+// The Rift Apart configs folder (sConfigsDir, relative ones from the plugin's folder).
+std::filesystem::path ConfigsDirectory();

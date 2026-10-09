@@ -707,3 +707,38 @@ shots wanted.
   - The game crashed now and then as the test quit it, in a pathfinding job reading Whiterun's
     navmesh (three times, each a second after "done", with actors in combat). The test now turns
     AI off (`ToggleAI`) and waits 1.5 s before quitting; no crash since.
+
+## 2026-10-09 (afternoon): Rift Apart's camera, the throw arc, the effects' lights
+
+The owner can't playtest for now: "keep going for 1-1". The demo's script (apps/sandbox/src/
+demo.rs) was the checklist. Most of it now runs through the sim and the animator; what the demo
+showed that Skyrim didn't: Rift Apart's camera, the Shatterbomb's throw arc, the effects' lights.
+(The Swingshot needs swing targets, which Skyrim's world has none of.)
+
+- **The camera** (`Camera.cpp`, INI `bRiftCamera`). The sandbox's camera_follow, with the game's
+  configs (nlohmann-json added through vcpkg to read them): a pivot 1.5 m above his feet, 4.65 m
+  back, up or down by the camera's pitch; running, 6 m back with FOV 82 (from 76); aiming, over his
+  right shoulder (0.5 m right, 4.5 m back, FOV 72), blended in over 0.13 s; the pivot trailing him
+  (the sandbox's -10/s). Skyrim keeps its mouse look and its other camera states (first person, a
+  horse, furniture). Found on the way:
+  - Skyrim asks its third-person state for the camera's turn through the vtable, but never for its
+    place: hooked on its update, the place goes into the state and onto the camera's root.
+  - Skyrim's FOV value is the screen's horizontal angle: its world camera at the owner's FOV 80
+    draws 80 degrees across (1.778 wide). The game's angles go in as they are.
+  - The game's shakes: the Burst Pistol's recoil each shot, the Shatterbomb's blast (full within
+    30 m, gone at 50 m, the grenade's ShakeData), the slam's wobble. Skyrim's own explosion shake
+    stands in when the camera is off.
+  - Screenshots: the aimed pistol framed over his shoulder with the crosshair clear of him; the
+    running jump from 6 m back.
+- **The throw arc.** While a Shatterbomb throw winds up, where it would fly from his hand to the
+  crosshair: dashed light-blue lines every other 0.03 s of its flight, as wide on screen at any
+  distance (the sandbox's gizmo lines are 5 pixels), and a ring of the blast's inner radius where
+  it lands. In first person the throw starts in front of the camera now (his third-person hand isn't
+  posed there: the arc landed 2 m short).
+- **Lights.** The sandbox's flash lights, as Skyrim point lights (no shadows), fading with their
+  pieces: the muzzle flash, each bolt's light as it flies, the impacts, the wrench's hits, the
+  slam and the blast (the blast lights the whole bridge for half a second), and the Shatterbomb's
+  violet glow in flight. At most 8 at once (Skyrim lights a shape with only a few), the oldest
+  going first. Bevy's lumens to Skyrim's fade: 40 000 lm is 1.
+- **Tests: 29/29.**
+

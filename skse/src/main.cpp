@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
+#include "Camera.h"
 #include "Clank.h"
 #include "Combat.h"
 #include "Jump.h"
@@ -24,6 +25,7 @@ namespace
 		switch (a_msg->type) {
 		case SKSE::MessagingInterface::kDataLoaded:
 			Jump::Install();
+			Camera::Install(ConfigsDirectory());
 			Combat::Install();
 			AutoTest::Install();
 			break;

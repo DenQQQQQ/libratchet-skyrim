@@ -12,9 +12,9 @@ namespace Physics
 		RE::TESObjectREFR* ref = nullptr;  // what was hit, if it's a reference (an actor, a door...)
 	};
 
-	// The first thing the ray hits that the player would collide with (his own body ignored).
-	// Game units.
-	std::optional<Hit> Ray(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
+	// The first thing the ray hits that the player would collide with (his own body ignored), or
+	// on a_layer what that layer collides with (the camera's: Skyrim's camera sphere). Game units.
+	std::optional<Hit> Ray(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, RE::COL_LAYER a_layer = RE::COL_LAYER::kCharController);
 
 	// Metres from his feet down to the ground (looking up to a_max metres below); nullopt if
 	// there's none that close.

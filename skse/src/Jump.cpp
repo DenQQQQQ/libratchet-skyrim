@@ -2,6 +2,7 @@
 #include "Jump.h"
 
 #include "AutoTest.h"
+#include "Camera.h"
 #include "Combat.h"
 #include "Fx.h"
 #include "Input.h"
@@ -894,6 +895,9 @@ namespace Jump
 			}
 			if (r.events & RATCHET_EVENT_SMASH_STARTED) {
 				AutoTest::OnMove("smash");
+			}
+			if (r.events & RATCHET_EVENT_SMASH_IMPACT) {
+				Camera::Wobble(0.25f);  // the sandbox's, on the slam
 			}
 			if (r.events & RATCHET_EVENT_MELEE_SWING) {
 				AutoTest::OnMove(std::format("swing{}", r.melee_swing + 1));

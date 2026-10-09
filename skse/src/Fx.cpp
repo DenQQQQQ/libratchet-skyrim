@@ -47,6 +47,7 @@ namespace Fx
 			Color blastShards{ 0.8f, 0.1f, 1.0f };
 			Color blastSmoke{ 0.2f, 0.22f, 0.25f };
 			Color scorchGlow{ 0.3f, 0.1f, 0.8f };
+			Color grenadeGlow{ 0.45f, 0.1f, 0.85f };
 			Color wrenchHit{ 0.2f, 0.65f, 1.0f };
 			Color wrenchSmoke{ 0.3f, 0.33f, 0.35f };
 			Color wrenchSlam{ 0.35f, 0.75f, 1.0f };
@@ -92,6 +93,7 @@ namespace Fx
 			read(L"blast_shards", g_c.blastShards);
 			read(L"blast_smoke", g_c.blastSmoke);
 			read(L"scorch_glow", g_c.scorchGlow);
+			read(L"grenade_glow", g_c.grenadeGlow);
 			read(L"wrench_hit", g_c.wrenchHit);
 			read(L"wrench_smoke", g_c.wrenchSmoke);
 			read(L"wrench_slam", g_c.wrenchSlam);
@@ -508,6 +510,134 @@ namespace Fx
 		std::vector<BoltLook> g_bolts;
 		std::uint32_t         g_nextBolt = 1;
 
+		// The throw arc's lines, kept from frame to frame; those not drawn this frame are hidden.
+		std::vector<Part> g_arc;
+		bool              g_arcDrawn = false;
+
+		void HideArc(std::size_t a_from)
+		{
+			for (std::size_t i = a_from; i < g_arc.size(); ++i) {
+				if (g_arc[i].node && !g_arc[i].node->GetAppCulled()) {
+					g_arc[i].node->SetAppCulled(true);
+				}
+			}
+		}
+
+		// --- lights: the sandbox's flash_light, a point light without shadows that fades with its
+		// piece (full for the first tenth of its life). Skyrim lights a shape with only a few: at
+		// most kMaxLights of ours at once, the oldest going first.
+		constexpr std::size_t kMaxLights = 8;
+
+		struct Light
+		{
+			RE::NiPointer<RE::NiPointLight> light;
+			float                           age = 0.0f;
+			float                           life = 1.0f;  // < 0: carried (a bolt's, a bomb's) until it isn't placed
+			float                           fade = 1.0f;  // Skyrim's, at full
+			std::uint32_t                   key = 0;      // what carries it
+			bool                            seen = true;  // carried: placed this frame
+		};
+		std::vector<Light> g_lights;
+
+		// The sandbox's lumens (Bevy's point lights) as Skyrim's fade (ours): a bolt's impact,
+		// 40 000 lm, is 1.
+		float LightFade(float a_lumens) { return std::clamp(a_lumens / 40000.0f, 0.3f, 5.0f); }
+
+		void DropLight(Light& a_light)
+		{
+			if (!a_light.light) {
+				return;
+			}
+			if (auto* scene = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0]) {
+				scene->RemoveLight(a_light.light.get());
+			}
+			if (a_light.light->parent) {
+				a_light.light->parent->DetachChild(a_light.light.get());
+			}
+			a_light.light.reset();
+		}
+
+		// a_range in game units; a_life < 0: carried (see CarryLight).
+		void AddLight(const RE::NiPoint3& a_at, const Color& a_color, float a_lumens, float a_range, float a_life, std::uint32_t a_key = 0)
+		{
+			auto* root = Root();
+			auto* scene = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
+			if (!root || !scene) {
+				return;
+			}
+			if (g_lights.size() >= kMaxLights) {
+				DropLight(g_lights.front());
+				g_lights.erase(g_lights.begin());
+			}
+			auto* light = RE::NiPointLight::Create();
+			if (!light) {
+				return;
+			}
+			// Its colour at its brightest channel's full; how bright it is goes in its fade.
+			const float top = std::max({ a_color.r, a_color.g, a_color.b, 1e-4f });
+			auto&       data = light->GetLightRuntimeData();
+			data.ambient = RE::NiColor{ 0.0f, 0.0f, 0.0f };
+			data.diffuse = RE::NiColor{ Gamma(a_color.r / top), Gamma(a_color.g / top), Gamma(a_color.b / top) };
+			data.radius = RE::NiPoint3{ a_range, a_range, a_range };
+			data.fade = LightFade(a_lumens);
+			light->local.translate = a_at;
+			root->AttachChild(light, true);
+			RE::ShadowSceneNode::LIGHT_CREATE_PARAMS params{};
+			params.dynamic = true;
+			params.shadowLight = false;
+			params.portalStrict = false;
+			params.affectLand = true;
+			params.affectWater = true;
+			params.neverFades = true;
+			params.fov = 1.0f;
+			params.falloff = 1.0f;
+			params.nearDistance = 5.0f;
+			params.depthBias = 0.0f;
+			params.sceneGraphIndex = 0;
+			params.restrictedNode = nullptr;
+			params.lensFlareData = nullptr;
+			scene->AddLight(light, params);
+			g_lights.push_back({ RE::NiPointer<RE::NiPointLight>(light), 0.0f, a_life, data.fade, a_key, true });
+		}
+
+		// A carried light: made the first time, moved each frame it's placed, out once it isn't.
+		void CarryLight(std::uint32_t a_key, const RE::NiPoint3& a_at, const Color& a_color, float a_lumens, float a_range)
+		{
+			for (auto& l : g_lights) {
+				if (l.key == a_key && l.life < 0.0f) {
+					if (l.light) {
+						l.light->local.translate = a_at;
+					}
+					l.seen = true;
+					return;
+				}
+			}
+			AddLight(a_at, a_color, a_lumens, a_range, -1.0f, a_key);
+		}
+
+		void UpdateLights(float a_dt)
+		{
+			for (std::size_t i = 0; i < g_lights.size();) {
+				auto&      l = g_lights[i];
+				const bool over = l.life >= 0.0f ? l.age + a_dt >= l.life : !l.seen;
+				l.age += a_dt;
+				if (over || !l.light) {
+					DropLight(l);
+					g_lights.erase(g_lights.begin() + static_cast<std::ptrdiff_t>(i));
+					continue;
+				}
+				if (l.life > 0.0f) {
+					const float t = l.age / l.life;
+					l.light->GetLightRuntimeData().fade = l.fade * (t < 0.1f ? 1.0f : std::max(0.0f, 1.0f - (t - 0.1f) / 0.9f));
+				}
+				l.seen = false;
+				++i;
+			}
+		}
+
+		// Bombs' lights are keyed apart from bolts'.
+		constexpr std::uint32_t kBombKey = 0x80000000u;
+
 		void UpdateBolts(float a_dt, const View& a_view)
 		{
 			const float m = M();
@@ -527,10 +657,12 @@ namespace Fx
 					continue;
 				}
 				if (b.ended) {
-					// The bolt's gone; its streak catches up.
+					// The bolt's gone; its streak catches up (its light goes out: no longer carried).
 					Release(b.tracer);
 					Release(b.shape);
 				} else {
+					const float s = Settings::Get().scale;
+					CarryLight(b.id, b.head, g_c.boltGlow, 25000.0f * s * s, 2.5f * m);
 					const RE::NiMatrix3 turn = ZTo(b.dir);
 					Place(b.tracer, b.head, turn, RE::NiPoint3{ 1.2f, 1.2f, 1.8f } * m);
 					Place(b.shape, b.head, turn, RE::NiPoint3{ 0.12f, 0.12f, 0.4f } * m);
@@ -613,7 +745,6 @@ namespace Fx
 	bool Available()
 	{
 		if (g_available < 0) {
-			Template probe;
 			g_available = Load(g_templates["quad_glow_add"], "quad_glow_add") ? 1 : 0;
 			if (g_available) {
 				LoadPalette();
@@ -625,7 +756,12 @@ namespace Fx
 
 	void Update(float a_dt)
 	{
-		if (g_pieces.empty() && g_bolts.empty()) {
+		if (!g_arcDrawn) {
+			HideArc(0);
+		}
+		const bool arc = g_arcDrawn;
+		g_arcDrawn = false;
+		if (g_pieces.empty() && g_bolts.empty() && !arc && g_lights.empty()) {
 			return;
 		}
 		if (!Root()) {
@@ -634,6 +770,7 @@ namespace Fx
 		const View view = CameraView();
 		UpdatePieces(a_dt, view);
 		UpdateBolts(a_dt, view);
+		UpdateLights(a_dt);
 		if (g_root) {
 			RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 			g_root->Update(update);
@@ -654,6 +791,71 @@ namespace Fx
 			}
 		}
 		g_bolts.clear();
+		for (auto& part : g_arc) {
+			Release(part);
+		}
+		g_arc.clear();
+		for (auto& l : g_lights) {
+			DropLight(l);
+		}
+		g_lights.clear();
+	}
+
+	void BombGlow(std::uint32_t a_id, const RE::NiPoint3& a_at)
+	{
+		if (!Available()) {
+			return;
+		}
+		const float s = Settings::Get().scale;
+		CarryLight(kBombKey | a_id, a_at, g_c.grenadeGlow, 20000.0f * s * s, 2.5f * M());
+	}
+
+	void ThrowArc(std::span<const RE::NiPoint3> a_points, std::optional<RE::NiPoint3> a_landing, float a_radius)
+	{
+		if (!Available() || !Root()) {
+			return;
+		}
+		// The sandbox's: thick bright lines drawn over the world, 5 pixels wide whatever their
+		// distance (here, quads as wide as the camera sees 6 mm a metre away: about 10 pixels at
+		// 2560 across).
+		const Color        color{ 0.35f, 0.8f, 1.0f };
+		constexpr float    kAngularWidth = 0.006f;
+		const View         view = CameraView();
+		std::size_t        used = 0;
+		const RE::NiPoint3 up{ 0.0f, 0.0f, 1.0f };
+		const auto line = [&](const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, bool a_flat) {
+			const RE::NiPoint3 d = a_to - a_from;
+			const float        len = d.Length();
+			if (len < 1e-2f) {
+				return;
+			}
+			if (used == g_arc.size()) {
+				g_arc.push_back(Make("quad_white_blend", false, color));
+			}
+			Part&              part = g_arc[used++];
+			const RE::NiPoint3 axis = d / len;
+			const RE::NiPoint3 middle = (a_from + a_to) * 0.5f;
+			const float        width = kAngularWidth * middle.GetDistance(view.at);
+			// Along the flight its face turned to the camera; the ring's lie on the ground.
+			const RE::NiMatrix3 turn = a_flat ? Columns(axis.Cross(up), axis, up) : AxisFacing(axis, view.at - middle);
+			Place(part, middle, turn, { width, len, 1.0f });
+			Tint(part, color, 1.0f);
+		};
+		// Dashed: every other step of the flight.
+		for (std::size_t i = 1; i < a_points.size(); i += 2) {
+			line(a_points[i - 1], a_points[i], false);
+		}
+		if (a_landing) {
+			constexpr int      kSides = 32;
+			const RE::NiPoint3 centre = *a_landing + up * (0.02f * M());
+			for (int k = 0; k < kSides; ++k) {
+				const float a0 = static_cast<float>(k) / kSides * kTau, a1 = static_cast<float>(k + 1) / kSides * kTau;
+				line(centre + RE::NiPoint3{ std::cos(a0), std::sin(a0), 0.0f } * a_radius,
+					centre + RE::NiPoint3{ std::cos(a1), std::sin(a1), 0.0f } * a_radius, true);
+			}
+		}
+		HideArc(used);
+		g_arcDrawn = true;
 	}
 
 	void MuzzleFlash(const RE::NiPoint3& a_at, const RE::NiPoint3& a_dir)
@@ -679,6 +881,8 @@ namespace Fx
 		Piece glow = Life(0.1f);
 		glow.fadeFrom = 0.2f;
 		Sprite("glow", true, a_at, { 0.6f * m, 0.9f * m }, g_c.boltGlow * 1.5f, std::move(glow));
+		const float s = Settings::Get().scale;
+		AddLight(a_at + a_dir * (0.1f * m), g_c.boltGlow, 80000.0f * s * s, 3.0f * m, 0.07f);
 	}
 
 	std::uint32_t Bolt(const RE::NiPoint3& a_at, const RE::NiPoint3& a_dir)
@@ -756,6 +960,8 @@ namespace Fx
 		Piece glow = Life(0.2f);
 		glow.colorEnd = g_c.impactGlowEnd;
 		Sprite("glow", true, off, { 0.6f * m, 1.0f * m }, g_c.impactGlow * 2.0f, std::move(glow));
+		const float s = Settings::Get().scale;
+		AddLight(a_at + a_normal * (0.3f * m), g_c.impactGlow, 40000.0f * s * s, 2.5f * m, 0.12f);
 		const std::optional<float> floor = a_normal.z > 0.5f ? std::optional(a_at.z) : std::nullopt;
 		for (int i = 0; i < 9; ++i) {
 			RE::NiPoint3 dir = a_normal + g_rng.Unit() * 0.9f;
@@ -839,6 +1045,8 @@ namespace Fx
 			return;
 		}
 		const float m = M();
+		const float s = Settings::Get().scale;
+		AddLight(a_at + kUp * (0.6f * m), g_c.blastFire, 3.0e6f * s * s, a_radius * 3.0f, 0.5f);
 		Piece       flash = Life(0.16f);
 		flash.roll = g_rng.Next() * kTau;
 		flash.fadeFrom = 0.1f;
@@ -957,6 +1165,8 @@ namespace Fx
 		flash.roll = g_rng.Next() * kTau;
 		flash.fadeFrom = 0.1f;
 		Sprite("flare_radial", false, a_at, { 0.5f * m, 1.4f * m }, g_c.wrenchHit * 4.0f, std::move(flash));
+		const float s = Settings::Get().scale;
+		AddLight(a_at - a_dir * (0.3f * m), g_c.wrenchHit, 60000.0f * s * s, 3.0f * m, 0.12f);
 		// An anamorphic streak across the flash.
 		Piece streak = Life(0.15f);
 		streak.parts.push_back(Make("quad_glow_add", true, g_c.wrenchHit * 3.0f));
@@ -1000,6 +1210,8 @@ namespace Fx
 		}
 		const float        m = M();
 		const RE::NiPoint3 up = a_at + kUp * (0.2f * m);
+		const float        s = Settings::Get().scale;
+		AddLight(a_at + kUp * (0.8f * m), g_c.wrenchSlam, 1.2e6f * s * s, a_radius * 3.0f, 0.4f);
 		Piece              flash = Life(0.15f);
 		flash.roll = g_rng.Next() * kTau;
 		flash.fadeFrom = 0.1f;
@@ -1011,11 +1223,11 @@ namespace Fx
 		for (int i = 0; i < 4; ++i) {
 			const float size = 1.4f * m;
 			const float a = g_rng.Next() * kTau;
-			const float c = std::cos(a), s = std::sin(a);
+			const float c = std::cos(a), sn = std::sin(a);
 			Piece       blast = Life(0.3f);
 			blast.parts.push_back(Make(std::format("impact_blast_{}", i), true, g_c.wrenchSlam * 2.0f));
 			blast.at = a_at;
-			blast.turn = YUp(Columns({ c, 0.0f, -s }, { 0.0f, 1.0f, 0.0f }, { s, 0.0f, c }));
+			blast.turn = YUp(Columns({ c, 0.0f, -sn }, { 0.0f, 1.0f, 0.0f }, { sn, 0.0f, c }));
 			blast.size0 = Splat(size * 0.3f);
 			blast.size1 = Splat(size);
 			blast.fadeFrom = 0.2f;

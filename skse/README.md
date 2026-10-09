@@ -108,8 +108,10 @@ plays them.
 with Skyrim's effect shader, and `SKSE/Plugins/RatchetMovement/fx.ini` (the game's effect
 colours). `src/Fx.cpp` builds the sandbox's effects from them (`apps/sandbox/src/vfx.rs`): the
 Burst Pistol's flash, bolt, streak, trail, impacts and shells (the plugin flies the bolts itself
-then, at the game's 80 m/s), the Shatterbomb's blast, the wrench's hits, the Hyper-Strike's landing
-and the thrown wrench's trail. Without the art, Skyrim's spell bolt and rune explosion stand in.
+then, at the game's 80 m/s), the Shatterbomb's blast and the arc it would fly while the throw
+winds up, the wrench's hits, the Hyper-Strike's landing and the thrown wrench's trail, with their
+flash lights (Skyrim point lights, at most 8 at once) and the bombs' glow in flight. Without the
+art, Skyrim's spell bolt and rune explosion stand in.
 
 ## Checking the jump
 At load the plugin runs libratchet's flat-floor jump on its own (the same test as the sandbox
@@ -181,6 +183,16 @@ options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his fr
   asked (a wall). When Skyrim's state loses him over a bump with the ground still within 0.35 m,
   the controller is held in its air state with the sim's velocity, along the slope under him and
   up a step ahead (`bNativeGround = 0` does that all the time, the older way).
+- **Camera.** On foot, Rift Apart's follow camera (INI `bRiftCamera`): Skyrim's third-person
+  camera keeps its mouse look and its other states, but where it sits is the sandbox's
+  (`camera_follow`), from the game's camera configs: around a pivot 1.5 m above his feet, 4.65 m
+  back, further back and wider (6 m, FOV 82) while he runs, over his right shoulder (0.5 m right,
+  4.5 m back, FOV 72) while he aims, the pivot trailing him a little. The game's shakes play on
+  it (the Burst Pistol's recoil, the Shatterbomb's blast within 30-50 m) and the slam's wobble.
+  Hooks: `ThirdPersonState` vfuncs 3 (its update: the place goes into the state and the camera's
+  root afterwards; its place isn't asked for through the vtable) and 4 (its turn: the shakes).
+  It collides on Skyrim's camera layer. Skyrim's FOV value is the screen's horizontal angle
+  (measured from the world camera's frustum, logged once).
 - **Animations.** With `bRatchet = 1` his own clips play, picked as the sandbox picks them:
   `crates/libratchet-anim` (through ratchet.dll's `ratchet_anim_*`) reads the sim's state and his
   weapons each frame and gives the clips to blend, each at a time and a weight, with the sandbox's

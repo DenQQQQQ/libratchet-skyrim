@@ -1101,9 +1101,9 @@ namespace AutoTest
 				s.targetHealth = TargetHealth();
 				s.bounty = WhiterunBounty();
 				if (auto* target = Target(); target && c.crime) {
-					auto* player = RE::PlayerCharacter::GetSingleton();
+					auto* him = RE::PlayerCharacter::GetSingleton();
 					SKSE::log::info("autotest: {}: before the hit, {} is {}in combat, {}hostile to him; he's {}in combat", c.name, target->GetName(),
-						target->IsInCombat() ? "" : "not ", target->IsHostileToActor(player) ? "" : "not ", player->IsInCombat() ? "" : "not ");
+						target->IsInCombat() ? "" : "not ", target->IsHostileToActor(him) ? "" : "not ", him->IsInCombat() ? "" : "not ");
 				}
 				if (auto* target = Target(); target && c.awake) {
 					target->EnableAI(true);  // awake from the fight's start (it would wander off while he settles)

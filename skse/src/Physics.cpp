@@ -3,7 +3,7 @@
 
 namespace Physics
 {
-	std::optional<Hit> Ray(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to)
+	std::optional<Hit> Ray(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, RE::COL_LAYER a_layer)
 	{
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		auto* cell = player ? player->GetParentCell() : nullptr;
@@ -19,7 +19,7 @@ namespace Physics
 		// passes through his own capsule).
 		RE::CFilter filter{};
 		player->GetCollisionFilterInfo(filter);
-		pick.rayInput.filterInfo.filter = (filter.filter & 0xFFFF0000u) | static_cast<std::uint32_t>(RE::COL_LAYER::kCharController);
+		pick.rayInput.filterInfo.filter = (filter.filter & 0xFFFF0000u) | static_cast<std::uint32_t>(a_layer);
 		{
 			RE::BSReadLockGuard lock(world->worldLock);
 			world->PickObject(pick);

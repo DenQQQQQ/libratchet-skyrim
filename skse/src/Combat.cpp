@@ -2,6 +2,7 @@
 #include "Combat.h"
 
 #include "AutoTest.h"
+#include "Camera.h"
 #include "Fx.h"
 #include "Input.h"
 #include "Jump.h"
@@ -83,6 +84,7 @@ namespace Combat
 			float        age = 0.0f;
 			float        spin = 0.0f;
 			std::string  sounds;    // its throw's sounds belong to it (its flight's hum stops at the blast)
+			std::uint32_t id = 0;   // its throw's number (its glow's)
 		};
 
 		// A Burst Pistol bolt the plugin flies (game units).
@@ -142,6 +144,7 @@ namespace Combat
 			std::vector<std::pair<RE::ActorHandle, float>> shotAt;
 			// The pistol's own bolts in flight.
 			std::vector<Bolt> bolts;
+			float             arcFor = 0.0f;  // seconds the throw arc has shown
 			float             sinceBlast = 100.0f;
 			// Where he was at the last step, and in which world (a worldspace, or an interior cell).
 			std::optional<RE::NiPoint3> lastAt;
@@ -315,11 +318,17 @@ namespace Combat
 		// His gun hand (his model's), or near where it would be.
 		RE::NiPoint3 HandAt(RE::PlayerCharacter* a_player)
 		{
+			const float s = Settings::Get().scale;
+			const float u = Units();
+			// In first person his model isn't drawn or posed: low and to the right in front of the
+			// camera (the throw arc started from his third-person hand, wherever it was left).
+			if (const auto* camera = RE::PlayerCamera::GetSingleton(); camera && camera->IsInFirstPerson() && camera->cameraRoot) {
+				const auto& w = camera->cameraRoot->world;
+				return w.translate + w.rotate.GetVectorY() * (0.4f * s * u) + w.rotate.GetVectorX() * (0.2f * s * u) - w.rotate.GetVectorZ() * (0.25f * s * u);
+			}
 			if (const auto hand = Model::GunHand()) {
 				return *hand;
 			}
-			const float s = Settings::Get().scale;
-			const float u = Units();
 			const float yaw = a_player->GetAngleZ();
 			return a_player->GetPosition() + RE::NiPoint3{ std::sin(yaw) * 0.4f * s * u, std::cos(yaw) * 0.4f * s * u, 1.1f * s * u };
 		}
@@ -498,7 +507,7 @@ namespace Combat
 			}
 			const RE::NiPoint3 v = LobVelocity(hand / u, target / u, kBombSpeed * s, kBombGravity * s);
 			const std::string sounds = std::format("shatterbomb {}", ++c.bombsMade);
-			c.bombs.push_back({ hand, v, 0.0f, 0.0f, sounds });
+			c.bombs.push_back({ hand, v, 0.0f, 0.0f, sounds, c.bombsMade });
 			c.sinceShot = 0.0f;
 			++c.tally.bombs;
 			// Its throw: the toss, and its flight's hum riding with it until the blast (the game's
@@ -507,6 +516,37 @@ namespace Combat
 			AutoTest::OnMove("bomb_thrown");
 			SKSE::log::info("combat: a Shatterbomb leaves his hand for a point {:.1f} m away ({:.1f} m/s, {:.0f}° up)", to.Length() / u,
 				v.Length(), std::asin(std::clamp(v.z / std::max(v.Length(), 1e-4f), -1.0f, 1.0f)) * 57.29578f);
+		}
+
+		// While a throw winds up: where the Shatterbomb would fly from his hand to the crosshair
+		// (as ThrowBomb would throw it now), stopping where it meets something (the sandbox's
+		// throw_arc: 0.03 s steps, up to 6 s).
+		void DrawThrowArc(RE::PlayerCharacter* a_player)
+		{
+			const float        s = Settings::Get().scale;
+			const float        u = Units();
+			const RE::NiPoint3 hand = HandAt(a_player);
+			RE::NiPoint3       target = AimPoint().first;
+			RE::NiPoint3       to = target - hand;
+			if (to.Length() > kBombRange * s * u) {
+				to.Unitize();
+				target = hand + to * (kBombRange * s * u);
+			}
+			const RE::NiPoint3 v = LobVelocity(hand / u, target / u, kBombSpeed * s, kBombGravity * s);
+			const float        g = kBombGravity * s;
+			std::vector<RE::NiPoint3>  points{ hand };
+			std::optional<RE::NiPoint3> landing;
+			for (int i = 1; i < 200; ++i) {
+				const float        t = static_cast<float>(i) * 0.03f;
+				const RE::NiPoint3 at = hand + (v * t + RE::NiPoint3{ 0.0f, 0.0f, -0.5f * g * t * t }) * u;
+				if (const auto hit = Physics::Ray(points.back(), at)) {
+					points.push_back(hit->point);
+					landing = hit->point;
+					break;
+				}
+				points.push_back(at);
+			}
+			Fx::ThrowArc(points, landing, kBlastInner * s * u);
 		}
 
 		// A Shatterbomb goes off at a_at: everyone in the blast's reach takes its damage, full
@@ -542,8 +582,9 @@ namespace Combat
 				Spells::Blast(a_at);
 			}
 			Sounds::Play("grenade_explode", a_at);
-			// The game's explosion shake reaches him in full within 30 m (MediumExplosion's radii).
-			if (a_player->GetPosition().GetDistance(a_at) < 30.0f * s * u) {
+			// The game's explosion shake (MediumExplosion: full within 30 m, gone at 50 m); Skyrim's
+			// own in its camera's place.
+			if (!Camera::Explosion(a_at) && a_player->GetPosition().GetDistance(a_at) < 30.0f * s * u) {
 				RE::ShakeCamera(0.5f, a_at, 0.4f);
 			}
 			AutoTest::OnMove("blast");
@@ -623,6 +664,7 @@ namespace Combat
 					it = c.bombs.erase(it);
 				} else {
 					Sounds::Follow(b.sounds, b.at);
+					Fx::BombGlow(b.id, b.at);
 					++it;
 				}
 			}
@@ -719,6 +761,7 @@ namespace Combat
 				}
 			}
 			Sounds::Play("pistol_shot", muzzle);
+			Camera::Recoil();
 			if (c.shotsInARow == 3) {
 				AutoTest::OnMove("shot");  // his aim pose is in by then
 			}
@@ -874,6 +917,15 @@ namespace Combat
 			Pistol(a_player, a_dt);
 		} else {
 			Shatterbomb(a_dt);
+			if (WindingUp()) {
+				DrawThrowArc(a_player);
+				if (c.arcFor < 0.25f && c.arcFor + a_dt >= 0.25f) {
+					AutoTest::OnMove("throw_arc");
+				}
+				c.arcFor += a_dt;
+			} else {
+				c.arcFor = 0.0f;
+			}
 		}
 		FlyBolts(a_player, a_dt);
 		for (auto& [target, in] : c.shotAt) {

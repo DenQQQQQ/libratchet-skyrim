@@ -31,6 +31,15 @@ namespace Fx
 	// bouncing on the ground at the height a_floor if there's one.
 	void Shell(const RE::NiPoint3& a_at, const RE::NiMatrix3& a_turn, std::optional<float> a_floor);
 
+	// While a Shatterbomb throw winds up, where it would fly (the sandbox's throw_arc): its
+	// flight's points (game units, 0.03 s apart) dashed, and a ring a_radius (game units) round
+	// where it lands, if it does. Drawn for this frame only.
+	void ThrowArc(std::span<const RE::NiPoint3> a_points, std::optional<RE::NiPoint3> a_landing, float a_radius);
+
+	// A Shatterbomb in flight, a_id its throw: its violet glow lights what's near (the sandbox's
+	// grenade_light). Placed each frame it flies; it goes out when it isn't.
+	void BombGlow(std::uint32_t a_id, const RE::NiPoint3& a_at);
+
 	// The Shatterbomb going off (a_radius: the blast's, game units), a_ground the ground's height
 	// under it if it's near.
 	void Explosion(const RE::NiPoint3& a_at, float a_radius, std::optional<float> a_ground);

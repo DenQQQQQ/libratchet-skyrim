@@ -58,7 +58,9 @@ target_compile_options(${PROJECT_NAME} PRIVATE /W4 /permissive- /utf-8 /Zc:__cpl
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/PCH.h)
 # ratchet.dll is delay-loaded: SKSE loads the plugin by its path, which doesn't put the plugin's
 # folder on the DLL search path, so the plugin loads ratchet.dll from its own folder first.
-target_link_libraries(${PROJECT_NAME} PRIVATE CommonLibSSE::CommonLibSSE "${RATCHET_IMPLIB}" delayimp.lib)
+# Rift Apart's camera configs are JSON (Camera.cpp).
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE CommonLibSSE::CommonLibSSE nlohmann_json::nlohmann_json "${RATCHET_IMPLIB}" delayimp.lib)
 target_link_options(${PROJECT_NAME} PRIVATE /DELAYLOAD:ratchet.dll /DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF)
 
 # Stage the mod's files the way MO2 lays them out (SKSE/Plugins/...), next to the build.

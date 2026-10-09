@@ -6,6 +6,7 @@
   "builtin-baseline": "89be95ecb9aa93d776da29101c5ee967c60ab484",
   "dependencies": [
     "directxtk",
+    "nlohmann-json",
     "rapidcsv",
     "spdlog"
   ]
