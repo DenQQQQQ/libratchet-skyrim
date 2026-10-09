@@ -144,6 +144,9 @@ namespace AutoTest
 			{ .name = "a near miss hits", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f,
 				.aimBeside = 0.15f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
+			// Thrown in a dash (the sandbox doesn't stop a throw for one), at the cow 10 m out (the
+			// throw flies flat, as the sandbox's: 14 m out, past the bridge, the road is 1.5 m lower).
+			{ .name = "wrench thrown in a dash", .hold = -1.0f, .dashAt = 0.0f, .duration = 3.0f, .targetAt = 10.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.15f },
 			// Melee while aiming throws the wrench (Rift Apart's, and the sandbox's).
 			{ .name = "melee while aiming throws", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .melee = { 0.4f, -1.0f, -1.0f }, .aim = true, .minDamage = 25.0f, .minHits = 1 },
 			// A Shatterbomb (170.5 damage within 1 m of its blast, 85.25 at 6 m): wound up 0.4 s,

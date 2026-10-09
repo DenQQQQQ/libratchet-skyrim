@@ -882,3 +882,9 @@ Two more cases check the Shatterbomb's busy rules: wound up, a dash at 0.2 s and
 go during it (0.45 s) throws nothing; held through the dash and let go after it (1.1 s), the bomb
 goes and hits the cow (85 damage). Fights can dash now (`dashAt`), and check how many bombs went.
 
+And the wrench thrown in a dash (the sandbox's rule; the plugin's old one refused it) hits the cow
+10 m out. At 14 m it flew 1.54 m over the cow's middle: past the bridge the road is lower, and the
+throw flies flat at his hand's height, as the sandbox's does (wrench.rs start_throw). On Skyrim's
+hills that means a target well below or above him (more than about 1.2 m) is out of a throw's
+reach; kept, as the sandbox's.
+
