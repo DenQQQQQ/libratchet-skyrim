@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "Clank.h"
 #include "Combat.h"
+#include "Fx.h"
 #include "Jump.h"
 #include "Model.h"
 #include "RatchetDll.h"
@@ -35,12 +36,19 @@ namespace
 			Combat::Reset();
 			Model::Reset();
 			Sounds::Reset();
+			if (a_msg->type == SKSE::MessagingInterface::kNewGame) {
+				Model::Preload();
+				Fx::Preload();
+			}
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			Jump::Reset();
 			Combat::Reset();
 			Model::Reset();
 			Sounds::Reset();
+			// (Once a session, as the game loads: his models and the effects' templates.)
+			Model::Preload();
+			Fx::Preload();
 			AutoTest::OnGameLoaded();
 			break;
 		default:

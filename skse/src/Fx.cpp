@@ -793,6 +793,30 @@ namespace Fx
 		return g_available == 1;
 	}
 
+	void Preload()
+	{
+		static bool done = false;
+		if (done || !Available()) {
+			return;
+		}
+		done = true;
+		// Every template the converter made (meshes\RatchetMovement\fx\*.nif, MO2's virtual folder
+		// lists them), loaded now: each was loaded the first time its effect was drawn, mid-fight
+		// (the first Shatterbomb's blast held a frame 110 ms).
+		const auto      start = std::chrono::steady_clock::now();
+		const auto      dir = PluginDirectory().parent_path().parent_path() / L"meshes" / L"RatchetMovement" / L"fx";
+		std::error_code ec;
+		int             loaded = 0;
+		for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+			if (entry.path().extension() == L".nif") {
+				const std::string name = entry.path().stem().string();
+				loaded += Load(g_templates[name], name) ? 1 : 0;
+			}
+		}
+		SKSE::log::info("fx: {} effect templates loaded in {:.0f} ms{}", loaded,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), ec ? std::format(" ({})", ec.message()) : "");
+	}
+
 	void Update(float a_dt)
 	{
 		g_clock += a_dt;

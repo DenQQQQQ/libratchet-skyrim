@@ -925,6 +925,26 @@ namespace Model
 
 	bool Enabled() { return s.enabled && !s.failed; }
 
+	void Preload()
+	{
+		static std::vector<RE::NiPointer<RE::NiNode>> held;  // kept: Skyrim's model cache holds them while they're used
+		static bool                                   done = false;
+		if (done || !s.enabled) {
+			return;
+		}
+		done = true;
+		const auto start = std::chrono::steady_clock::now();
+		for (const char* path : { kModelPath, "RatchetMovement\\clank.nif", g_wrench.path, g_pistol.path, g_bomb.path, "RatchetMovement\\shatterbomb_glove.nif" }) {
+			RE::NiPointer<RE::NiNode>               loaded;
+			const RE::BSModelDB::DBTraits::ArgsType args{};
+			if (RE::BSModelDB::Demand(path, loaded, args) == RE::BSResource::ErrorCode::kNone && loaded) {
+				held.push_back(loaded);
+			}
+		}
+		SKSE::log::info("ratchet model: {} models loaded ahead in {:.0f} ms", held.size(),
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+	}
+
 	std::string_view CurrentClip() { return s.clipName; }
 
 	std::string_view WeaponClip(bool a_pistol)

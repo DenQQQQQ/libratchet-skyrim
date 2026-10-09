@@ -917,3 +917,15 @@ input to Skyrim. Their sticks then went the circling camera's way. Test runs tur
 (`fAutoVanityModeDelay`, in memory, as the autosaves). In play any input ends it and ours is
 back. When he goes off foot the jump log says why now, and the camera's says what took it.
 
+### What it costs a frame, and no stalls the first time
+
+The jump log measures the plugin's work on the main thread each frame (the sim's step and the
+sounds before Skyrim's update; his pose, Clank, the effects and the camera after it) and logs it
+every 10 s in a test run, every minute in play. Over the full run: **0.3 ms a frame** on average
+(0.13 the step and sounds, 0.18 the rest). But the worst frames were the first uses: the wrench's
+first swing held a frame 26 ms, the pistol's first shot 87 ms, the first Shatterbomb 110 ms (each
+effect's template loaded from disk as it was first drawn), and his first frame 974 ms (his model,
+Clank and his weapons). They're loaded as the game loads now: his six models (0.9 s) and the 58
+effect templates (0.3 s, every NIF in the mod's fx folder), once a session. The full run's worst
+frame since: 2.3 ms.
+

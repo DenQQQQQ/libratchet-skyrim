@@ -38,6 +38,9 @@ namespace Model
 	void Update(RE::PlayerCharacter* a_player, float a_dt, const Drive& a_drive);
 	// After a load: no clip from before it.
 	void Reset();
+	// His model, Clank, his weapons, the Shatterbomb and its glove loaded once, as a game loads (not
+	// on the first frame he's drawn, or the first time a Shatterbomb's out).
+	void Preload();
 	// His clips sound his steps, efforts, swishes and swings (clip_sounds.txt, on the sandbox's
 	// clip clock): the moves' own sounds are then only those the sandbox plays from them.
 	bool ClipSounds();

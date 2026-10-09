@@ -9,6 +9,8 @@ namespace Fx
 {
 	// Whether the converted art is installed (looked for once).
 	bool Available();
+	// Every effect's template, loaded once (as a game loads), not the first time it's drawn.
+	void Preload();
 	// Once a frame: the pieces move, grow, fade and turn to the camera; spent ones go.
 	void Update(float a_dt);
 	// All of them gone (a load, a new world).

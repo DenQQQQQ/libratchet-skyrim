@@ -1024,14 +1024,17 @@ namespace Jump
 			{
 				const float dt = std::clamp(a_delta, 0.0f, 0.1f);
 				const bool running = dt > 0.0f && !RE::UI::GetSingleton()->GameIsPaused();
+				const auto t0 = std::chrono::steady_clock::now();
 				if (running) {
 					Step(a_this, dt);
 					// The sounds on the frame's whole time (a hitch isn't clamped away: a baked loop
 					// has to start again when its file really ends).
 					Sounds::Update(a_delta);
 				}
+				const auto t1 = std::chrono::steady_clock::now();
 				_Update(a_this, a_delta);
 				Observe(a_this);
+				const auto t2 = std::chrono::steady_clock::now();
 				if (running) {
 					// Ratchet's pose follows the move Skyrim has just made.
 					const auto* ctrl = a_this->GetCharController();
@@ -1059,8 +1062,36 @@ namespace Jump
 					Fx::Update(dt);
 					Camera::Update();
 				}
+				if (running) {
+					Cost(t1 - t0, std::chrono::steady_clock::now() - t2);
+				}
 			}
 			static inline REL::Relocation<decltype(Update)> _Update;
+
+			// What the plugin costs a frame on the main thread: the sim's step and the sounds before
+			// Skyrim's own update, his pose, Clank, the weapons' effects and the camera after it.
+			// Logged every 10 s in a test run, every minute otherwise.
+			static void Cost(std::chrono::steady_clock::duration a_before, std::chrono::steady_clock::duration a_after)
+			{
+				using ms = std::chrono::duration<double, std::milli>;
+				static double before = 0.0, after = 0.0, worstBefore = 0.0, worstAfter = 0.0;
+				static int    frames = 0;
+				static auto   since = std::chrono::steady_clock::now();
+				const double  b = ms(a_before).count(), a = ms(a_after).count();
+				before += b;
+				after += a;
+				worstBefore = std::max(worstBefore, b);
+				worstAfter = std::max(worstAfter, a);
+				++frames;
+				const auto now = std::chrono::steady_clock::now();
+				if (now - since >= std::chrono::seconds(AutoTest::Active() ? 10 : 60)) {
+					SKSE::log::info("perf: {:.2f} ms a frame on average ({:.2f} the step and sounds, {:.2f} his pose, effects and camera), at most {:.2f} and {:.2f}, over {} frames",
+						(before + after) / frames, before / frames, after / frames, worstBefore, worstAfter, frames);
+					before = after = worstBefore = worstAfter = 0.0;
+					frames = 0;
+					since = now;
+				}
+			}
 		};
 
 	}
