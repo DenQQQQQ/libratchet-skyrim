@@ -67,6 +67,19 @@ impl Weapon {
         self.params.trigger == Trigger::Cooked && self.prev_trigger && self.ammo >= self.params.ammo_cost && self.cooldown <= READY
     }
 
+    /// Advances one tick while the weapon is put away (or can't fire): it fires nothing, but
+    /// follows the button, so a press or release made meanwhile isn't taken for one when it's
+    /// back (RiftApart.exe reads them from the controller each frame and keeps no memory of
+    /// the button in the weapon), and its wait runs down (the game times it from the last
+    /// shot) as its spread settles.
+    pub fn stow(&mut self, dt: f32, trigger: bool) {
+        self.prev_trigger = trigger;
+        self.cooldown = (self.cooldown - dt).max(0.0);
+        self.streak = 0;
+        let spread = self.spread_params(false).clone();
+        self.spread = (self.spread - spread.recover * dt).max(spread.initial);
+    }
+
     /// Current spread cone half-angle, degrees.
     pub fn spread(&self) -> f32 {
         self.spread

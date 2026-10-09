@@ -10,7 +10,7 @@
 //!   --record <dir>    with --demo: also save every other frame (30 fps) as PNG for a video
 //!   --demo-part <part> with --demo: only that section (wrench, weapons, moves, combat, face,
 //!                     sounds, carry, dashjump, throwswitch, strafejump, walljump, ledges,
-//!                     swingshot, turns)
+//!                     swingshot, turns, grenadeswitch)
 //!   --clean           start with the debug overlay (HUD, help, trails) hidden; F1 toggles it
 
 mod camera;

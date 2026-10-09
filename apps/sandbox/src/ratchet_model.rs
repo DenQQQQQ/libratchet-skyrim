@@ -713,7 +713,7 @@ fn play_clips(
 
     // Winding a grenade throw up while the fire button is held: the windup plays once and holds
     // its last pose; the throw takes over from it.
-    let cooking = arsenal.as_ref().is_some_and(|a| a.cooking);
+    let cooking = arsenal.as_ref().is_some_and(|a| a.cooking && a.slot == crate::weapons::Slot::Shatterbomb);
     let throwing = rig.grenade_time.is_some_and(|(_, t)| t < 0.05);
     match rig.windup {
         None if cooking && !throwing => {

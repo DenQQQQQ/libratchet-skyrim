@@ -18,8 +18,9 @@ def video_length(path):
 
 
 def read_log(path, length):
-    """(start, file, volume, speed, end or None) per sound; a loop ends at its stop line or the
-    end. Lines: seconds, file (or moment for stop), volume, speed, once|loop|stop[, moment]."""
+    """(start, file, volume, speed, end or None, looped) per sound; a loop ends at its stop line
+    or the end, a one-shot with a key at its key's stop if that comes first. Lines: seconds, file
+    (or key for stop), volume, speed, once|loop|stop[, key]."""
     sounds, open_loops = [], {}
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -28,9 +29,11 @@ def read_log(path, length):
                 continue
             t, what, volume, speed, kind = float(parts[0]), parts[1], float(parts[2]), float(parts[3]), parts[4]
             if kind == "once":
-                sounds.append([t, what, volume, speed, None])
+                sounds.append([t, what, volume, speed, None, False])
+                if len(parts) > 5:
+                    open_loops.setdefault(parts[5], []).append(len(sounds) - 1)
             elif kind == "loop" and len(parts) > 5:
-                sounds.append([t, what, volume, speed, length])
+                sounds.append([t, what, volume, speed, length, True])
                 open_loops.setdefault(parts[5], []).append(len(sounds) - 1)
             elif kind == "stop":
                 for i in open_loops.pop(what, []):
@@ -52,13 +55,15 @@ def main():
         raise SystemExit("no sounds in the log")
     args = ["ffmpeg", "-y", "-loglevel", "error", "-i", a.video]
     graph = []
-    for i, (start, file, volume, speed, end) in enumerate(sounds, start=1):
+    for i, (start, file, volume, speed, end, looped) in enumerate(sounds, start=1):
         # Each sound is read inside the filter graph (too many for the command line); paths
         # use forward slashes, with the colons and quotes filters care about escaped.
         path = os.path.join(a.assets, file).replace("\\", "/").replace(":", "\:").replace("'", "\'")
         source = f"amovie={path}"
         if end is not None:
-            source += f":loop=0,atrim=0:{max(end - start, 0.01):.3f},asetpts=PTS-STARTPTS"
+            # Cut where it stopped, in the file's own time (it plays at `speed`).
+            loop = ":loop=0" if looped else ""
+            source += f"{loop},atrim=0:{max((end - start) * speed, 0.01):.3f},asetpts=PTS-STARTPTS"
         delay = int(round(start * 1000))
         # Played faster or slower for its pitch, as the sandbox does.
         pitch = f"asetrate={48000 * speed:.0f},aresample=48000," if abs(speed - 1.0) > 1e-3 else ""

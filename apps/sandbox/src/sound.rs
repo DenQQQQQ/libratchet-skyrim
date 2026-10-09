@@ -20,32 +20,41 @@ const LEVEL_SCALE: f32 = 0.5;
 const LEVEL_RANGE: (f32, f32) = (-18.0, 3.0);
 
 /// A sound to play: a moment or a Wwise event name, where it happens (world sounds fade with
-/// distance from Ratchet), and for loops whether it starts or stops.
+/// distance from Ratchet), for loops whether it starts or stops, and what it belongs to.
 #[derive(Message, Clone, Debug)]
 pub struct SoundCue {
     pub name: String,
     pub at: Option<Vec3>,
     pub looping: Option<bool>,
+    pub owner: Option<Entity>,
 }
 
 impl SoundCue {
     /// A one-shot on Ratchet.
     pub fn play(name: impl Into<String>) -> Self {
-        SoundCue { name: name.into(), at: None, looping: None }
+        SoundCue { name: name.into(), at: None, looping: None, owner: None }
     }
 
     /// A one-shot somewhere in the world.
     pub fn at(name: impl Into<String>, at: Vec3) -> Self {
-        SoundCue { name: name.into(), at: Some(at), looping: None }
+        SoundCue { name: name.into(), at: Some(at), looping: None, owner: None }
     }
 
     /// Starts a loop on Ratchet (once; a second start does nothing).
     pub fn start(name: impl Into<String>) -> Self {
-        SoundCue { name: name.into(), at: None, looping: Some(true) }
+        SoundCue { name: name.into(), at: None, looping: Some(true), owner: None }
     }
 
     pub fn stop(name: impl Into<String>) -> Self {
-        SoundCue { name: name.into(), at: None, looping: Some(false) }
+        SoundCue { name: name.into(), at: None, looping: Some(false), owner: None }
+    }
+
+    /// A moment that belongs to `owner` (a grenade in flight): its loop layers loop, and all
+    /// it plays, sounds still waiting on their delay too, stops when the owner is gone
+    /// (RiftApart.exe plays the Shatterbomb's flight on the grenade, and its explosion stops
+    /// it). Each owner's sounds are its own, so two grenades in flight both sound.
+    pub fn on(name: impl Into<String>, owner: Entity) -> Self {
+        SoundCue { name: name.into(), at: None, looping: None, owner: Some(owner) }
     }
 }
 
@@ -119,13 +128,28 @@ pub struct SoundLog(pub std::path::PathBuf);
 #[derive(Component)]
 struct LoopOf(String);
 
-/// A layer sound that starts after its delay.
+/// A sound (playing, delayed or retriggering) of a moment played on an entity: it stops when
+/// that entity is gone. The key names them in the recording's log.
+#[derive(Component, Clone)]
+struct OwnedBy(Entity, String);
+
+/// What a sound is tagged with: a loop its stop cue finds, or an owner.
+#[derive(Clone)]
+enum Tag {
+    None,
+    Loop(String),
+    Owned(OwnedBy),
+}
+
+/// A layer sound that starts after its delay (looping, for a loop layer played on an owner).
 #[derive(Component)]
 struct Delayed {
     left: f32,
     file: Handle<AudioSource>,
     volume: f32,
     speed: f32,
+    looped: bool,
+    tag: Tag,
 }
 
 /// Plays a fresh file of a moment's layer every `every` seconds while its loop runs.
@@ -135,10 +159,11 @@ struct Retrigger {
     layer: usize,
     every: f32,
     left: f32,
+    tag: Tag,
 }
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<Sounds>().add_message::<SoundCue>().add_systems(Startup, load).add_systems(Update, (play, delayed, retrigger).chain());
+    app.init_resource::<Sounds>().add_message::<SoundCue>().add_systems(Startup, load).add_systems(Update, (play, delayed, retrigger, stop_orphans).chain());
 }
 
 fn load(settings: Res<Settings>, assets: Res<AssetServer>, mut sounds: ResMut<Sounds>) {
@@ -199,17 +224,29 @@ fn falloff(distance: f32) -> f32 {
     if distance <= 6.0 { 1.0 } else { (6.0 / distance).powf(0.85) }
 }
 
-/// Starts one sound now, and logs it when a demo records.
-fn start(commands: &mut Commands, log: &mut String, now: f32, file: Handle<AudioSource>, volume: f32, speed: f32, loop_of: Option<&str>) {
-    let mode = if loop_of.is_some() { PlaybackMode::Loop } else { PlaybackMode::Despawn };
+/// Starts one sound now, and logs it when a demo records (an owned one with its owner's key,
+/// so the recording cuts it where its owner went).
+#[allow(clippy::too_many_arguments)]
+fn start(commands: &mut Commands, log: &mut String, now: f32, file: Handle<AudioSource>, volume: f32, speed: f32, looped: bool, tag: &Tag) {
+    let mode = if looped { PlaybackMode::Loop } else { PlaybackMode::Despawn };
     let settings = PlaybackSettings { mode, volume: Volume::Linear(MASTER * volume), speed, ..PlaybackSettings::ONCE };
     if let Some(path) = file.path() {
-        let kind = loop_of.map_or("once".to_string(), |m| format!("loop\t{m}"));
+        let kind = match tag {
+            Tag::Loop(m) => format!("loop\t{m}"),
+            Tag::Owned(o) => format!("{}\t{}", if looped { "loop" } else { "once" }, o.1),
+            Tag::None => "once".to_string(),
+        };
         *log += &format!("{now:.4}\t{}\t{:.4}\t{speed:.4}\t{kind}\n", path.path().display(), MASTER * volume);
     }
     let mut sound = commands.spawn((AudioPlayer::new(file), settings));
-    if let Some(m) = loop_of {
-        sound.insert(LoopOf(m.to_string()));
+    match tag {
+        Tag::Loop(m) => {
+            sound.insert(LoopOf(m.clone()));
+        }
+        Tag::Owned(o) => {
+            sound.insert(o.clone());
+        }
+        Tag::None => {}
     }
 }
 
@@ -271,25 +308,39 @@ fn play(
             (Some(at), Some(l)) => falloff(at.distance(l) / settings.scale),
             _ => 1.0,
         };
-        let looping = cue.looping == Some(true);
+        // Played on an owner, its loop layers loop until the owner goes, after their delay.
+        let owned = cue.owner.map(|o| OwnedBy(o, format!("{moment}@{o}")));
+        let looping = cue.looping == Some(true) || owned.is_some();
+        let tag = |looped: bool| match &owned {
+            Some(o) => Tag::Owned(o.clone()),
+            None if looped => Tag::Loop(moment.clone()),
+            None => Tag::None,
+        };
         for i in 0..sounds.moments[&moment].layers.len() {
             let (delay, looped, interval) = {
                 let l = &sounds.moments[&moment].layers[i];
                 (l.delay, l.looped, l.interval)
             };
-            if looping && looped && let Some(every) = interval {
+            let looped = looping && looped;
+            if looped && let Some(every) = interval {
                 // Retriggered loop: a fresh file every interval, from the first one on.
-                commands.spawn((Retrigger { moment: moment.clone(), layer: i, every, left: delay }, LoopOf(moment.clone())));
+                let driver = Retrigger { moment: moment.clone(), layer: i, every, left: delay, tag: tag(false) };
+                match &owned {
+                    Some(o) => commands.spawn((driver, o.clone())),
+                    None => commands.spawn((driver, LoopOf(moment.clone()))),
+                };
                 continue;
             }
             let Some((file, volume, speed)) = sounds.pick(&moment, i) else { continue };
             let volume = volume * gain;
-            if looping && looped {
-                start(&mut commands, &mut lines, now, file, volume, speed, Some(&moment));
-            } else if delay > 0.0 {
-                commands.spawn(Delayed { left: delay, file, volume, speed });
+            // A loop that isn't owned starts at once (its stop cue has to find it).
+            if delay > 0.0 && (owned.is_some() || !looped) {
+                let mut pending = commands.spawn(Delayed { left: delay, file, volume, speed, looped, tag: tag(looped) });
+                if let Some(o) = &owned {
+                    pending.insert(o.clone());
+                }
             } else {
-                start(&mut commands, &mut lines, now, file, volume, speed, None);
+                start(&mut commands, &mut lines, now, file, volume, speed, looped, &tag(looped));
             }
         }
     }
@@ -301,7 +352,7 @@ fn delayed(time: Res<Time>, log: Option<Res<SoundLog>>, mut q: Query<(Entity, &m
     for (e, mut d) in &mut q {
         d.left -= time.delta_secs();
         if d.left <= 0.0 {
-            start(&mut commands, &mut lines, time.elapsed_secs(), d.file.clone(), d.volume, d.speed, None);
+            start(&mut commands, &mut lines, time.elapsed_secs(), d.file.clone(), d.volume, d.speed, d.looped, &d.tag);
             commands.entity(e).despawn();
         }
     }
@@ -315,9 +366,26 @@ fn retrigger(time: Res<Time>, log: Option<Res<SoundLog>>, mut sounds: ResMut<Sou
         if r.left <= 0.0 {
             r.left += r.every;
             if let Some((file, volume, speed)) = sounds.pick(&r.moment, r.layer) {
-                start(&mut commands, &mut lines, time.elapsed_secs(), file, volume, speed, None);
+                start(&mut commands, &mut lines, time.elapsed_secs(), file, volume, speed, false, &r.tag);
             }
         }
     }
+    write_log(log.as_deref(), &lines);
+}
+
+/// Stops what was played on an entity once the entity is gone (the grenade's flight at its
+/// blast), sounds still waiting on their delay included.
+fn stop_orphans(time: Res<Time>, log: Option<Res<SoundLog>>, entities: &bevy::ecs::entity::Entities, q: Query<(Entity, &OwnedBy)>, mut commands: Commands) {
+    let mut gone: Vec<&str> = vec![];
+    for (e, o) in &q {
+        if !entities.contains(o.0) {
+            commands.entity(e).despawn();
+            if !gone.contains(&o.1.as_str()) {
+                gone.push(&o.1);
+            }
+        }
+    }
+    let now = time.elapsed_secs();
+    let lines: String = gone.iter().map(|key| format!("{now:.4}\t{key}\t0\t1\tstop\n")).collect();
     write_log(log.as_deref(), &lines);
 }
