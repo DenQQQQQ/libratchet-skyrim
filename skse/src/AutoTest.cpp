@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
 
+#include "Bolts.h"
 #include "Camera.h"
 #include "Clank.h"
 #include "Combat.h"
 #include "Fx.h"
+#include "Hud.h"
 #include "Input.h"
 #include "Items.h"
 #include "Model.h"
@@ -109,6 +111,17 @@ namespace AutoTest
 			bool        noGun = false;
 			// With RatchetMovement.esl: both guns have to be in his inventory, given this game.
 			bool        given = false;
+			// A fight's target this tough (its base health; 0: the 1000 a fight's target has), with
+			// this much of it left as the fight begins.
+			float       targetHealth = 0.0f;
+			float       targetLeft = 0.0f;
+			// Its death has to drop this many bolts, all of them his by the fight's end, shown on
+			// the counter (0: not checked). From walkAt (s from the start) he walks to the ones
+			// still lying (the stick forward, while any are left); with outOfReach, all of them
+			// have to lie where they landed until then, above the ground.
+			int         wantBolts = 0;
+			float       walkAt = -1.0f;
+			bool        outOfReach = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -177,6 +190,16 @@ namespace AutoTest
 				.bombs = 0 },
 			{ .name = "shatterbomb held through a dash", .hold = -1.0f, .dashAt = 0.2f, .duration = 3.5f, .targetAt = 16.0f, .fireFrom = 0.0f, .fireTo = 1.1f, .minDamage = 75.0f,
 				.shatterbomb = true, .bombs = 1 },
+			// Bolts (libbolts): the cow as tough as Rift Apart's test dummy (100 health: worth 2, 20
+			// bolts), nearly down, shot 6 m off: its bolts burst out and swarm into him as they land
+			// within their 10 m, and the rest once he walks over (the sandbox's demo: "11 came to him
+			// as they landed, the rest as he ran over"); "+N" on the counter, then the new total.
+			{ .name = "bolts from a kill", .hold = -1.0f, .duration = 7.0f, .targetAt = 6.0f, .fireFrom = 0.0f, .fireTo = 0.6f, .aim = true, .targetHealth = 100.0f,
+				.targetLeft = 5.0f, .wantBolts = 20, .walkAt = 2.5f },
+			// 18 m off (the sandbox's demo), out of their reach: they come to rest where they land,
+			// bobbing above the ground, until he walks to them.
+			{ .name = "bolts lying until he comes", .hold = -1.0f, .duration = 11.0f, .targetAt = 18.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true,
+				.targetHealth = 100.0f, .targetLeft = 5.0f, .wantBolts = 20, .walkAt = 3.5f, .outOfReach = true },
 			// A neutral hunter (EncHunterImperialM, another than the wrench's), awake, shot from the
 			// hip: the shots have to make him fight back too (the owner: the pistol raised nothing).
 			{ .name = "a shot makes him fight", .hold = -1.0f, .duration = 2.0f, .targetAt = 6.0f, .fireFrom = 0.0f, .fireTo = 0.5f, .minDamage = 10.0f, .awake = true, .target = 0x00073FBD },
@@ -294,6 +317,14 @@ namespace AutoTest
 			// A no-gun fight: whether he strafed, and whether the wrench was ever out of his hand.
 			bool                        strafed = false;
 			bool                        wrenchLeftHand = false;
+			// A bolts case: the bolts' counts and his total as it began; whether they all lay out of
+			// his reach above the ground before he walked; and the counter's "+N", then its new total.
+			Bolts::Stats                boltsBefore;
+			std::uint32_t               totalBefore = 0;
+			bool                        boltsRested = false;
+			bool                        restChecked = false;
+			bool                        hudGain = false;
+			bool                        hudTotal = false;
 			// A door case: its step (0 shots, 1 through, 2 shots there), the time in it, how long he's
 			// stood in the new cell, where he was, the games loaded, and what the effects did there.
 			int                 doorStep = 0;
@@ -325,10 +356,24 @@ namespace AutoTest
 		};
 		State s;
 
-		float Health()
+		float Health(RE::Actor* a_actor = nullptr)
 		{
-			auto* player = RE::PlayerCharacter::GetSingleton();
-			return player ? player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
+			auto* actor = a_actor ? a_actor : RE::PlayerCharacter::GetSingleton();
+			return actor ? actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
+		}
+
+		// 1234567 -> "1,234,567" (as the counter shows it).
+		std::string Thousands(std::uint32_t a_n)
+		{
+			const std::string digits = std::to_string(a_n);
+			std::string       out;
+			for (std::size_t i = 0; i < digits.size(); ++i) {
+				if (i > 0 && (digits.size() - i) % 3 == 0) {
+					out += ',';
+				}
+				out += digits[i];
+			}
+			return out;
 		}
 
 		void Fail(std::string_view a_what)
@@ -559,6 +604,10 @@ namespace AutoTest
 			s.doorGunAsked = false;
 			s.strafed = false;
 			s.wrenchLeftHand = false;
+			s.boltsRested = false;
+			s.restChecked = false;
+			s.hudGain = false;
+			s.hudTotal = false;
 			s.wallPlaced = false;
 			s.onWall = -1.0f;
 			s.wallPress = 0.0f;
@@ -605,10 +654,21 @@ namespace AutoTest
 			}
 			RE::Actor* target = Target();
 			if (target && target->GetActorBase() && target->GetActorBase()->GetFormID() != a_base) {
-				target->KillImmediate();  // another kind of target this time (killed: a disabled actor with a path request in flight crashed Skyrim's pathing thread)
+				if (!target->IsDead()) {
+					target->KillImmediate();  // another kind of target this time (killed: a disabled actor with a path request in flight crashed Skyrim's pathing thread)
+				}
 				target = nullptr;
 			}
-			if (!target || target->IsDead()) {
+			// One of its kind killed in a bolts case: back to life, and on (no bodies piling up where
+			// the next fights stand).
+			if (target && target->IsDead()) {
+				target->Resurrect(false, true);
+				SKSE::log::info("autotest: the target is back to life ({})", target->IsDead() ? "STILL DEAD" : "alive");
+				if (target->IsDead()) {
+					target = nullptr;
+				}
+			}
+			if (!target) {
 				auto* base = RE::TESForm::LookupByID<RE::TESNPC>(a_base);
 				const auto placed = base ? player->PlaceObjectAtMe(base, false) : nullptr;
 				target = placed ? placed->As<RE::Actor>() : nullptr;
@@ -986,6 +1046,37 @@ namespace AutoTest
 				if (s.wrenchLeftHand) {
 					bad += " no-wrench";
 				}
+			}
+			if (a_case.wantBolts > 0) {
+				// Its death dropped them, and all of them are his, on the counter too.
+				const auto          now = Bolts::Count();
+				const std::uint32_t kills = now.kills - s.boltsBefore.kills;
+				const std::uint32_t dropped = now.dropped - s.boltsBefore.dropped;
+				const std::uint32_t collected = now.collected - s.boltsBefore.collected;
+				const std::size_t   left = now.queued + now.flying + now.resting + now.pulled;
+				const std::uint32_t total = Bolts::Total();
+				SKSE::log::info("autotest: {}: {} kill(s), {} bolts dropped, {} collected, {} pickups left; his total {} -> {}; the counter's "
+								"'+N' {}, its new total {}{}",
+					a_case.name, kills, dropped, collected, left, s.totalBefore, total, s.hudGain ? "seen" : "NOT seen", s.hudTotal ? "seen" : "NOT seen",
+					a_case.outOfReach ? (s.boltsRested ? "; they lay out of reach until he came" : "; they did NOT lie still out of reach") : "");
+				if (kills != 1 || dropped != static_cast<std::uint32_t>(a_case.wantBolts)) {
+					bad += " no-drop";
+				}
+				// (Any left from before are his too by now.)
+				if (collected < dropped || left > 0) {
+					bad += " not-collected";
+				}
+				if (total != s.totalBefore + collected) {
+					bad += " total";
+				}
+				if (Settings::Get().boltCounter && (!s.hudGain || !s.hudTotal)) {
+					bad += " counter";
+				}
+				if (a_case.outOfReach && !s.boltsRested) {
+					bad += " not-resting";
+				}
+				// (Its body stays: the next placement of its kind brings it back to life. Disabled
+				// and deleted dead, its movement controller crashed the game a frame later.)
 			}
 			if (a_case.crime) {
 				const std::uint32_t bounty = WhiterunBounty();
@@ -1501,6 +1592,14 @@ namespace AutoTest
 					Pardon();  // (he may be wanted again: the run's other fights, or the save)
 				}
 				PlaceTarget(c.targetAt, c.target);
+				// That tough, and nearly down (a bolts case: its worth comes from its health).
+				if (auto* target = Target(); target && c.targetHealth > 0.0f) {
+					auto* av = target->AsActorValueOwner();
+					av->SetBaseActorValue(RE::ActorValue::kHealth, c.targetHealth);
+					av->RestoreActorValue(RE::ActorValue::kHealth, 1.0e6f);
+					av->DamageActorValue(RE::ActorValue::kHealth, c.targetHealth - c.targetLeft);
+					SKSE::log::info("autotest: {}: the target at {:.0f} of {:.0f} health", c.name, Health(target), c.targetHealth);
+				}
 			}
 			if (c.wallAt > 0.0f && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
 				s.wallPlaced = true;
@@ -1589,6 +1688,8 @@ namespace AutoTest
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
 				s.bounty = WhiterunBounty();
+				s.boltsBefore = Bolts::Count();
+				s.totalBefore = Bolts::Total();
 				if (auto* target = Target(); target && c.crime) {
 					auto* him = RE::PlayerCharacter::GetSingleton();
 					SKSE::log::info("autotest: {}: before the hit, {} is {}in combat, {}hostile to him; he's {}in combat", c.name, target->GetName(),
@@ -1682,6 +1783,38 @@ namespace AutoTest
 			if (c.noGun) {
 				s.strafed = s.strafed || Combat::Strafing();
 				s.wrenchLeftHand = s.wrenchLeftHand || Combat::InHand() != Combat::Hand::kWrench;
+			}
+			if (c.wantBolts > 0) {
+				const auto now = Bolts::Count();
+				// Just before he walks: all of this drop lying where it landed, out of his reach,
+				// above the ground (0.15 m up, bobbing up to 0.1 m more, × his size). Checked once.
+				if (c.outOfReach && !s.restChecked && t >= c.walkAt - 0.1f) {
+					const std::size_t lying = now.resting - std::min(now.resting, s.boltsBefore.resting);
+					const bool        ok = lying == static_cast<std::size_t>(c.wantBolts) && now.flying + now.pulled + now.queued == 0 &&
+					                now.lowestAboveGround >= 0.1f && now.lowestAboveGround <= 0.4f;
+					SKSE::log::info("autotest: {} {:.2f} s: {} of its pickups lying, {} flying, {} coming, {} waiting; the lowest {:.2f} m above the ground",
+						c.name, t, lying, now.flying, now.pulled, now.queued, now.lowestAboveGround);
+					s.boltsRested = ok;
+					s.restChecked = true;
+					OnMove("bolts_lying");
+				}
+				// Then he walks to them, while any are left.
+				const bool left = now.queued + now.flying + now.resting + now.pulled > 0;
+				if (c.walkAt >= 0.0f && t >= c.walkAt) {
+					Input::SetTestStick(left ? std::optional(RE::NiPoint2{ 0.0f, 1.0f }) : std::nullopt);
+				}
+				// The counter: a "+N" while they come in, then his new total once it takes it in.
+				const auto [total, gain] = Hud::BoltCounterText();
+				if (!s.hudGain && gain.starts_with("+")) {
+					s.hudGain = true;
+					SKSE::log::info("autotest: {} {:.2f} s: the counter shows '{}' '{}'", c.name, t, total, gain);
+					OnMove("bolts_counter");
+				}
+				const std::uint32_t mine = Bolts::Total();
+				if (!s.hudTotal && mine > s.totalBefore && total == std::format("BOLTS  {}", Thousands(mine)) && gain.empty()) {
+					s.hudTotal = true;
+					SKSE::log::info("autotest: {} {:.2f} s: the counter shows '{}'", c.name, t, total);
+				}
 			}
 			// A fight: the wrench presses and the trigger on their times, then the verdict. A press
 			// is the one frame whose span [t, t + dt) holds its time (frames tile the clock, so it's

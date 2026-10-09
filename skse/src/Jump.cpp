@@ -2,6 +2,7 @@
 #include "Jump.h"
 
 #include "AutoTest.h"
+#include "Bolts.h"
 #include "Camera.h"
 #include "Combat.h"
 #include "Fx.h"
@@ -1141,6 +1142,8 @@ namespace Jump
 					const auto state = g.last.state;
 					const bool swinging = state == RATCHET_STATE_MELEE || state == RATCHET_STATE_SMASH || state == RATCHET_STATE_SMASH_LAND;
 					Fx::Swipe(swinging ? Model::HeldWrench() : std::nullopt);
+					// The bolts, around where Skyrim has just put him (on foot or not).
+					Bolts::Update(a_this, dt);
 					Fx::Update(dt);
 					Camera::Update();
 				}

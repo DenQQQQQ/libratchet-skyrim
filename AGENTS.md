@@ -31,7 +31,8 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - `crates/libbolts`: the bolts (currency): an enemy's reward and its split into pickups, the
   burst, bounces, rest, the swarm to the hero, the caps, and the HUD's tally. Pure Rust like
   libarsenal; the host gives it a segment query and draws, sounds and shows the results. Run
-  `cargo test -p libbolts` after bolt changes. It has no C API yet.
+  `cargo test -p libbolts` after bolt changes. Its C API is in `libratchet-ffi`
+  (`ratchet_bolts_*`, `ratchet_tally_*`).
 - `tools/extract_riftapart_sounds.py` + `tools/riftapart_wwise.py`: GPLv3. Extract the game's
   sounds for the sandbox's moments into `riftapart-assets/sounds/` (gitignored) with
   `sounds.json`: Wwise banks and streamed .wem, Vorbis repacked (codebooks found in the user's

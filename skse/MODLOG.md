@@ -1036,3 +1036,62 @@ be refreshed (F5) and the plugin ticked once, as the owner did.
   save and a reload the co-save remembered they'd been given.
 - The full run: 46/46.
 
+## 2026-10-09 (night): bolts (the owner: "bolts have been added to the sandbox lets gooo")
+
+The other agent put Rift Apart's bolts into `crates/libbolts` and the sandbox (`main`'s MODLOG has
+what was read from the game). Merged into this branch, and brought to Skyrim with the sandbox's
+host (`apps/sandbox/src/bolts.rs`) as the reference. The owner's calls: anything he kills drops
+them, by how tough it was; his total lives on Rift Apart's own counter (spending comes with the
+vendor).
+
+### Built
+- **The C API (ratchet.dll, version 4):** `ratchet_bolts_*` over `BoltWorld` (a world at his size
+  with a seed; drop a reward; step around the hero through the host's raycast, the
+  `RatchetWorld` callback's shape; the pickups to draw; what a step collected; clearing without
+  credit) and `ratchet_tally_*` over `Tally` (add, spend, set, step, what the counter shows).
+  Three Rust tests (a dummy's 20 bolts through the C API, clearing, the counter), and the C++
+  smoke test checks the structs' layouts and collects a dummy's bolts through the header.
+- **`src/Bolts.cpp`:** his kills (Skyrim's death event with him as the killer; one drop for its
+  "dying" and "dead" events) burst out 1 m (× scale) above them. Their worth (ours, INI
+  `[Bolts]`): max health / 50 as Rift Apart's relative value (1 to 30), × 10 bolts. The world
+  steps every frame, on foot or not, in steps of at most 1/60 s, around his feet, his middle
+  (0.6 m × scale up, half the sandbox's body) and the thrown wrench. Flying bolts are swept
+  through Skyrim's world on his collision layer, through bodies (the sandbox's bolts meet the
+  level only). Each one collected plays `bolt_collect`. Carried off (a door, a load), what lies
+  about goes.
+- **Drawn** by Fx: each pickup a copy of its model (pooled like the effects' pieces), turned from
+  the sandbox's y-up quaternion, at his size; the glint (`quad_bolt_glint_add`, the vfx converter's
+  quad for `bolt_glint.png`) twinkles on each as the sandbox's: 0.35 s every 0.8-2.5 s, 0.3 m, by
+  the game's curve, 0.12 m toward the camera. The twelve models load with the effects at load.
+- **The models:** `ratchet_to_skyrim.py` handles a glb with no skin: rigid shapes holding their
+  vertices (float positions, half UVs, normals and tangents), and an emissive texture becomes
+  Skyrim's glow map (glow shader) instead of a uniform glow (only the bolts have one: a little
+  green light). `--texture-dir` shares the twelve's textures in one folder. `build.ps1` converts
+  them; the staleness check leaves `ratchet_plugin.py` out (it isn't a converter).
+- **The counter** (`src/Hud.cpp`): four text fields made on Skyrim's HUD movie (Scaleform's
+  `createTextField` on `_root`, `TextFormat` with Skyrim's bold font, embedded), set on the UI
+  thread when what the tally shows changes: "BOLTS  1,234" at 30 px, "+N" under it at 24 px in
+  gold, each with a shadow 2 px down and right, 16 px from the top and 28 px from the right of
+  what's on screen (the sandbox's 1280 x 720 window is the HUD's stage too).
+- **The co-save** (`src/CoSave.cpp`) keeps both records now: whether the guns were given, and his
+  bolts. A new game or an old save starts at 0.
+
+### Tested in game
+- **Bolts from a kill:** the cow at Rift Apart's test dummy's toughness (100 health: worth 2, 20
+  bolts), nearly down, shot from 6 m: 20 bronze pickups burst out and swarm in as they land; the
+  counter shows "BOLTS  1" at once (from 0), then "+1"... and "BOLTS  20". Standing 6 m off, 3 of
+  them landed past their 10 m reach (the sandbox's demo: "11 came to him as they landed, the rest
+  as he ran over"), so he walks over after 2.5 s, as there.
+- **Bolts lying until he comes:** from 18 m, all 20 lay where they landed, the lowest 0.15-0.22 m
+  over the ground (0.15 m up, bobbing up to 0.1 m more), until he walked to them: all his, the
+  counter "+N" and then "BOLTS  40".
+- **A crash the test caused:** its first version disabled and deleted the dead cow after the fight;
+  a frame later Skyrim's movement controller for it read freed memory. The next placement of its
+  kind brings it back to life instead (`Resurrect`), so no bodies pile up where the fights stand.
+- Pictures: the pickups render as the game's hex-headed bolts, about 0.2 m, upright and spread
+  out mid-burst; the counter at the top right as the sandbox's.
+
+### Left out (as in the sandbox)
+- The approach loop (`bolt_approach`), and what the game does past the sandbox (zero gravity,
+  moving platforms, hazards sending bolts straight to him, auto-collect rewards).
+

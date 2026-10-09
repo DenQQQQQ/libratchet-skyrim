@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AutoTest.h"
+#include "Bolts.h"
 #include "Camera.h"
 #include "Clank.h"
+#include "CoSave.h"
 #include "Combat.h"
 #include "Fx.h"
 #include "Items.h"
@@ -32,12 +34,14 @@ namespace
 				Items::Install();  // (before Combat's: it asks whether his guns are Skyrim weapons)
 			}
 			Combat::Install();
+			Bolts::Install();
 			AutoTest::Install();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
 			Jump::Reset();
 			Combat::Reset();
+			Bolts::Reset();
 			Model::Reset();
 			Sounds::Reset();
 			if (a_msg->type == SKSE::MessagingInterface::kNewGame) {
@@ -48,6 +52,7 @@ namespace
 		case SKSE::MessagingInterface::kPostLoadGame:
 			Jump::Reset();
 			Combat::Reset();
+			Bolts::Reset();
 			Model::Reset();
 			Sounds::Reset();
 			// (Once a session, as the game loads: his models and the effects' templates.)
@@ -88,7 +93,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 		}
 	}
 	Sounds::Load(dir);
-	Items::Register();
+	CoSave::Register();
 	const auto& e = Ratchet::Expected();
 	SKSE::log::info("sandbox numbers at scale {}: tap apex {:.3f} m at {:.3f} s, full-hold apex {:.3f} m at {:.3f} s, air time {:.3f} s",
 		settings.scale, e.tapApex, e.tapTime, e.fullApex, e.fullTime, e.fullAirTime);

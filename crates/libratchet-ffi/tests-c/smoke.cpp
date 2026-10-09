@@ -1,5 +1,6 @@
 // Checks that the C header matches the Rust library: jump on a flat floor and print the apex,
-// then swing the wrench and throw it, then animate a walk into a run.
+// then swing the wrench and throw it, then animate a walk into a run, then drop a dummy's bolts
+// and collect them.
 #include "ratchet.h"
 #include <algorithm>
 #include <cstddef>
@@ -12,6 +13,20 @@ static_assert(sizeof(RatchetAnimLayer) == 12 && offsetof(RatchetAnimLayer, time)
 static_assert(sizeof(RatchetAnimClock) == 12 && offsetof(RatchetAnimClock, previous) == 4, "RatchetAnimClock");
 static_assert(sizeof(RatchetAnimInput) == 92 && offsetof(RatchetAnimInput, aim_target) == 68, "RatchetAnimInput");
 static_assert(offsetof(RatchetClipInfo, seconds) == sizeof(const char*), "RatchetClipInfo");
+// The bolts' (crates/libratchet-ffi/src/bolts.rs).
+static_assert(sizeof(RatchetBoltPickup) == 36 && offsetof(RatchetBoltPickup, position) == 8 && offsetof(RatchetBoltPickup, rotation) == 20, "RatchetBoltPickup");
+static_assert(sizeof(RatchetBoltCollected) == 24 && offsetof(RatchetBoltCollected, bolts) == 8 && offsetof(RatchetBoltCollected, at) == 12, "RatchetBoltCollected");
+static_assert(sizeof(RatchetBoltHero) == 40 && offsetof(RatchetBoltHero, has_wrench) == 24 && offsetof(RatchetBoltHero, wrench) == 28, "RatchetBoltHero");
+static_assert(sizeof(RatchetTallyView) == 16 && offsetof(RatchetTallyView, visible) == 12, "RatchetTallyView");
+
+// A floor at y = 0, for the bolts.
+static uint8_t floor_ray(void*, RatchetVec3 from, RatchetVec3 to, RatchetVec3* point, RatchetVec3* normal) {
+    if (from.y < 0.0f || to.y >= 0.0f) return 0;
+    const float t = from.y / (from.y - to.y);
+    *point = RatchetVec3{from.x + (to.x - from.x) * t, 0.0f, from.z + (to.z - from.z) * t};
+    *normal = RatchetVec3{0.0f, 1.0f, 0.0f};
+    return 1;
+}
 
 int main() {
     if (ratchet_api_version() != RATCHET_API_VERSION) {
@@ -91,16 +106,41 @@ int main() {
     ratchet_anim_free(anim);
     ratchet_free(runner);
 
+    // The sandbox's dummy (worth 2, the default economy): 20 bolts burst out 1 m up, land, and
+    // swarm into a hero 4 m off; each is counted.
+    RatchetBolts* bolts = ratchet_bolts_new(1.0f, 0xB017u);
+    RatchetTally* tally = ratchet_tally_new(0);
+    const uint32_t dropped = ratchet_bolts_drop_reward(bolts, RatchetVec3{0, 1, 0}, 2.0f, RATCHET_BOLTS_LEVEL_MULTIPLIER);
+    const uint32_t pickups = ratchet_bolts_pickups(bolts, nullptr, 0);
+    RatchetBoltHero hero{RatchetVec3{4, 0, 0}, RatchetVec3{4, 0.6f, 0}, 0, RatchetVec3{}};
+    uint32_t got = 0;
+    for (int i = 0; i < 1200; ++i) {
+        ratchet_bolts_step(bolts, 1.0f / 120.0f, hero, floor_ray, nullptr);
+        RatchetBoltCollected c[64];
+        const uint32_t n = std::min(ratchet_bolts_collected(bolts, c, 64), 64u);
+        for (uint32_t k = 0; k < n; ++k) {
+            ratchet_tally_add(tally, c[k].bolts);
+            got += c[k].bolts;
+        }
+        ratchet_tally_step(tally, 1.0f / 120.0f);
+    }
+    const RatchetTallyView counter = ratchet_tally_view(tally);
+    const uint32_t left = ratchet_bolts_pickups(bolts, nullptr, 0);
+    ratchet_tally_free(tally);
+    ratchet_bolts_free(bolts);
+
     std::printf("apex %.3f m, moved %.2f m forward, events seen 0x%x\n", apex, feet.z, seen);
     std::printf("melee events 0x%x, %u swings (first hits at %.2f s), wrench went %.1f m and was caught after %.2f s\n",
                 melee_seen, swings, info.hit_time, far, ticks / 120.0f);
     std::string order;
     for (const std::string& p : picks) order += (order.empty() ? "" : " > ") + p;
     std::printf("animation: %s; the run's clock at %.3f s\n", order.c_str(), clock.time);
+    std::printf("bolts: %u dropped in %u pickups, %u collected, %u left; the counter shows %u\n", dropped, pickups, got, left, counter.shown);
     bool jump_ok = apex > 1.5f && apex < 1.7f && (seen & RATCHET_EVENT_JUMPED) && (seen & RATCHET_EVENT_LANDED);
     bool melee_ok = (melee_seen & RATCHET_EVENT_MELEE_SWING) && (melee_seen & RATCHET_EVENT_MELEE_HIT) && swings == 3;
     bool throw_ok = far > 5.0f && ticks < 1200;
     bool anim_ok = picks == std::vector<std::string>{"idle", "walk", "run"} && clocked && clock.clip == 2 && !clock.restarted &&
                    total > 0.999f && total < 1.001f;
-    return (jump_ok && melee_ok && throw_ok && anim_ok) ? 0 : 1;
+    bool bolts_ok = dropped == 20 && pickups == 20 && got == 20 && left == 0 && counter.total == 20 && counter.shown == 20;
+    return (jump_ok && melee_ok && throw_ok && anim_ok && bolts_ok) ? 0 : 1;
 }

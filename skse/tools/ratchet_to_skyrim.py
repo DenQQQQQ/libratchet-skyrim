@@ -7,7 +7,9 @@ YOUR OWN Rift Apart install) into what the SKSE plugin draws in Skyrim SE:
   SKSE/Plugins/RatchetMovement/ratchet.anim          his clips, for the plugin to play
 
 The same for Clank (--name clank: clank.nif, clank.anim) and the weapons (the wrench's and the
-pistol's with their clips; --no-clips for the Shatterbomb and its glove).
+pistol's with their clips; --no-clips for the Shatterbomb and its glove). A model with no skin
+(the bolt pickups: bolt_<tier>_0<n>.glb) becomes rigid shapes holding their own vertices; models
+sharing textures can share their folder (--texture-dir).
 
 The output is game data: it stays on this PC (the build installs it into the MO2 mod), never in
 the repository.
@@ -200,12 +202,60 @@ def fit(img):
 
 # --- the model
 
+# A rigid shape's vertices (no skin: the shape holds them, not a skin partition): float32
+# position, half-float UV, normal and tangent space, in Skyrim SE's layout (nif.xml
+# BSVertexDataSSE: the bitangent's x after the position, its y and z in the normal's and tangent's
+# fourth bytes).
+RIGID_DESC = N.make_vertex_desc(N.VF_VERTEX | N.VF_UV | N.VF_NORMAL | N.VF_TANGENT | N.VF_FULLPREC)
+RIGID_VERTEX = np.dtype([("pos", "<f4", 3), ("bitangent_x", "<f4"), ("uv", "<f2", 2), ("normal", "u1", 3), ("bitangent_y", "u1"),
+                         ("tangent", "u1", 3), ("bitangent_z", "u1")])
+assert RIGID_VERTEX.itemsize == N.vertex_size(RIGID_DESC)
+
+
+def rigid_shape(nf, gl, node, ni, prim, shader, alpha):
+    """A BSTriShape holding its own vertices and triangles, placed by its node's transform.
+    Returns its block, and its vertex and triangle counts."""
+    at = prim["attributes"]
+    pos = gl.accessor(at["POSITION"]).astype(np.float64)
+    nrm = gl.accessor(at["NORMAL"]).astype(np.float64)
+    uv = gl.accessor(at["TEXCOORD_0"]).astype(np.float64) if "TEXCOORD_0" in at else np.zeros((len(pos), 2))
+    tris = gl.accessor(prim["indices"]).astype(np.int64).reshape(-1, 3) if "indices" in prim else np.arange(len(pos)).reshape(-1, 3)
+    nv, nt = len(pos), len(tris)
+    if nv > 65535 or nt > 65535:
+        raise ValueError(f"{node.get('name')}: too big for one shape ({nv} vertices, {nt} triangles)")
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
+    tan, bit = tangent_space(pos, nrm, uv, tris)
+    bb = unorm8(bit)
+    verts = np.zeros(nv, RIGID_VERTEX)
+    verts["pos"] = pos
+    verts["bitangent_x"] = bit[:, 0]
+    verts["uv"] = uv
+    verts["normal"] = unorm8(nrm)
+    verts["bitangent_y"] = bb[:, 1]
+    verts["tangent"] = unorm8(tan)
+    verts["bitangent_z"] = bb[:, 2]
+    vertex_data = verts.tobytes()
+    triangles = np.ascontiguousarray(tris, dtype="<u2").tobytes()
+    r, t, s = node_local(node)
+    shape = nf.add({
+        "type": "BSTriShape", "name": nf.string(PREFIX + node.get("name", f"shape{ni}")), "extra_data": [], "controller": -1,
+        "flags": 0xE, "translation": [float(x) for x in t], "rotation": [float(x) for x in r.reshape(9)], "scale": float(s),
+        "collision": -1, "bound": bounding_sphere(pos), "skin": -1, "shader": shader, "alpha": alpha,
+        "vertex_desc": RIGID_DESC, "num_triangles": nt, "num_vertices": nv,
+        "data_size": len(vertex_data) + len(triangles), "vertex_data": vertex_data, "triangles": triangles, "particle_data_size": 0,
+    })
+    return shape, nv, nt
+
+
 def convert_model(gl, out_dir, manifest):
     g = gl.g
     nodes = g["nodes"]
-    skin = g["skins"][0]
-    joints = skin["joints"]
-    ibms = gl.accessor(skin["inverseBindMatrices"]).reshape(-1, 4, 4).transpose(0, 2, 1).astype(np.float64)
+    # No skin: rigid shapes (the bolt pickups).
+    skinned = bool(g.get("skins"))
+    if skinned:
+        skin = g["skins"][0]
+        joints = skin["joints"]
+        ibms = gl.accessor(skin["inverseBindMatrices"]).reshape(-1, 4, 4).transpose(0, 2, 1).astype(np.float64)
     parent = {}
     for i, n in enumerate(nodes):
         for c in n.get("children", []):
@@ -268,6 +318,8 @@ def convert_model(gl, out_dir, manifest):
             img = Image.fromarray(a, "RGBA")
             # Its specular mask is part of it: one file per normal + gloss pair.
             name += f"_s{g['textures'][extra]['source']:02}" if extra is not None else "_n"
+        if kind == "glow":
+            name += "_glow"
         file = name + ".dds"
         write_dds(os.path.join(tex_dir, file), img)
         written[key] = "textures\\" + TEXTURE_DIR + "\\" + file
@@ -304,16 +356,21 @@ def convert_model(gl, out_dir, manifest):
         normal = ""
         if "normalTexture" in m:
             normal = texture(m["normalTexture"]["index"], "normal", pbr.get("metallicRoughnessTexture", {}).get("index"))
-        tex_set = nf.add({"type": "BSShaderTextureSet", "textures": [diffuse, normal, "", "", "", "", "", "", ""]})
-        mode = m.get("alphaMode", "OPAQUE")
         emissive = gamma(m.get("emissiveFactor", [0, 0, 0]))
         glows = max(emissive) > 1e-3
-        flags1 = 0x1 | 0x2 | 0x100 | 0x200 | 0x2000000 | 0x80000000   # specular, skinned, shadows, remappable, z test
+        # An emissive texture glows where it's bright, times the factor (glTF's): Skyrim's glow
+        # shader with it as the glow map (a bolt's little green light), not the whole shape.
+        glow_map = texture(m["emissiveTexture"]["index"], "glow") if glows and "emissiveTexture" in m else ""
+        tex_set = nf.add({"type": "BSShaderTextureSet", "textures": [diffuse, normal, glow_map, "", "", "", "", "", ""]})
+        mode = m.get("alphaMode", "OPAQUE")
+        flags1 = 0x1 | 0x100 | 0x200 | 0x2000000 | 0x80000000         # specular, shadows, remappable, z test
+        flags1 |= 0x2 if skinned else 0                               # skinned
         flags1 |= 0x400000 if glows else 0                            # own emit
         flags2 = 0x8000 | (0x10 if m.get("doubleSided", True) else 0)  # envmap light fade, two sided
         flags2 |= 0 if mode == "BLEND" else 0x1                        # z write, but not see-through ones
+        flags2 |= 0x40 if glow_map else 0                              # glow map
         shader = nf.add({
-            "type": "BSLightingShaderProperty", "shader_type": 0, "name": nf.string(m.get("name", "")), "extra_data": [], "controller": -1,
+            "type": "BSLightingShaderProperty", "shader_type": 2 if glow_map else 0, "name": nf.string(m.get("name", "")), "extra_data": [], "controller": -1,
             "flags1": flags1, "flags2": flags2, "uv_offset": [0.0, 0.0], "uv_scale": [1.0, 1.0], "texture_set": tex_set,
             "emissive_color": emissive if glows else [0.0, 0.0, 0.0], "emissive_multiple": 1.0, "texture_clamp_mode": 3, "alpha": 1.0,
             "refraction_strength": 0.0, "glossiness": 40.0, "specular_color": [1.0, 1.0, 1.0], "specular_strength": 0.6,
@@ -339,6 +396,12 @@ def convert_model(gl, out_dir, manifest):
         if "mesh" not in node:
             continue
         for prim in g["meshes"][node["mesh"]]["primitives"]:
+            if not skinned:
+                shader, alpha = material(prim["material"]) if "material" in prim else (-1, -1)
+                shape, nv, nt = rigid_shape(nf, gl, node, ni, prim, shader, alpha)
+                nf.blocks[root]["children"].append(shape)
+                stats.append((PREFIX + node.get("name", f"shape{ni}"), nv, nt, 0, 0))
+                continue
             at = prim["attributes"]
             pos = gl.accessor(at["POSITION"]).astype(np.float64)
             nrm = gl.accessor(at["NORMAL"]).astype(np.float64)
@@ -548,11 +611,12 @@ def main():
     ap.add_argument("--name", default="ratchet", help="meshes\\RatchetMovement\\<name>.nif, textures\\RatchetMovement\\<name>, <name>.anim")
     ap.add_argument("--prefix", default="RC_", help="put before every node name (keeps the models' nodes apart in one scene)")
     ap.add_argument("--no-clips", action="store_true", help="the model only (the Shatterbomb and its glove have no clips of their own)")
+    ap.add_argument("--texture-dir", help="textures\\<this> instead of textures\\RatchetMovement\\<name> (models sharing their textures: the bolts)")
     a = ap.parse_args()
     global PREFIX, MESH_PATH, TEXTURE_DIR, ANIM_FILE, ROOT_NAME
     PREFIX = a.prefix
     MESH_PATH = f"RatchetMovement\\{a.name}.nif"
-    TEXTURE_DIR = f"RatchetMovement\\{a.name}"
+    TEXTURE_DIR = a.texture_dir or f"RatchetMovement\\{a.name}"
     ANIM_FILE = f"{a.name}.anim"
     ROOT_NAME = "RatchetRoot" if a.name == "ratchet" else f"RatchetRoot_{a.name}"
     manifest_path = a.json or os.path.splitext(a.glb)[0] + ".json"

@@ -9,8 +9,6 @@
 // Without the plugin file loaded, Combat picks the guns on its own keys as before.
 namespace Items
 {
-	// At the plugin's load: whether this game has had them is kept in SKSE's co-save.
-	void Register();
 	// After the game's data has loaded: finds them. False: the plugin file isn't loaded.
 	bool Install();
 	bool Available();
@@ -22,7 +20,9 @@ namespace Items
 	// Tests: equip that one (put in his inventory if he hasn't it), or with kNone take off whichever
 	// is equipped. Skyrim equips it a frame or so later.
 	void Equip(Combat::Gun a_gun);
-	// Tests: how many of each he carries, and whether this game has had them.
-	int  Count(Combat::Gun a_gun);
+	// Tests: how many of each he carries.
+	int Count(Combat::Gun a_gun);
+	// Whether this game has had them (CoSave keeps it with the save).
 	bool Given();
+	void SetGiven(bool a_given);
 }

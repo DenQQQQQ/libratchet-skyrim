@@ -47,6 +47,15 @@ repository is unchanged.
   and the throw, with the aim and fire buttons doing nothing (the sandbox without an arsenal).
   Merchants who deal in weapons will buy them (none sells them yet). Without the file the plugin
   picks them on its own two keys as before.
+- **Bolts, Rift Apart's currency** (`crates/libbolts`, the game's rules, through ratchet.dll):
+  whatever he kills bursts its reward out from 1 m up, the game's twelve pickup models; they
+  bounce off Skyrim's world, come to rest bobbing and spinning with the game's glint, and swarm
+  into him once he (or his thrown wrench) is within 10 m, each with the game's collect sound.
+  Rift Apart's counter sits at the top right of the HUD ("+N" while they come in, then the new
+  total); his total is saved with the game (SKSE's co-save). A kill's worth is ours: its max
+  health over 50 is Rift Apart's relative value (1 to 30), times 10 bolts (the game's default
+  economy), so a skeever 10, a bear about 50, a dragon 300 (INI `[Bolts]`). Bolts left lying go
+  when he's carried off (a door, a load).
 - **Rift Apart's look and sound:** the game's own effects for his shots, blasts and swings (with
   their lights), its sounds mixed and looped as the sandbox mixes them, and its follow camera
   (framing, field of view, shakes, the wheel's zoom). See the sections below.
@@ -112,7 +121,10 @@ the last conversion, and copies it into the mod:
 
 The same tool converts `wrench.glb` and `burstpistol.glb` (with their own clips: `wrench.anim`,
 `burstpistol.anim`), the Shatterbomb and its glove (models only) and `clank.glb` (`clank.nif`
-with his heli-pack's shapes named `RK_heli_*`, and `clank.anim` with his backpack clips).
+with his heli-pack's shapes named `RK_heli_*`, and `clank.anim` with his backpack clips). The
+twelve bolt pickups (`bolt_<tier>_0<n>.glb`) have no skin: they become rigid shapes holding
+their own vertices, their two metal materials' textures shared in `textures/RatchetMovement/bolts`,
+an emissive texture as Skyrim's glow map (a bolt's little green light).
 
 The plugin hangs him under the player's third-person 3D, hides the Dragonborn's meshes, and
 picks and blends his clips by the sandbox's rules. Clank hangs on Ratchet's `ClankAttach` bone.
@@ -184,8 +196,12 @@ selected, and follows the log.
   while aiming (a throw) and a Shatterbomb (also in first person). Each passes if the cow lost at
   least the expected damage (× the save's difficulty multiplier) from enough hits. With no gun
   out, a hunter: the aim and fire buttons held mustn't shoot or strafe, the wrench has to stay in
-  his hand, and melee with them held has to swing and hit. Then hunters and a guard: a shot and a
-  hit have to make them fight, and hitting the guard is a crime.
+  his hand, and melee with them held has to swing and hit. Bolts: the cow as tough as Rift
+  Apart's test dummy (100 health: 20 bolts), nearly down, shot 6 m off: its 20 bolts have to
+  burst out and all be his once he walks over, the counter showing "+N" and then the new total;
+  18 m off, they have to lie where they landed, out of his reach and above the ground, until he
+  walks to them. Then hunters and a guard: a shot and a hit have to make them fight, and hitting
+  the guard is a crime.
 - The camera's zoom: wheel notches sent through Skyrim's own camera input (out 3 m, in to 2 m,
   one more into first person, back at the game's distance).
 - Last, a cell change with effects alive: shots at the floor, through the Bannered Mare's door

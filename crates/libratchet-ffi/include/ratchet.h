@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#define RATCHET_API_VERSION 3u
+#define RATCHET_API_VERSION 4u
 
 #ifdef __cplusplus
 extern "C" {
@@ -333,6 +333,109 @@ const char *ratchet_anim_clip_name(const RatchetAnim *anim);
 uint8_t ratchet_anim_clock(const RatchetAnim *anim, RatchetAnimClock *out);
 /* 1 if a sound t seconds into the picked clip is due this frame (see RatchetAnimClock). */
 uint8_t ratchet_anim_sound_due(const RatchetAnim *anim, float t);
+
+/* ---- Bolts (API version 4; crates/libratchet-ffi/src/bolts.rs) ----
+ * Rift Apart's bolts, the currency (crates/libbolts, the game's rules). When an enemy goes down,
+ * ratchet_bolts_drop_reward bursts its reward out as pickups; each step they fly (swept through
+ * the host's raycast), bounce off walls, come to rest bobbing and spinning, and swarm into the
+ * hero once he (or his thrown wrench) is within a pickup's range (10 m x his size). The host
+ * draws ratchet_bolts_pickups by tier and look, plays the collect sound for each of
+ * ratchet_bolts_collected (the game has none for a drop or a bounce), and adds their bolts to a
+ * RatchetTally, the HUD's counter. Sim coordinates (Y up, metres). */
+typedef struct RatchetBolts RatchetBolts;
+typedef struct RatchetTally RatchetTally;
+
+enum {
+    RATCHET_BOLT_BRONZE = 0,   /* 1 bolt */
+    RATCHET_BOLT_SILVER = 1,   /* 3 */
+    RATCHET_BOLT_GOLD = 2,     /* 10 */
+    RATCHET_BOLT_PLATINUM = 3, /* 30 */
+};
+
+enum {
+    RATCHET_BOLT_QUEUED = 0,  /* waiting at its spawn point for room under the in-flight cap (200); can be pulled */
+    RATCHET_BOLT_FLYING = 1,  /* bursting out, bouncing off walls */
+    RATCHET_BOLT_RESTING = 2, /* landed, bobbing and spinning; it never goes by itself */
+    RATCHET_BOLT_PULLED = 3,  /* swarming to the hero */
+};
+
+enum {
+    RATCHET_BOLT_REACHED = 0,  /* it reached the hero */
+    RATCHET_BOLT_FELL_OUT = 1, /* it fell out of the level (25 m/s down) */
+    RATCHET_BOLT_OVER_CAP = 2, /* over 1024 in the level, the farthest resting one */
+};
+
+#define RATCHET_BOLTS_LEVEL_MULTIPLIER 10.0f /* the game's default economy (Megalopolis too) */
+#define RATCHET_BOLTS_MAX 9999999u           /* the most bolts the hero can carry */
+
+typedef struct RatchetBoltPickup {
+    uint32_t id;          /* unique among a world's pickups, never reused */
+    uint8_t tier;         /* RATCHET_BOLT_BRONZE..PLATINUM */
+    uint8_t look;         /* which of its tier's three models, 0..2 (the game's pup_Bolt_<tier>_01..03) */
+    uint8_t state;        /* RATCHET_BOLT_QUEUED..PULLED */
+    RatchetVec3 position; /* where to draw it, its bob included */
+    float rotation[4];    /* its model's turn, a unit quaternion x, y, z, w (its yaw, then its spin) */
+} RatchetBoltPickup;
+
+/* A pickup the last step collected: its bolts are the hero's (whatever the cause). */
+typedef struct RatchetBoltCollected {
+    uint32_t id;
+    uint8_t tier, look;
+    uint8_t cause;        /* RATCHET_BOLT_REACHED, FELL_OUT or OVER_CAP */
+    uint32_t bolts;       /* what it was worth */
+    RatchetVec3 at;       /* where it was */
+} RatchetBoltCollected;
+
+typedef struct RatchetBoltHero {
+    RatchetVec3 position; /* his root (feet): resting bolts within range of it fly to him */
+    RatchetVec3 center;   /* the middle of his body: where they fly to and are collected (0.5 m) */
+    uint8_t has_wrench;   /* his thrown wrench is out, at wrench: bolts in range of it fly to him too */
+    RatchetVec3 wrench;
+} RatchetBoltHero;
+
+/* What the counter shows: gains wait as "+N" beside the old total until 2 s after the last; a
+   loss, or a change from or to 0, shows at once; the counter is up 3.5 s after any change. */
+typedef struct RatchetTallyView {
+    uint32_t total;   /* the bolts he has */
+    uint32_t shown;   /* the total on the counter */
+    uint32_t gain;    /* the "+N" beside it, 0 for none */
+    uint8_t visible;  /* the counter is on screen */
+} RatchetTallyView;
+
+/* An empty world of bolts at the hero's size (1 = Ratchet's; <= 0 or not a number: 1), its
+   randomness from seed (a seed repeats a run). Free with ratchet_bolts_free. */
+RatchetBolts *ratchet_bolts_new(float scale, uint32_t seed);
+void ratchet_bolts_free(RatchetBolts *bolts);
+/* Another size; the bolts stay where they are. */
+void ratchet_bolts_set_scale(RatchetBolts *bolts, float scale);
+/* Every pickup gone, none credited (he left the place they lie in). */
+void ratchet_bolts_clear(RatchetBolts *bolts);
+/* Bolts an enemy is worth: its relative value (Rift Apart's: 1 small, 3 medium, 5 tanks, 10-20
+   large, 30 bosses) times the level's multiplier, rounded down, at least 1. */
+uint32_t ratchet_bolt_amount(float relative_value, float level_multiplier);
+/* Drops an enemy's reward at at (the game's: its position 1 m up, x his size; or its chest).
+   Returns the bolts the pickups hold (a big reward can hold a few fewer, or more). */
+uint32_t ratchet_bolts_drop_reward(RatchetBolts *bolts, RatchetVec3 at, float relative_value, float level_multiplier);
+/* Moves them on dt seconds around the hero; flying ones are swept through raycast (as
+   RatchetWorld's: the first surface from..to, 1 with its point and normal, or 0; null: nothing to
+   hit). The callback is only used during the call. */
+void ratchet_bolts_step(RatchetBolts *bolts, float dt, RatchetBoltHero hero,
+                        uint8_t (*raycast)(void *user, RatchetVec3 from, RatchetVec3 to, RatchetVec3 *point, RatchetVec3 *normal),
+                        void *user);
+/* The pickups, oldest first: up to max into out (may be null); returns how many there are. */
+uint32_t ratchet_bolts_pickups(const RatchetBolts *bolts, RatchetBoltPickup *out, uint32_t max);
+/* The pickups the last step collected: up to max into out (may be null); returns how many. */
+uint32_t ratchet_bolts_collected(const RatchetBolts *bolts, RatchetBoltCollected *out, uint32_t max);
+
+/* The counter for a hero with total bolts (at most RATCHET_BOLTS_MAX), hidden. Free with
+   ratchet_tally_free. */
+RatchetTally *ratchet_tally_new(uint32_t total);
+void ratchet_tally_free(RatchetTally *tally);
+void ratchet_tally_add(RatchetTally *tally, uint32_t bolts);   /* collected */
+void ratchet_tally_spend(RatchetTally *tally, uint32_t bolts); /* spent */
+void ratchet_tally_set(RatchetTally *tally, uint32_t total);
+void ratchet_tally_step(RatchetTally *tally, float dt);
+RatchetTallyView ratchet_tally_view(const RatchetTally *tally);
 
 #ifdef __cplusplus
 }

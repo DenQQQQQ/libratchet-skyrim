@@ -135,6 +135,13 @@ if ($Install) {
             @{ Name = "shatterbomb_glove"; Prefix = "RG_"; Clips = $false; Without = "he throws Shatterbombs with his bare glove" },
             @{ Name = "clank"; Prefix = "RK_"; Clips = $true; Without = "Ratchet goes without Clank on his back" }
         )
+        # The twelve bolt pickups (tools\extract_riftapart_ratchet.py --character bolts): rigid
+        # models, their two metal materials' textures shared in one folder.
+        foreach ($tier in "bronze", "silver", "golden", "platinum") {
+            foreach ($look in 1..3) {
+                $others += @{ Name = "bolt_${tier}_0$look"; Prefix = "RB_"; Clips = $false; TextureDir = "RatchetMovement\bolts"; Without = "its bolts are drawn as the bronze ones, or not at all" }
+            }
+        }
         foreach ($w in $others) {
             $wglb = Join-Path (Split-Path $glb) "$($w.Name).glb"
             $wnif = Join-Path $converted "meshes\RatchetMovement\$($w.Name).nif"
@@ -148,6 +155,7 @@ if ($Install) {
                 Write-Host "Converting $($w.Name) from $wglb..."
                 $clipArgs = @()
                 if (-not $w.Clips) { $clipArgs += "--no-clips" }
+                if ($w.TextureDir) { $clipArgs += @("--texture-dir", $w.TextureDir) }
                 uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $wglb --out $converted --name $w.Name --prefix $w.Prefix @clipArgs | Out-Host
                 if ($LASTEXITCODE -ne 0) { throw "converting $($w.Name) failed" }
             }

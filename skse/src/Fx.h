@@ -64,4 +64,14 @@ namespace Fx
 	void WrenchSlam(const RE::NiPoint3& a_at, float a_radius);
 	// The thrown wrench's trail over one step of its flight.
 	void WrenchTrail(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
+
+	// A bolt pickup (Bolts), drawn where it is this frame: its model (meshes\RatchetMovement\
+	// bolt_<tier>_0<look+1>.nif, in metres, y up) turned by a_rotation (a quaternion x, y, z, w in
+	// the sandbox's y-up axes), at his size; with its glint a_glint across (metres at his size; 0:
+	// none), facing the camera a little in front of it. Each frame's pickups are drawn before
+	// EndPickups, which puts away the ones that weren't.
+	void Pickup(std::uint32_t a_id, int a_tier, int a_look, const RE::NiPoint3& a_at, const float a_rotation[4], float a_glint);
+	void EndPickups();
+	// For the tests: the pickups drawn, and those of them whose model is there.
+	std::pair<std::size_t, std::size_t> Pickups();
 }

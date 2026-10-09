@@ -46,6 +46,13 @@ struct Settings
 	float damageMult = 1.0f;
 	// The sandbox's "+" crosshair while Rift Apart's camera is on.
 	bool crosshair = true;
+	// Rift Apart's bolts (libbolts): what he kills drops them; a kill's max health over
+	// boltHealthPerValue is its relative value (1 to 30), times boltLevelMultiplier in bolts.
+	bool  bolts = true;
+	float boltHealthPerValue = 50.0f;
+	float boltLevelMultiplier = 10.0f;
+	// Rift Apart's bolt counter on the HUD.
+	bool  boltCounter = true;
 	// Rift Apart's sounds on his moves (skse/tools/ratchet_sounds_to_skyrim.py), and how loud.
 	bool  sounds = true;
 	float soundVolume = 1.0f;

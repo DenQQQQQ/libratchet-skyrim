@@ -338,12 +338,14 @@ namespace Fx
 			}
 		}
 
+		// An effect's template by its name (meshes\RatchetMovement\fx\<name>.nif), or another model
+		// by its path under meshes (a name with a backslash: the bolt pickups).
 		bool Load(Template& a_template, const std::string& a_name)
 		{
 			if (!a_template.node && !a_template.failed) {
 				RE::NiPointer<RE::NiNode>              loaded;
 				const RE::BSModelDB::DBTraits::ArgsType args{};
-				const auto path = std::format("RatchetMovement\\fx\\{}.nif", a_name);
+				const auto path = a_name.find('\\') != std::string::npos ? a_name : std::format("RatchetMovement\\fx\\{}.nif", a_name);
 				const auto err = RE::BSModelDB::Demand(path.c_str(), loaded, args);
 				if (err != RE::BSResource::ErrorCode::kNone || !loaded) {
 					SKSE::log::warn("fx: no meshes\\{} (error {})", path, static_cast<int>(err));
@@ -677,6 +679,52 @@ namespace Fx
 		std::vector<Part>       g_swipeParts;
 		float                   g_clock = 0.0f;
 
+		// The bolt pickups drawn (Bolts): each one's model and glint, and whether it was drawn this
+		// frame.
+		struct PickupLook
+		{
+			Part model;
+			Part glint;
+			bool seen = false;
+		};
+		std::unordered_map<std::uint32_t, PickupLook> g_pickups;
+		constexpr const char* kTiers[] = { "bronze", "silver", "golden", "platinum" };
+		// The glint (the sandbox's bolts.rs): held this far toward the camera from the bolt's middle
+		// so the bolt doesn't hide it (metres at his size), white bright enough to bloom.
+		constexpr float kGlintOut = 0.12f;
+		const Color     kGlint{ 3.0f, 3.0f, 3.0f };
+
+		// A unit quaternion (x, y, z, w) as a turn.
+		RE::NiMatrix3 FromQuat(const float a_q[4])
+		{
+			const float x = a_q[0], y = a_q[1], z = a_q[2], w = a_q[3];
+			RE::NiMatrix3 m;
+			m.entry[0][0] = 1.0f - 2.0f * (y * y + z * z);
+			m.entry[0][1] = 2.0f * (x * y - z * w);
+			m.entry[0][2] = 2.0f * (x * z + y * w);
+			m.entry[1][0] = 2.0f * (x * y + z * w);
+			m.entry[1][1] = 1.0f - 2.0f * (x * x + z * z);
+			m.entry[1][2] = 2.0f * (y * z - x * w);
+			m.entry[2][0] = 2.0f * (x * z - y * w);
+			m.entry[2][1] = 2.0f * (y * z + x * w);
+			m.entry[2][2] = 1.0f - 2.0f * (x * x + y * y);
+			return m;
+		}
+
+		std::string PickupModel(int a_tier, int a_look)
+		{
+			return std::format("RatchetMovement\\bolt_{}_0{}.nif", kTiers[std::clamp(a_tier, 0, 3)], std::clamp(a_look, 0, 2) + 1);
+		}
+
+		void ReleasePickups()
+		{
+			for (auto& [id, p] : g_pickups) {
+				Release(p.model);
+				Release(p.glint);
+			}
+			g_pickups.clear();
+		}
+
 		void UpdateBolts(float a_dt, const View& a_view)
 		{
 			const float m = M();
@@ -796,14 +844,28 @@ namespace Fx
 	void Preload()
 	{
 		static bool done = false;
-		if (done || !Available()) {
+		if (done) {
 			return;
 		}
 		done = true;
+		const auto start = std::chrono::steady_clock::now();
+		// The bolt pickups' twelve models (Bolts).
+		if (Settings::Get().bolts) {
+			int models = 0;
+			for (int tier = 0; tier < 4; ++tier) {
+				for (int look = 0; look < 3; ++look) {
+					const auto path = PickupModel(tier, look);
+					models += Load(g_templates[path], path) ? 1 : 0;
+				}
+			}
+			SKSE::log::info("fx: {} of the 12 bolt pickups' models loaded", models);
+		}
+		if (!Available()) {
+			return;
+		}
 		// Every template the converter made (meshes\RatchetMovement\fx\*.nif, MO2's virtual folder
 		// lists them), loaded now: each was loaded the first time its effect was drawn, mid-fight
 		// (the first Shatterbomb's blast held a frame 110 ms).
-		const auto      start = std::chrono::steady_clock::now();
 		const auto      dir = PluginDirectory().parent_path().parent_path() / L"meshes" / L"RatchetMovement" / L"fx";
 		std::error_code ec;
 		int             loaded = 0;
@@ -873,6 +935,7 @@ namespace Fx
 		}
 		g_swipeParts.clear();
 		g_swipe.clear();
+		ReleasePickups();
 		// Off the cell's 3D too: a load's old world goes with nothing of ours holding on to it.
 		Unhang();
 	}
@@ -1498,5 +1561,63 @@ namespace Fx
 		trail.facing = Facing::kAxis;
 		trail.axis = d / len;
 		Spawn(std::move(trail));
+	}
+
+	void Pickup(std::uint32_t a_id, int a_tier, int a_look, const RE::NiPoint3& a_at, const float a_rotation[4], float a_glint)
+	{
+		if (!Root()) {
+			return;
+		}
+		auto& p = g_pickups[a_id];
+		p.seen = true;
+		if (!p.model.node) {
+			p.model = Make(PickupModel(a_tier, a_look), false, Color{});
+		}
+		// Its model is the sandbox's, in metres: at his size, in game units.
+		const float m = M();
+		Place(p.model, a_at, YUp(FromQuat(a_rotation)), { m, m, m });
+		if (a_glint > 0.0f && Available()) {
+			if (!p.glint.node) {
+				p.glint = Make("quad_bolt_glint_add", true, kGlint);
+				Tint(p.glint, kGlint, 1.0f);
+			}
+			const View   view = CameraView();
+			RE::NiPoint3 toCamera = view.at - a_at;
+			const float  l = toCamera.Length();
+			toCamera = l > 1e-3f ? toCamera / l : kUp;
+			const float size = a_glint * m;
+			Place(p.glint, a_at + toCamera * (kGlintOut * m), view.facing, { size, size, size });
+		} else if (p.glint.node && !p.glint.node->GetAppCulled()) {
+			p.glint.node->SetAppCulled(true);
+		}
+	}
+
+	void EndPickups()
+	{
+		bool drawn = false;
+		for (auto it = g_pickups.begin(); it != g_pickups.end();) {
+			if (!it->second.seen) {
+				Release(it->second.model);
+				Release(it->second.glint);
+				it = g_pickups.erase(it);
+				continue;
+			}
+			it->second.seen = false;
+			drawn = true;
+			++it;
+		}
+		if (drawn && g_root && g_root->parent) {
+			RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
+			g_root->Update(update);
+		}
+	}
+
+	std::pair<std::size_t, std::size_t> Pickups()
+	{
+		std::size_t models = 0;
+		for (const auto& [id, p] : g_pickups) {
+			models += p.model.node ? 1 : 0;
+		}
+		return { g_pickups.size(), models };
 	}
 }

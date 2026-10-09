@@ -9,10 +9,6 @@ namespace Items
 		constexpr std::string_view kFile = "RatchetMovement.esl";
 		constexpr RE::FormID       kPistol = 0x800;
 		constexpr RE::FormID       kShatterbomb = 0x801;
-		// The co-save's: the plugin's, and its one record (whether this game has had the guns).
-		constexpr std::uint32_t kUniqueID = 'RTCH';
-		constexpr std::uint32_t kGivenRecord = 'GIVN';
-		constexpr std::uint32_t kGivenVersion = 1;
 
 		RE::TESObjectWEAP* g_pistol = nullptr;
 		RE::TESObjectWEAP* g_shatterbomb = nullptr;
@@ -22,38 +18,6 @@ namespace Items
 		{
 			return a_gun == Combat::Gun::kBurstPistol ? g_pistol : a_gun == Combat::Gun::kShatterbomb ? g_shatterbomb : nullptr;
 		}
-
-		void Save(SKSE::SerializationInterface* a_intfc)
-		{
-			const std::uint8_t given = g_given ? 1 : 0;
-			if (!a_intfc->OpenRecord(kGivenRecord, kGivenVersion) || !a_intfc->WriteRecordData(given)) {
-				SKSE::log::warn("items: couldn't keep in the co-save that the guns were given");
-			}
-		}
-
-		void Load(SKSE::SerializationInterface* a_intfc)
-		{
-			std::uint32_t type = 0, version = 0, length = 0;
-			while (a_intfc->GetNextRecordInfo(type, version, length)) {
-				std::uint8_t given = 0;
-				if (type == kGivenRecord && version == kGivenVersion && a_intfc->ReadRecordData(given)) {
-					g_given = given != 0;
-				}
-			}
-			SKSE::log::info("items: this save has {}had the guns", g_given ? "" : "not ");
-		}
-
-		// A new game, or before a load: not given (a save from before the plugin has no record).
-		void Revert(SKSE::SerializationInterface*) { g_given = false; }
-	}
-
-	void Register()
-	{
-		auto* serialization = SKSE::GetSerializationInterface();
-		serialization->SetUniqueID(kUniqueID);
-		serialization->SetSaveCallback(Save);
-		serialization->SetLoadCallback(Load);
-		serialization->SetRevertCallback(Revert);
 	}
 
 	bool Install()
@@ -73,6 +37,8 @@ namespace Items
 	bool Available() { return g_pistol && g_shatterbomb; }
 
 	bool Given() { return g_given; }
+
+	void SetGiven(bool a_given) { g_given = a_given; }
 
 	int Count(Combat::Gun a_gun)
 	{

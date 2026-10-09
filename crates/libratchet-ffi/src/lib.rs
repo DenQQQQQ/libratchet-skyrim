@@ -1,12 +1,15 @@
-//! C ABI for libratchet, so C/C++ hosts (an SKSE plugin for Skyrim) can drive the sim, and for
-//! libratchet-anim (`anim.rs`), so they can play Ratchet's clips as the sandbox does.
-//! The matching header is `include/ratchet.h`; keep the two in sync.
+//! C ABI for libratchet, so C/C++ hosts (an SKSE plugin for Skyrim) can drive the sim, for
+//! libratchet-anim (`anim.rs`), so they can play Ratchet's clips as the sandbox does, and for
+//! libbolts (`bolts.rs`), the bolts he collects. The matching header is `include/ratchet.h`; keep
+//! the two in sync.
 //!
 //! Coordinates are libratchet's: Y up, metres. Hosts with other conventions convert at the
 //! boundary (Skyrim: Z up, about 70 units per metre).
 
 mod anim;
+mod bolts;
 pub use anim::*;
+pub use bolts::*;
 
 use libratchet::glam::{Vec2, Vec3};
 use libratchet::{
@@ -330,8 +333,9 @@ fn state_code(s: MoveState) -> u32 {
 
 /// The C API's version (`RATCHET_API_VERSION` in ratchet.h): raised with every change to its
 /// structs or functions. Fields are only ever added at the end of a struct, never moved or
-/// removed. 2: the animation (`ratchet_anim_*`).
-pub const RATCHET_API_VERSION: u32 = 3;
+/// removed. 2: the animation (`ratchet_anim_*`). 4: the bolts (`ratchet_bolts_*`,
+/// `ratchet_tally_*`).
+pub const RATCHET_API_VERSION: u32 = 4;
 
 /// The API version this library was built with, for a host to check against the header it was
 /// built with (`RATCHET_API_VERSION`) before using anything else.

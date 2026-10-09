@@ -35,6 +35,17 @@ A running log of what changed, what was tested, and what's known vs. assumed.
   (34.5 s). Glide from the 12 m tower: 24.5 m in 4.2 s. Dash: covers its full distance in about half a
   second (6.5 m in 0.44–0.48 s with the default values in the tests).
 
+## 2026-10-09 (night): the bolts' C API, for the Skyrim plugin (branch skse)
+
+- **`libratchet-ffi` (API version 4):** `ratchet_bolts_*` over libbolts' `BoltWorld` (new at a
+  size and seed, drop a reward, step through the host's raycast, the pickups to draw, what a step
+  collected, clear without credit) and `ratchet_tally_*` over `Tally` (the HUD's counter). The
+  header's "Bolts" part documents them.
+- **Tested:** three Rust tests through the C API (a dummy's 20 bolts land on a floor, swarm into a
+  hero 4 m off and are counted; clearing; the counter's timing), and the C++ smoke test checks the
+  four structs' layouts and collects a dummy's bolts through the header (MSVC).
+- The Skyrim plugin's side is in `skse/MODLOG.md`.
+
 ## 2026-10-09: bolts, the currency: libbolts, and drops in the sandbox
 
 Defeated dummies drop the game's bolts: they burst out, bounce, come to rest and swarm into
