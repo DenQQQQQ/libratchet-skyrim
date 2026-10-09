@@ -39,6 +39,9 @@ namespace Combat
 		// Its bolt (ShotPrius InitialMotion): 80 m/s, no gravity. With Rift Apart's effect art the
 		// plugin flies it, as the sandbox does; without, Skyrim's spell bolt does.
 		constexpr float kBoltSpeed = 80.0f;
+		// Its bolt and the Shatterbomb are 0.25 m wide (libarsenal's projectile radius, × scale): a
+		// body that near their path is hit (the sandbox's sweep).
+		constexpr float kProjectileRadius = 0.25f;
 		// Firing from the hip, he keeps strafing this long after the last shot (the sandbox's).
 		constexpr float kStrafeAfterShot = 0.1f;
 
@@ -640,10 +643,49 @@ namespace Combat
 				a_player->GetPosition().GetDistance(a_at) / u, hits, total);
 		}
 
+		// The first body within a_radius (game units) of the path from a_from to a_to, sampled every
+		// 0.1 m × scale along it (the sandbox's dummy_contains sweep): the actor and where on the
+		// path. A body: its middle line (NearestOfBody), as wide as its bounds, from its feet to its
+		// height.
+		std::optional<std::pair<RE::Actor*, RE::NiPoint3>> BodyAlong(RE::PlayerCharacter* a_player, const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, float a_radius)
+		{
+			const float        len = a_from.GetDistance(a_to);
+			const RE::NiPoint3 mid = (a_from + a_to) * 0.5f;
+			std::vector<RE::Actor*> nearby;
+			ForEachTarget(a_player, [&](RE::Actor* a_actor) {
+				// Only those the path can reach (a dragon's long: its bounds count).
+				const float extent = std::max(a_actor->GetBoundMax().GetDistance(a_actor->GetBoundMin()) * a_actor->GetScale(), 1.0f);
+				if (a_actor->GetPosition().GetDistance(mid) <= len * 0.5f + extent + a_radius) {
+					nearby.push_back(a_actor);
+				}
+			});
+			if (nearby.empty()) {
+				return std::nullopt;
+			}
+			const int steps = std::max(1, static_cast<int>(std::ceil(len / (0.1f * Settings::Get().scale * Units()))));
+			for (int i = 0; i <= steps; ++i) {
+				const RE::NiPoint3 p = a_from + (a_to - a_from) * (static_cast<float>(i) / static_cast<float>(steps));
+				for (auto* actor : nearby) {
+					const RE::NiPoint3 lo = actor->GetBoundMin(), hi = actor->GetBoundMax();
+					const float        width = (hi.x - lo.x) * 0.5f * actor->GetScale();
+					const float        feet = actor->GetPositionZ();
+					if (p.z < feet - a_radius || p.z > feet + actor->GetHeight() + a_radius) {
+						continue;
+					}
+					const RE::NiPoint3 axis = NearestOfBody(actor, p);
+					const float        dx = p.x - axis.x, dy = p.y - axis.y;
+					if (std::sqrt(dx * dx + dy * dy) <= width + a_radius) {
+						return std::pair{ actor, p };
+					}
+				}
+			}
+			return std::nullopt;
+		}
+
 		// The pistol's bolts fly straight on at 80 m/s × scale to 45 m × scale, each step a ray
-		// (libarsenal's Projectile::step and the sandbox's sweep): the first thing it meets stops it.
-		// A body takes its damage (the hit raises the assault, as the wrench's do); level geometry
-		// takes a mark.
+		// (libarsenal's Projectile::step and the sandbox's sweep): the first thing it meets stops it,
+		// a body within its 0.25 m (× scale) too. A body takes its damage (the hit raises the
+		// assault, as the wrench's do); level geometry takes a mark.
 		void FlyBolts(RE::PlayerCharacter* a_player, float a_dt)
 		{
 			const float s = Settings::Get().scale;
@@ -653,8 +695,18 @@ namespace Combat
 				auto&              b = c.bolts[i];
 				const float        step = std::min(kBoltSpeed * s * u * a_dt, range - b.travelled);
 				const RE::NiPoint3 next = b.at + b.dir * step;
-				const auto         hit = Physics::Ray(b.at, next);
-				bool               done = false;
+				auto               hit = Physics::Ray(b.at, next);
+				// A body near its path before what the ray met is what it hits.
+				if (const auto body = BodyAlong(a_player, b.at, hit ? hit->point : next, kProjectileRadius * s * u)) {
+					if (!hit || hit->ref != body->first) {
+						SKSE::log::info("combat: a bolt grazes {} (within its 0.25 m)", body->first->GetName());
+					}
+					RE::NiPoint3 normal = body->second - NearestOfBody(body->first, body->second);
+					normal.z = 0.0f;
+					const float l = normal.Length();
+					hit = Physics::Hit{ body->second, l > 1e-3f ? normal / l : b.dir * -1.0f, 0.0f, body->first };
+				}
+				bool done = false;
 				if (hit) {
 					auto* target = hit->ref ? hit->ref->As<RE::Actor>() : nullptr;
 					Fx::BoltTrail(b.at, hit->point);
@@ -687,7 +739,8 @@ namespace Combat
 		}
 
 		// The bombs fly (exactly, under constant gravity: libarsenal's Projectile::step) and go off
-		// on the first thing they touch (the ray meets bodies too), or at the end of their life.
+		// on the first thing they touch (the ray meets bodies too, and a body within 0.25 m × scale
+		// of the path counts: the sandbox's sweep), or at the end of their life.
 		void FlyBombs(RE::PlayerCharacter* a_player, float a_dt)
 		{
 			const float s = Settings::Get().scale;
@@ -701,7 +754,10 @@ namespace Combat
 				b.age += a_dt;
 				b.spin = std::fmod(b.spin + kBombSpin * (3.14159265f / 180.0f) * a_dt, 2.0f * 3.14159265f);
 				std::optional<RE::NiPoint3> blast;
-				if (const auto hit = Physics::Ray(from, b.at)) {
+				const auto                  hit = Physics::Ray(from, b.at);
+				if (const auto body = BodyAlong(a_player, from, hit ? hit->point : b.at, kProjectileRadius * s * u)) {
+					blast = body->second;
+				} else if (hit) {
 					blast = hit->point;
 				} else if (b.age >= kBombLife) {
 					blast = b.at;

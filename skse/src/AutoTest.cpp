@@ -90,6 +90,9 @@ namespace AutoTest
 			// a recording (ingame.ps1 -Audio) to measure how Skyrim fades and pans the plugin's
 			// sounds. Run only when -Only names it.
 			bool        soundLab = false;
+			// A fight's shots go this far (metres) past the side of the target's body (its bounds'
+			// half width): a near miss the bolt's 0.25 m still hits.
+			float       aimBeside = 0.0f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -128,6 +131,9 @@ namespace AutoTest
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f, .weaponClip = "fire",
 				.weaponClipOnPistol = true },
 			{ .name = "burst pistol aimed", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f },
+			// Aimed 0.15 m past the cow's side: the bolts' 0.25 m (the sandbox's) still hits it.
+			{ .name = "a near miss hits", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .aim = true, .minDamage = 20.0f,
+				.aimBeside = 0.15f },
 			{ .name = "wrench throw", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .minDamage = 25.0f, .minHits = 1, .throwAt = 0.0f },
 			// Melee while aiming throws the wrench (Rift Apart's, and the sandbox's).
 			{ .name = "melee while aiming throws", .hold = -1.0f, .duration = 2.5f, .targetAt = 8.0f, .melee = { 0.4f, -1.0f, -1.0f }, .aim = true, .minDamage = 25.0f, .minHits = 1 },
@@ -1431,8 +1437,15 @@ namespace AutoTest
 					target->EnableAI(true);  // awake from the fight's start (it would wander off while he settles)
 				}
 				if (auto* target = Target(); target && (c.fireFrom >= 0.0f || c.throwAt >= 0.0f)) {
-					// The shots (and the throw) go for its middle.
-					Combat::SetTestAim(target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() });
+					// The shots (and the throw) go for its middle, or past its side.
+					RE::NiPoint3 aim = target->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 0.8f * Units() };
+					if (c.aimBeside > 0.0f) {
+						const float        half = (target->GetBoundMax().x - target->GetBoundMin().x) * 0.5f * target->GetScale();
+						const RE::NiPoint3 right{ std::cos(s.startHeading), -std::sin(s.startHeading), 0.0f };
+						aim += right * (half + c.aimBeside * Units());
+						SKSE::log::info("autotest: {}: aimed {:.2f} m from its middle ({:.2f} m past its side)", c.name, (half + c.aimBeside * Units()) / Units(), c.aimBeside);
+					}
+					Combat::SetTestAim(aim);
 				}
 				if (auto* target = Target(); target && player && s.startPos) {
 					SKSE::log::info("autotest: {}: he's {:.2f} m from the start, the target {:.2f} m from him ({:.2f} m from the start)", c.name,

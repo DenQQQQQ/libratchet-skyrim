@@ -860,3 +860,13 @@ volume half the amplitude (0.0126 against 0.0251 once the background's 0.0056 is
 the sandbox's own fade past 6 m from him (now in `Sounds.cpp`) is the only one, as in the sandbox,
 whose Bevy audio isn't placed either.
 
+### The bolts' and the Shatterbomb's width
+
+The sandbox's bolts and grenades are 0.25 m wide (their projectile's radius): it samples each
+step every 0.1 m and anything within that of a dummy is a hit (weapons.rs fly_bolts and
+fly_grenades). Ours were bare rays, which hit only a body's collision. Now each step also looks
+for a body within 0.25 m (× scale) of the path, every 0.1 m as the sandbox does, before what the
+ray met: its middle line (as the wrench's hits find it), its bounds' half width, from its feet to
+its height. Followers aren't in it, so the extra reach never hits them. A new case aims the
+pistol 0.15 m past the cow's side: all three shots graze it (logged) and hit.
+
