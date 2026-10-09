@@ -145,6 +145,7 @@ namespace Camera
 			float                savedFov = 0.0f;                 // Skyrim's own, given back when ours stops
 			float                fovScale = 0.0f;                 // tan(vertical/2) / tan(Skyrim's FOV/2), measured
 			float                distance = 0.0f;                 // the wheel's: metres back standing (0: the game's)
+			bool                 zoomedIn = false;                // the wheel went on into first person
 		};
 		Rig g;
 
@@ -263,7 +264,7 @@ namespace Camera
 
 		bool Wanted() { return Settings::Get().riftCamera && Jump::OnFoot(); }
 
-		void Stop()
+		void Stop(std::string_view a_why = "off foot")
 		{
 			if (!g.active) {
 				return;
@@ -274,7 +275,7 @@ namespace Camera
 			if (auto* camera = RE::PlayerCamera::GetSingleton(); camera && g.savedFov > 0.0f) {
 				camera->GetRuntimeData2().worldFOV = g.savedFov;
 			}
-			SKSE::log::info("camera: Skyrim's own again (FOV {:.0f})", g.savedFov);
+			SKSE::log::info("camera: Skyrim's own again (FOV {:.0f}; {})", g.savedFov, a_why);
 		}
 
 		// Skyrim's FOV value for a horizontal field of view on this screen. Skyrim's value isn't the
@@ -297,8 +298,10 @@ namespace Camera
 			SKSE::log::info("camera: Rift Apart's");
 			g.active = true;
 			g.focus = a_feet;
-			// Back from first person (zoomed in all the way): the game's distance again.
-			if (g.distance <= kZoomMin + 1e-3f) {
+			// Back from the first person the wheel went into: the game's distance again (back from
+			// anything else, the zoom it had).
+			if (g.zoomedIn) {
+				g.zoomedIn = false;
 				g.distance = GameDistance();
 			}
 			g.savedFov = a_camera->GetRuntimeData2().worldFOV;
@@ -453,6 +456,7 @@ namespace Camera
 				g.distance = GameDistance();
 			}
 			if (in && g.distance <= kZoomMin + 1e-3f) {
+				g.zoomedIn = true;
 				SKSE::GetTaskInterface()->AddTask([] {
 					if (auto* camera = RE::PlayerCamera::GetSingleton()) {
 						camera->ForceFirstPerson();
@@ -461,6 +465,7 @@ namespace Camera
 				return true;
 			}
 			g.distance = std::clamp(g.distance + (in ? -kZoomStep : kZoomStep), kZoomMin, kZoomMax);
+			SKSE::log::info("camera: the wheel, {:.1f} m back", g.distance);
 			return true;
 		}
 
@@ -545,8 +550,10 @@ namespace Camera
 		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_ThirdPersonState[0] };
 		ThirdPersonHook::_Update = vtbl.write_vfunc(0x3, ThirdPersonHook::Update);
 		ThirdPersonHook::_GetRotation = vtbl.write_vfunc(0x4, ThirdPersonHook::GetRotation);
+		// (PlayerInputHandler's ProcessButton: 4, two further on from runtime 1.7.99, as CommonLib's
+		// own call finds it.)
 		REL::Relocation<std::uintptr_t> input{ RE::VTABLE_ThirdPersonState[1] };
-		ThirdPersonInputHook::_ProcessButton = input.write_vfunc(0x4, ThirdPersonInputHook::ProcessButton);
+		ThirdPersonInputHook::_ProcessButton = input.write_vfunc(REL::VersionShift(0x4, 2, SKSE::RUNTIME_SSE_1_7_99), ThirdPersonInputHook::ProcessButton);
 		g.distance = GameDistance();
 	}
 
@@ -558,7 +565,8 @@ namespace Camera
 		const auto* camera = RE::PlayerCamera::GetSingleton();
 		const bool  third = camera && camera->currentState && camera->currentState->id == RE::CameraStates::kThirdPerson;
 		if (!third || !Wanted()) {
-			Stop();
+			Stop(!third ? std::format("Skyrim's camera state {}", camera && camera->currentState ? static_cast<int>(camera->currentState->id) : -1) :
+			              std::string("off foot"));
 			Fx::Crosshair(std::nullopt);
 		}
 	}

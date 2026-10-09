@@ -1300,6 +1300,9 @@ namespace AutoTest
 		// The bSaveOn* switches aren't in either INI collection; `coc` from the main menu saves
 		// nothing anyway (checked: no new save after a run).
 		SetPref("fAutosaveEveryXMins:SaveGame", false, 1.0e6f, true);
+		// Nor Skyrim's auto-vanity camera, which starts circling him after 120 s with no input (the
+		// tests' buttons aren't input to Skyrim): the full run's later cases were steered by it.
+		SetPref("fAutoVanityModeDelay:Camera", false, 1.0e6f, true);
 		TestWindow::OnDataLoaded(s.shots, s.watchMap);
 		static MainMenuSink sink;
 		RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);

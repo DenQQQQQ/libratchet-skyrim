@@ -629,11 +629,25 @@ namespace Jump
 			if (!ctrl || !g.sim) {
 				return;
 			}
-			if (const char* why = NotOnFoot(a_player, ctrl)) {
+			// Why he's off foot, logged as it changes (Skyrim's movement and camera are his then).
+			static std::string_view offFoot;
+			const char*             why = NotOnFoot(a_player, ctrl);
+			if (std::string_view(why ? why : "") != offFoot) {
+				SKSE::log::info("jump: {}", why ? std::format("off foot ({}): Skyrim moves him", why) : std::string("on foot again"));
+				offFoot = why ? why : "";
+			}
+			if (why) {
 				if (g.ours) {
 					SKSE::log::info("jump: handed back to Skyrim mid-air ({})", why);
 					AutoTest::OnHandedBack(why);
 				}
+				// Handed back mid-glide (into water, knocked down): the heli-pack folds away now, not
+				// at his next step back on foot.
+				if (g.last.state == RATCHET_STATE_GLIDE) {
+					Sounds::Stop("heli_loop");
+					Sounds::Play("heli_retract", a_player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * UnitsPerMetre() });
+				}
+				g.last.state = RATCHET_STATE_GROUND;
 				EndOurs(ctrl);
 				ratchet_reset(g.sim);
 				Combat::OffFoot(a_player, a_dt);
@@ -1012,7 +1026,9 @@ namespace Jump
 				const bool running = dt > 0.0f && !RE::UI::GetSingleton()->GameIsPaused();
 				if (running) {
 					Step(a_this, dt);
-					Sounds::Update(dt);
+					// The sounds on the frame's whole time (a hitch isn't clamped away: a baked loop
+					// has to start again when its file really ends).
+					Sounds::Update(a_delta);
 				}
 				_Update(a_this, a_delta);
 				Observe(a_this);

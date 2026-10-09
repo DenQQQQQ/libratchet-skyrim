@@ -888,3 +888,32 @@ throw flies flat at his hand's height, as the sandbox's does (wrench.rs start_th
 hills that means a target well below or above him (more than about 1.2 m) is out of a throw's
 reach; kept, as the sandbox's.
 
+### A review of the evening's code, and the full run past two minutes
+
+A review agent read the evening's diff against the sandbox: nothing that crashes or mixes units.
+Fixed from it:
+
+- A loop now runs until it's stopped (the old one died within a round), and handed back to Skyrim
+  mid-glide (into water, knocked down) nothing stopped the heli loop: it went on every 15 s while
+  he swam, and he played a heli-pack's fold-away at his next step on foot. The fold-away is played
+  as he's handed back now, and a loop nobody keeps up for 10 frames stops itself.
+- The sounds run on the frame's whole time (it was clamped to 0.1 s for the sim): after a hitch a
+  baked loop starts again when its file really ends, not half a second later.
+- A loop's, a retriggered layer's and an owner's sounds don't fade with distance (the sandbox
+  fades only a sound cued at a place).
+- Back on foot from a swim, a horse or a knock-down, the wheel's zoom is as it was; only coming
+  back from the first person the wheel itself went into resets it to the game's distance.
+- The zoom's hook finds `ProcessButton` where CommonLib's own call does (two slots further on from
+  runtime 1.7.99).
+- And the review's coverage point: the zoom case calls Skyrim's camera input itself. Real wheel
+  notches (WinDrive, the PC idle for hours, the game focused for it) went through the same way:
+  three down took the camera from 5.2 to 6.4 m back, two up back to 5.2 m. Skyrim hands them in on
+  worker threads; the zoom only writes its distance there, and going to first person is a task.
+
+The full run failed three cases in a row once it passed two minutes (the guard's crime, the
+ledge, the zoom), each fine alone. The camera's new log line said why: Skyrim's camera state 1,
+auto-vanity, which starts circling him after 120 s with no input, and the tests' buttons aren't
+input to Skyrim. Their sticks then went the circling camera's way. Test runs turn it off now
+(`fAutoVanityModeDelay`, in memory, as the autosaves). In play any input ends it and ours is
+back. When he goes off foot the jump log says why now, and the camera's says what took it.
+

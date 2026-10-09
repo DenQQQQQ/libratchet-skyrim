@@ -60,6 +60,7 @@ namespace Sounds
 			std::string       loop;            // the loop it came from (it follows the loop's place)
 			bool              looping = false; // and ends with the loop (its loop layers do; the rest play out)
 			std::string       owner;           // what it belongs to: it follows that, and ends with it
+			bool              fades = true;    // a world sound: quieter far from him (a loop's and an owner's aren't)
 			RE::NiPoint3      where;
 			float             in = 0.0f;       // seconds until it starts (a driver: until its next file)
 			float             every = 0.0f;    // > 0: a driver
@@ -78,6 +79,12 @@ namespace Sounds
 		std::unordered_set<std::string>         g_loops;  // the loops started and not stopped
 		// Per loop: when it started, and the files it has played (logged at its stop).
 		std::unordered_map<std::string, std::pair<double, int>> g_loopStats;
+		// Per loop: the frame Loop last kept it up in. One its caller has let go of (he was handed
+		// back to Skyrim mid-glide, say) stops itself kLoopStale frames on (frames, not seconds: a
+		// hitch isn't letting go).
+		std::unordered_map<std::string, std::uint64_t> g_loopKept;
+		std::uint64_t                                  g_frame = 0;
+		constexpr std::uint64_t                        kLoopStale = 10;
 		double                                  g_clock = 0.0;
 		std::uint32_t                           g_random = 0x2545F491u;
 		bool                                    g_warned = false;
@@ -122,7 +129,7 @@ namespace Sounds
 				return handle;
 			}
 			handle.SetPosition(a_voice.where);
-			handle.SetVolume(std::clamp(kMaster * a_voice.volume * Falloff(a_voice.where) * Settings::Get().soundVolume, 0.0f, 1.0f));
+			handle.SetVolume(std::clamp(kMaster * a_voice.volume * (a_voice.fades ? Falloff(a_voice.where) : 1.0f) * Settings::Get().soundVolume, 0.0f, 1.0f));
 			if (a_voice.frequency != 1.0f) {
 				handle.SetFrequency(a_voice.frequency);
 			}
@@ -173,6 +180,8 @@ namespace Sounds
 				v.loop = a_loop;
 				v.looping = looped && !a_loop.empty();
 				v.owner = a_owner;
+				// (sound.rs: only a cue at a place fades; a loop on him and an owner's play as they are.)
+				v.fades = a_loop.empty() && a_owner.empty();
 				v.where = a_where;
 				if (looped && layer.interval > 0.0f) {
 					v.every = layer.interval;
@@ -299,6 +308,7 @@ namespace Sounds
 
 	void Loop(std::string_view a_moment, const RE::NiPoint3& a_where)
 	{
+		g_loopKept[std::string(a_moment)] = g_frame;
 		// Started once (a second start does nothing), then it follows a_where.
 		if (const std::string name(a_moment); g_loops.insert(name).second) {
 			const auto it = g_moments.find(name);
@@ -340,6 +350,8 @@ namespace Sounds
 		}
 		g_voices.clear();
 		g_loops.clear();
+		g_loopKept.clear();
+		g_loopStats.clear();
 	}
 
 	namespace
@@ -378,6 +390,19 @@ namespace Sounds
 	void Update(float a_dt)
 	{
 		g_clock += a_dt;
+		++g_frame;
+		// Loops nobody keeps up any more stop (Update runs only while the game does: a pause isn't
+		// letting go either).
+		std::vector<std::string> stale;
+		for (const auto& name : g_loops) {
+			if (const auto it = g_loopKept.find(name); it == g_loopKept.end() || g_frame - it->second > kLoopStale) {
+				stale.push_back(name);
+			}
+		}
+		for (const auto& name : stale) {
+			SKSE::log::info("sounds: {} wasn't kept up: stopped", name);
+			Stop(name);
+		}
 		std::vector<Voice> fresh;  // the drivers' new files
 		for (auto& v : g_voices) {
 			if (v.every > 0.0f) {
