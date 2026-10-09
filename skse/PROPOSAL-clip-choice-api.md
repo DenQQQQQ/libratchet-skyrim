@@ -184,3 +184,13 @@ void ratchet_weapon_info(const RatchetWeapon *weapon, RatchetWeaponInfo *out);
 The host keeps flying and hitting with its own engine (Skyrim launches a projectile per shot).
 `Projectile::step` could come later for hosts without projectiles. The same version bump as above
 covers it.
+
+**Update (2026-10-09):** the plugin now has the Shatterbomb too, as a second C++ stand-in: the
+cooked trigger, `lob_velocity`, the flight under gravity and `ExplosionParams::damage_at`, with the
+numbers from `wpn_protogrenade_weapon.json` written into `skse/src/Combat.cpp`. So the API above
+also wants:
+- a way to tell a cooked shot's wind-up (`Weapon::cooking`), for the wind-up pose;
+- the lob solved at release from where the hand is then (the sandbox's `last_grenade_shot`);
+- the explosion's numbers in `RatchetWeaponInfo` (inner and outer radius and damage, knockback
+  tiers), or a `ratchet_weapon_blast_damage(weapon, distance)`;
+- and, for hosts that fly the bomb themselves, `Projectile::step` after all.
