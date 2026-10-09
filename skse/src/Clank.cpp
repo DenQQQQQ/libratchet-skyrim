@@ -267,6 +267,10 @@ namespace Clank
 			return;
 		}
 		s.cur.time += a_dt;
+		// A looping clip's time wraps (hours without a glide would run its float precision out).
+		if (s.cur.loop && s.cur.clip->seconds > 0.0f) {
+			s.cur.time = std::fmod(s.cur.time, s.cur.clip->seconds);
+		}
 		if (s.prev.clip && s.fade < 1.0f) {
 			s.prev.time += a_dt;
 			s.fade = std::min(1.0f, s.fade + a_dt / kFade);

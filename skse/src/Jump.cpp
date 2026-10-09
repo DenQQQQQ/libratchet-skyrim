@@ -475,6 +475,7 @@ namespace Jump
 				}
 				EndOurs(ctrl);
 				ratchet_reset(g.sim);
+				Combat::OffFoot(a_player, a_dt);
 				return;
 			}
 
@@ -493,6 +494,10 @@ namespace Jump
 				if (g.edgeTime < kEdgeLanding) {
 					grounded = false;
 					ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
+					// Skyrim may take each frame's touch-down as a landing: the fall it measures
+					// starts here, so it's counted once (on the first one), not every frame.
+					ctrl->fallStartHeight = z;
+					ctrl->fallTime = 0.0f;
 				}
 			} else {
 				g.edgeTime = 0.0f;

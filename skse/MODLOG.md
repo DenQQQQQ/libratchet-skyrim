@@ -552,3 +552,26 @@ The owner asked for Clank on his back.
   - The fights' cow: moved back for the next fight with its AI off, only its position moved,
     not its 3D. The pictures showed it by Ratchet while the shots, the thrown wrench and the
     Shatterbomb hit its body 6 m out. Its 3D goes with it now (`Update3DPosition`).
+
+### A review of the night's code, and its fixes
+An independent review of the night's changes found no crash paths. The math checked out: the
+attach inverse, the rotor axes, the lob and the flight against libarsenal. It found these, now
+fixed:
+- **Off foot, the guns kept their buttons.** Riding, swimming or knocked down, the plugin's step
+  stops before the guns, so a Shatterbomb throw being wound up stayed latched. The first frame
+  back on foot threw it at whatever the crosshair was on, maybe a guard (an assault). Bombs in
+  the air froze. Now each frame off foot drops the buttons and the wind-up, and flies the bombs
+  and the thrown wrench on.
+- **Carried off with bombs in the air** (a load door, fast travel, a coc): they flew on at the old
+  place's coordinates and went off near wherever those landed in the new one. Now a new world,
+  or 30 m in one step, drops them and puts the wrench back in his hand.
+- **The edge rule and fall damage.** Putting the controller back into its air state each frame
+  could let Skyrim count a landing each frame. The fall it measures now starts at each of those
+  frames, so only the first touch-down counts.
+- **First person.** Flying things hung under his model, which isn't drawn there. They hang under
+  the first-person 3D in first person now.
+- Smaller: the throw's log said 0.0 m for throws aimed past 30 m. The glove refilled only while
+  the Shatterbomb was out; now it refills whichever gun is out. Looping clips' times (his and
+  Clank's) wrap, so hours of idling can't run their float precision out.
+- 22/22 pass. The knockdown case has no automated test: the test's own step doesn't run while
+  he's off foot.

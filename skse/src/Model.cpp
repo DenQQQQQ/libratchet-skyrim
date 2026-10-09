@@ -244,20 +244,28 @@ namespace Model
 			}
 		}
 
-		// Something flying (the thrown wrench, a Shatterbomb) under his model, at a_at in the world
-		// (game units) turned a_world in it, at his size. Under his model, not the player's root:
-		// everything else under the root is the Dragonborn's, which HideDragonborn culls every
-		// frame (the first build hid the thrown wrench that way).
-		void PlaceInWorld(RE::NiAVObject* a_node, RE::NiNode* a_root, const RE::NiPoint3& a_at, const RE::NiMatrix3& a_world)
+		// Something flying (the thrown wrench, a Shatterbomb) at a_at in the world (game units)
+		// turned a_world in it, at his size. In third person under his model, not the player's
+		// root: everything else under the root is the Dragonborn's, which HideDragonborn culls
+		// every frame (the first build hid the thrown wrench that way). In first person, where his
+		// model isn't drawn, under the first-person 3D.
+		void PlaceInWorld(RE::NiAVObject* a_node, RE::PlayerCharacter* a_player, const RE::NiPoint3& a_at, const RE::NiMatrix3& a_world)
 		{
-			if (a_node->parent != s.model.get()) {
+			auto*       root = a_player->Get3D(false) ? a_player->Get3D(false)->AsNode() : nullptr;
+			const auto* camera = RE::PlayerCamera::GetSingleton();
+			auto*       first = camera && camera->IsInFirstPerson() && a_player->Get3D(true) ? a_player->Get3D(true)->AsNode() : nullptr;
+			RE::NiNode* holder = first ? first : s.model.get();
+			if (!holder || (!first && !root)) {
+				return;
+			}
+			if (a_node->parent != holder) {
 				if (a_node->parent) {
 					a_node->parent->DetachChild(a_node);
 				}
-				s.model->AttachChild(a_node, true);
+				holder->AttachChild(a_node, true);
 			}
-			// His model's world this frame (its local is set; Skyrim updates the world after).
-			const RE::NiTransform parent = a_root->world * s.model->local;
+			// The holder's world this frame (his model's local is set; Skyrim updates its world after).
+			const RE::NiTransform parent = first ? first->world : root->world * s.model->local;
 			const RE::NiMatrix3   back = parent.rotate.Transpose();
 			a_node->local.translate = (back * (a_at - parent.translate)) / parent.scale;
 			a_node->local.rotate = back * a_world;
@@ -265,12 +273,17 @@ namespace Model
 			if (a_node->GetAppCulled()) {
 				a_node->SetAppCulled(false);
 			}
+			if (first) {
+				// The first-person 3D has had its update this frame; his model's comes after this.
+				RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
+				a_node->Update(update);
+			}
 		}
 
 		// The thrown wrench: where the sim has it, laid flat and spun about the up axis.
-		void Throw(Weapon& a_weapon, RE::NiNode* a_root, const RE::NiPoint3& a_at, float a_spin)
+		void Throw(Weapon& a_weapon, RE::PlayerCharacter* a_player, const RE::NiPoint3& a_at, float a_spin)
 		{
-			if (!Load(a_weapon) || !a_root || !s.model) {
+			if (!Load(a_weapon) || !s.model) {
 				return;
 			}
 			// glTF to Skyrim (Orientation's M), the handle (glTF +Y, Skyrim up after M) laid along
@@ -287,7 +300,7 @@ namespace Model
 			spin.entry[1][0] = sn;
 			spin.entry[1][1] = c;
 			spin.entry[2][2] = 1.0f;
-			PlaceInWorld(a_weapon.node.get(), a_root, a_at, spin * flat * Orientation(0.0f));
+			PlaceInWorld(a_weapon.node.get(), a_player, a_at, spin * flat * Orientation(0.0f));
 		}
 
 		// The Shatterbombs in the air (skse\tools\ratchet_to_skyrim.py --name shatterbomb): a copy
@@ -296,10 +309,10 @@ namespace Model
 		Weapon                                 g_bomb{ "RatchetMovement\\shatterbomb.nif" };
 		std::vector<RE::NiPointer<RE::NiNode>> g_bombs;  // one per bomb in the air; spares hidden
 
-		void ShowBombs(RE::NiNode* a_root)
+		void ShowBombs(RE::PlayerCharacter* a_player)
 		{
 			const auto bombs = Combat::Bombs();
-			if (!a_root || (bombs.size() > g_bombs.size() && !Load(g_bomb))) {
+			if (bombs.size() > g_bombs.size() && !Load(g_bomb)) {
 				return;
 			}
 			while (g_bombs.size() < bombs.size()) {
@@ -319,7 +332,7 @@ namespace Model
 					tumble.entry[1][2] = -sn;
 					tumble.entry[2][1] = sn;
 					tumble.entry[2][2] = c;
-					PlaceInWorld(g_bombs[i].get(), a_root, bombs[i].first, tumble * Orientation(0.0f));
+					PlaceInWorld(g_bombs[i].get(), a_player, bombs[i].first, tumble * Orientation(0.0f));
 				} else if (!g_bombs[i]->GetAppCulled()) {
 					g_bombs[i]->SetAppCulled(true);
 				}
@@ -435,8 +448,7 @@ namespace Model
 			}
 			const auto held = Combat::InHand();
 			if (const auto thrown = Combat::ThrownWrench()) {
-				auto* root = a_player->Get3D(false) ? a_player->Get3D(false)->AsNode() : nullptr;
-				Throw(g_wrench, root, thrown->first, thrown->second);
+				Throw(g_wrench, a_player, thrown->first, thrown->second);
 			} else {
 				Hang(g_wrench, hand, held == Combat::Hand::kWrench);
 			}
@@ -795,6 +807,10 @@ namespace Model
 			return;
 		}
 		s.cur.time += a_dt * s.cur.rate;
+		// A looping clip's time wraps (hours of idling would run its float precision out).
+		if (s.cur.loop && s.cur.clip->seconds > 0.0f) {
+			s.cur.time = std::fmod(s.cur.time, s.cur.clip->seconds);
+		}
 		if (s.prev.clip && s.fade < 1.0f) {
 			s.prev.time += a_dt * s.prev.rate;
 			s.fade = std::min(1.0f, s.fade + a_dt / s.fadeLen);
@@ -821,7 +837,7 @@ namespace Model
 		s.model->local.scale = UnitsPerMetre() * scale;
 		HoldWeapons(a_player);
 		WearGlove(a_drive);
-		ShowBombs(a_player->Get3D(false) ? a_player->Get3D(false)->AsNode() : nullptr);
+		ShowBombs(a_player);
 		Clank::Update(s.model.get(), a_drive.simJump && a_drive.simState == RATCHET_STATE_GLIDE, a_dt);
 		RE::NiUpdateData update{ 0.0f, RE::NiUpdateData::Flag::kNone };
 		s.model->Update(update);

@@ -32,6 +32,10 @@ namespace Combat
 	void Install();
 	// A save loads or a new game starts: bombs in the air and a throw winding up are dropped.
 	void Reset();
+	// Each frame he isn't on foot (riding, swimming, knocked down, in a menu's control...): his
+	// buttons are dropped (a wound-up throw isn't thrown on the way back), and what's in the air
+	// flies on.
+	void OffFoot(RE::PlayerCharacter* a_player, float a_dt);
 
 	// Before the sim steps: the wrench button and aiming into its input. a_view: the camera's
 	// forward on the ground (Skyrim's x, y, unit); a_state: the sim's state at its last step.

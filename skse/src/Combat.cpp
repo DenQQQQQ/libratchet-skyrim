@@ -120,6 +120,9 @@ namespace Combat
 			std::vector<Bomb> bombs;
 			std::uint32_t     bombThrows = 0;
 			float             sinceBlast = 100.0f;
+			// Where he was at the last step, and in which world (a worldspace, or an interior cell).
+			std::optional<RE::NiPoint3> lastAt;
+			const void*                 lastWorld = nullptr;
 			// For his poses.
 			std::optional<RE::NiPoint3> aimAt;
 			std::uint32_t               shots = 0;
@@ -419,11 +422,6 @@ namespace Combat
 		// fire winds the throw up, letting go throws (the bomb leaves his hand a moment later).
 		void Shatterbomb(float a_dt)
 		{
-			c.bombEmpty = c.bombAmmo == 0 ? c.bombEmpty + a_dt : 0.0f;
-			if (c.bombEmpty > kBombRefill) {
-				c.bombAmmo = kBombAmmo;
-				c.bombEmpty = 0.0f;
-			}
 			// Busy (dashing, swinging, on a wall, the wrench out of his hand), a throw being wound
 			// up waits: it would go on the release otherwise (the sandbox's).
 			const bool busy = !CanFire(c.simState) || c.thrown || c.releaseIn >= 0.0f;
@@ -457,6 +455,7 @@ namespace Combat
 			if (to.Length() > kBombRange * s * u) {
 				to.Unitize();
 				target = hand + to * (kBombRange * s * u);
+				to = target - hand;
 			}
 			const RE::NiPoint3 v = LobVelocity(hand / u, target / u, kBombSpeed * s, kBombGravity * s);
 			c.bombs.push_back({ hand, v });
@@ -529,6 +528,41 @@ namespace Combat
 				} else {
 					++it;
 				}
+			}
+		}
+
+		// A load door, fast travel or a coc carried him off (another world, or 30 m in one step):
+		// what's in the air stays behind, its coordinates the old place's. The wrench is back in
+		// his hand.
+		void DropIfCarriedOff(RE::PlayerCharacter* a_player)
+		{
+			const RE::NiPoint3 at = a_player->GetPosition();
+			const void*        world = a_player->GetWorldspace() ? static_cast<const void*>(a_player->GetWorldspace()) :
+			                                                        static_cast<const void*>(a_player->GetParentCell());
+			if ((c.lastAt && c.lastAt->GetDistance(at) > 30.0f * Units()) || (c.lastWorld && world != c.lastWorld)) {
+				if (!c.bombs.empty() || c.thrown) {
+					SKSE::log::info("combat: he was carried off: {} Shatterbombs in the air dropped{}", c.bombs.size(),
+						c.thrown ? ", the wrench back in his hand" : "");
+				}
+				c.bombs.clear();
+				if (c.thrown) {
+					ratchet_wrench_free(c.thrown);
+					c.thrown = nullptr;
+					c.struck.clear();
+					Sounds::Stop("wrench_throw_loop");
+				}
+			}
+			c.lastAt = at;
+			c.lastWorld = world;
+		}
+
+		// The glove fills again 1.5 s after it's empty, whichever gun is out.
+		void Refill(float a_dt)
+		{
+			c.bombEmpty = c.bombAmmo == 0 ? c.bombEmpty + a_dt : 0.0f;
+			if (c.bombEmpty > kBombRefill) {
+				c.bombAmmo = kBombAmmo;
+				c.bombEmpty = 0.0f;
 			}
 		}
 
@@ -693,6 +727,8 @@ namespace Combat
 			return;
 		}
 		c.simState = a_r.state;
+		DropIfCarriedOff(a_player);
+		Refill(a_dt);
 		const bool wrench = a_r.state == RATCHET_STATE_MELEE || a_r.state == RATCHET_STATE_SMASH || a_r.state == RATCHET_STATE_SMASH_LAND;
 		c.sinceWrench = wrench ? 0.0f : c.sinceWrench + a_dt;
 		if (a_r.events & RATCHET_EVENT_MELEE_HIT) {
@@ -736,6 +772,28 @@ namespace Combat
 		c.bombIn = -1.0f;
 		c.bombTrigger = false;
 		c.cooking = false;
+	}
+
+	void OffFoot(RE::PlayerCharacter* a_player, float a_dt)
+	{
+		// The buttons aren't his: a throw being wound up is dropped, not thrown the moment he's
+		// back on foot, and nothing fires. What's in the air flies on.
+		c.fire = false;
+		c.aim = false;
+		c.melee = false;
+		c.bombTrigger = false;
+		c.cooking = false;
+		c.bombIn = -1.0f;
+		c.releaseIn = -1.0f;
+		if (!Settings::Get().combat || !a_player) {
+			return;
+		}
+		DropIfCarriedOff(a_player);
+		Refill(a_dt);
+		if (c.thrown) {
+			Fly(a_player, a_dt);
+		}
+		FlyBombs(a_player, a_dt);
 	}
 
 	Gun Selected() { return c.gun; }
