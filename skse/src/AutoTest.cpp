@@ -60,6 +60,11 @@ namespace AutoTest
 			// A run with no jump, this long (s), the stick forward: no fall in it may last longer
 			// than kLongFall (the owner slid down the road's bumps in sim falls of up to 1.6 s).
 			float       runFor = 0.0f;
+			// The run goes up something placed 1 m ahead: a floor piece tilted this many degrees
+			// (rising ahead), or a static (stairs). He has to gain at least minClimb metres.
+			float       rampDeg = 0.0f;
+			RE::FormID  climb = 0;
+			float       minClimb = 0.0f;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -81,6 +86,12 @@ namespace AutoTest
 			{ "air dash", 0.3f, 0.0f, true, 0.0f, 0.0f, 0.35f },
 			// A run along the road (the bridge's cobbles), no jump.
 			{ .name = "run on the road", .hold = -1.0f, .runFor = 2.0f },
+			// Up a 15° and a 30° ramp (a floor piece tilted), and up stone stairs
+			// (ImpExtIceStairs01_NoIce, 8.5 m long, 5.2 m up): the owner struggled on small uphills
+			// and stairs.
+			{ .name = "run up a 15 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 15.0f, .minClimb = 1.5f },
+			{ .name = "run up a 30 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 30.0f, .minClimb = 2.5f },
+			{ .name = "run up stairs", .hold = -1.0f, .runFor = 2.5f, .climb = 0x000C9B5D, .minClimb = 2.5f },
 			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
 			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.0f },
 			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
@@ -451,7 +462,7 @@ namespace AutoTest
 		}
 
 		// A static placed in the world for a case, turned to the start's heading.
-		RE::ObjectRefHandle Place(RE::FormID a_base, const RE::NiPoint3& a_at)
+		RE::ObjectRefHandle Place(RE::FormID a_base, const RE::NiPoint3& a_at, float a_pitch = 0.0f)
 		{
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(a_base);
@@ -459,8 +470,37 @@ namespace AutoTest
 			if (!player || !base || !handler) {
 				return {};
 			}
-			return handler->CreateReferenceAtLocation(base, a_at, RE::NiPoint3{ 0.0f, 0.0f, s.startHeading }, player->GetParentCell(),
+			return handler->CreateReferenceAtLocation(base, a_at, RE::NiPoint3{ a_pitch, 0.0f, s.startHeading }, player->GetParentCell(),
 				player->GetWorldspace(), nullptr, nullptr, {}, false, false);
+		}
+
+		// The climbing cases' slope: a floor piece (WRIntFloorSTMid01Large, 14.6 m square) tilted
+		// a_case.rampDeg, its near edge 1 m ahead on the ground; or the a_case.climb static with
+		// its near end there. Then the ground ahead as rays find it (a sign of which way it went).
+		void PlaceClimb(const Case& a_case)
+		{
+			constexpr RE::FormID kFloorBase = 0x001044AA;
+			constexpr float      kHalf = 512.0f;  // the floor piece's, game units
+			if (!s.startPos) {
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 up{ 0.0f, 0.0f, 1.0f };
+			if (a_case.rampDeg > 0.0f) {
+				const float t = a_case.rampDeg * 3.14159265f / 180.0f;
+				const RE::NiPoint3 at = *s.startPos + ahead * (1.0f * Units() + kHalf * std::cos(t)) + up * (kHalf * std::sin(t));
+				s.placed.push_back(Place(kFloorBase, at, -t));
+			} else if (a_case.climb) {
+				// Its near end 1 m ahead (its bounds start 260 units back from its origin).
+				s.placed.push_back(Place(a_case.climb, *s.startPos + ahead * (1.0f * Units() + 260.0f)));
+			}
+			std::string heights;
+			for (int i = 0; i <= 10; ++i) {
+				const RE::NiPoint3 p = *s.startPos + ahead * (static_cast<float>(i) * Units());
+				const auto hit = Physics::Ray(p + up * (8.0f * Units()), p - up * (2.0f * Units()));
+				heights += hit ? std::format(" {}:{:+.2f}", i, (hit->point.z - s.startPos->z) / Units()) : std::format(" {}:none", i);
+			}
+			SKSE::log::info("autotest: {}: placed; the ground ahead (m: height){}", a_case.name, heights);
 		}
 
 		// The wall: a flat Dragonsreach wall piece (WRIntCastleWallDoubleHighExStr01Quad, 14.6 m
@@ -924,6 +964,10 @@ namespace AutoTest
 				PlaceLedge(c);
 				return {};
 			}
+			if ((c.rampDeg > 0.0f || c.climb) && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
+				s.wallPlaced = true;
+				PlaceClimb(c);
+			}
 			if (s.settle < kSettle) {
 				return {};
 			}
@@ -1045,16 +1089,23 @@ namespace AutoTest
 				s.fallFor = 0.0f;
 			}
 			if (t >= c.runFor) {
-				const bool ok = s.longestFall <= kLongFall;
-				if (ok) {
+				auto*       player = RE::PlayerCharacter::GetSingleton();
+				const float climbed = player && s.startPos ? (player->GetPosition().z - s.startPos->z) / Units() : 0.0f;
+				std::string bad;
+				if (s.longestFall > kLongFall) {
+					bad += " long-fall";
+				}
+				if (c.minClimb > 0.0f && climbed < c.minClimb) {
+					bad += " climb";
+				}
+				if (bad.empty()) {
 					++s.passed;
 				} else {
 					++s.failed;
 				}
-				auto* player = RE::PlayerCharacter::GetSingleton();
-				SKSE::log::info("autotest: {} {}: {:.1f} m in {:.1f} s, {} falls, the longest {:.3f} s (at most {:.2f}){}", ok ? "PASS" : "FAIL", c.name,
-					player && s.startPos ? player->GetPosition().GetDistance(*s.startPos) / Units() : 0.0f, c.runFor, s.falls, s.longestFall,
-					kLongFall, ok ? "" : " - off: a long fall on the road");
+				SKSE::log::info("autotest: {} {}: {:.1f} m in {:.1f} s, {:+.2f} m up (at least {:.2f}), {} falls, the longest {:.3f} s (at most {:.2f}){}",
+					bad.empty() ? "PASS" : "FAIL", c.name, player && s.startPos ? player->GetPosition().GetDistance(*s.startPos) / Units() : 0.0f,
+					c.runFor, climbed, c.minClimb, s.falls, s.longestFall, kLongFall, bad.empty() ? "" : " - off:" + bad);
 				NextCase();
 			}
 			return {};
