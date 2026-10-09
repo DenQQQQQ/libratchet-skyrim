@@ -93,6 +93,8 @@ namespace AutoTest
 			// A fight's shots go this far (metres) past the side of the target's body (its bounds'
 			// half width): a near miss the bolt's 0.25 m still hits.
 			float       aimBeside = 0.0f;
+			// Which way airStick holds the stick (x right, y forward; camera-relative).
+			RE::NiPoint2 stick{ 0.0f, 1.0f };
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -109,6 +111,11 @@ namespace AutoTest
 			{ "standing jump steered forward", 0.5f, 0.0f, true },
 			{ "running jump", 0.5f, 0.8f, true },
 			{ .name = "strafe jump", .hold = 0.5f, .aimHeld = true, .wantClip = "strafe_jump" },
+			// Aiming, a jump to the side or back is Rift Apart's flip that way (the owner: "strafing
+			// flipping" was missing): the sandbox's clip for the jump's way from where he faces.
+			{ .name = "strafe flip right", .hold = 0.5f, .run = 0.4f, .airStick = true, .aimHeld = true, .wantClip = "strafe_jump_e", .stick = { 1.0f, 0.0f } },
+			{ .name = "strafe flip left", .hold = 0.5f, .run = 0.4f, .airStick = true, .aimHeld = true, .wantClip = "strafe_jump_w", .stick = { -1.0f, 0.0f } },
+			{ .name = "strafe flip back", .hold = 0.5f, .run = 0.4f, .airStick = true, .aimHeld = true, .wantClip = "strafe_jump_s", .stick = { 0.0f, -1.0f } },
 			{ "double jump", 0.3f, 0.0f, false, 0.4f, 0.1f },
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			// Off a platform 8 m up, the stick forward: seconds of glide (the heli-pack's loop).
@@ -1338,7 +1345,9 @@ namespace AutoTest
 			if (s.returnPending && s.startPos && player && a_grounded && !a_busy && !c.door) {
 				s.returnPending = false;
 				player->SetPosition(*s.startPos, true);
-				player->SetHeading(s.startHeading);
+				// Turned so the stick's way (camera-relative: his own, the camera behind him) is the
+				// start's heading, the way with room.
+				player->SetHeading(s.startHeading - (c.airStick ? std::atan2(c.stick.x, c.stick.y) : 0.0f));
 				s.settle = 0.0f;
 				return {};
 			}
@@ -1400,14 +1409,18 @@ namespace AutoTest
 					const float speed = std::sqrt(v.quad.m128_f32[0] * v.quad.m128_f32[0] + v.quad.m128_f32[1] * v.quad.m128_f32[1]);
 					SKSE::log::info("autotest: run-up {:.3f} s: {:.2f} m/s", s.running, speed);
 				}
-				Input::SetTestStick(RE::NiPoint2{ 0.0f, 1.0f });
+				// (A strafe flip's run-up: aiming, the stick its way.)
+				Input::SetTestStick(c.stick);
+				if (c.aimHeld) {
+					Combat::SetTestButtons(Combat::TestButtons{ .aim = true });
+				}
 				s.running += a_dt;
 				return {};
 			}
 			if (s.index > 0) {
 				CheckHealthAfter(s.index - 1);
 			}
-			Input::SetTestStick(c.airStick ? std::optional(RE::NiPoint2{ 0.0f, 1.0f }) : std::nullopt);
+			Input::SetTestStick(c.airStick ? std::optional(c.stick) : std::nullopt);
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
@@ -1464,7 +1477,11 @@ namespace AutoTest
 				c.hold >= 0.0f ? std::format("jump held {:.2f} s", c.hold) : "no jump",
 				c.again > 0.0f ? std::format(", again at {:.2f} s for {:.2f} s", c.again, c.againHold) : "",
 				c.dashAt >= 0.0f ? std::format(", dash at {:.2f} s", c.dashAt) : "",
-				c.airStick ? ", the stick forward" : "",
+				!c.airStick       ? "" :
+				c.stick.x > 0.5f  ? ", the stick right" :
+				c.stick.x < -0.5f ? ", the stick left" :
+				c.stick.y < -0.5f ? ", the stick back" :
+				                    ", the stick forward",
 				c.duration > 0.0f ? std::format(", a fight against a target {:.1f} m ahead", c.targetAt) : "",
 				c.wallAt > 0.0f ? std::format(", a wall {:.1f} m ahead, jumped off {:.2f} s after he sticks", c.wallAt, c.wallJumpAfter) : "");
 		}

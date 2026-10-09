@@ -145,16 +145,22 @@ selected, and follows the log.
   for another place; `-Start "coc qasmoke"` is flat but too small for the running jump). No save
   is written, and timed autosaves are off for the run (in memory only).
 - It moves by itself: a tap, 0.1 s, 0.15 s and a full hold, a standing jump steered forward, a
-  running jump, a double jump, a glide, a ground dash and an air dash. Before each one he's moved
+  running jump, aimed jumps (in place, and strafe flips right, left and back: their clips have to
+  play), a double jump, a glide and a long glide off an 8 m platform, a ground dash and an air
+  dash, a run along the road and up 15° and 30° ramps and stone stairs. Before each one he's moved
   back to the start, facing the heading with the most room.
 - A wall jump: a wall piece is placed across his way 2 m ahead. He has to stick to it, jump off
   it on a new press, and land at least a metre further out than where he stuck. A jump at a
   bear: he mustn't take its body for a wall. Last, a ledge: from a platform placed 4 m up he
   jumps at a capped wall 3 m ahead, and has to catch its lip and climb up on a new press.
-- Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
-  Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb (also in
-  first person). Each passes if the cow lost at least the expected damage (× the save's
-  difficulty multiplier) from enough hits.
+- Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo (the
+  wrench's own clips have to play), a Hyper-Strike, the pistol from the hip (its fire clip too)
+  and aimed, aimed 0.15 m past the cow's side (the bolts' 0.25 m has to hit), a wrench throw, melee
+  while aiming (a throw) and a Shatterbomb (also in first person). Each passes if the cow lost at
+  least the expected damage (× the save's difficulty multiplier) from enough hits. Then hunters
+  and a guard: a shot and a hit have to make them fight, and hitting the guard is a crime.
+- The camera's zoom: wheel notches sent through Skyrim's own camera input (out 3 m, in to 2 m,
+  one more into first person, back at the game's distance).
 - Last, a cell change with effects alive: shots at the floor, through the Bannered Mare's door
   (`coc`), shots again; then the same across a load of the most recent save. The new shots'
   effects have to be alive under the new cell's 3D with none left from the old place, and
@@ -172,7 +178,9 @@ The game runs in a small window in the corner behind other windows; `-Fullscreen
 screen. Screenshots (idle, each jump's top, double jump and glide, the heli-pack out, the end) go to
 `target/skse/shots/<run>/`. Other
 options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his front), `-NoShots`,
-`-Only <name>` (only the cases whose names contain it; `"guard|bear"` for several), `-Audio`
+`-Only <name>` (only the cases whose names contain it; `"guard|bear"` for several; `"sound lab"`
+runs the sound lab, which the full run leaves out: it plays one sound at distances and volumes
+for a recording to measure), `-Audio`
 (records Skyrim's own audio, its process alone, to `audio.wav` with the screenshots and checks it
 for clipping and dropouts: `test/audio_capture.cpp`, `test/audio_check.py`; `audio_check.py
 <wav> <log> --after <regex> [seconds]` shows the loudness after a log line).

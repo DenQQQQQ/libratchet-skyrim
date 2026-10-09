@@ -870,3 +870,11 @@ ray met: its middle line (as the wrench's hits find it), its bounds' half width,
 its height. Followers aren't in it, so the extra reach never hits them. A new case aims the
 pistol 0.15 m past the cow's side: all three shots graze it (logged) and hit.
 
+### The strafe flips, checked
+
+The owner had missed "strafing flipping". The animator picks them (libratchet-anim: the strafe
+jump by its way from where he faces; the sideways and backward ones flip), but only the jump in
+place was tested. Three new cases strafe 0.4 s with aim held (right, left, back: turned so that
+way is the start's room) and jump: `strafe_jump_e`, `_w` and `_s` play after `strafe_walk_e/w/s`,
+and the picture at the top of the right one shows him upside down mid-cartwheel.
+
