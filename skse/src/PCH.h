@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <cmath>
 #include <filesystem>
 #include <format>

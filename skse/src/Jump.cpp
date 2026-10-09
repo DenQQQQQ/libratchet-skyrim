@@ -1035,7 +1035,11 @@ namespace Jump
 												  .meleeSwing = g.last.melee_swing, .strafing = Combat::Strafing(), .strafeAngle = strafeAngle,
 												  .aimAt = Combat::AimTarget(), .shots = Combat::Shots(), .throws = Combat::Throws(),
 												  .hasFacing = true, .facingYaw = g.last.facing_yaw, .sim = g.sim, .groundDistance = g.lastGround });
-					// The weapons' effects, after his pose (they start at his gun's muzzle).
+					// The weapons' effects, after his pose (they start at his gun's muzzle, and the
+					// swing streak follows the wrench in his hand).
+					const auto state = g.last.state;
+					const bool swinging = state == RATCHET_STATE_MELEE || state == RATCHET_STATE_SMASH || state == RATCHET_STATE_SMASH_LAND;
+					Fx::Swipe(swinging ? Model::HeldWrench() : std::nullopt);
 					Fx::Update(dt);
 				}
 			}

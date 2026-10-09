@@ -48,6 +48,7 @@ namespace Fx
 			Color blastSmoke{ 0.2f, 0.22f, 0.25f };
 			Color scorchGlow{ 0.3f, 0.1f, 0.8f };
 			Color grenadeGlow{ 0.45f, 0.1f, 0.85f };
+			Color wrenchSwipe{ 0.05f, 0.5f, 1.0f };
 			Color wrenchHit{ 0.2f, 0.65f, 1.0f };
 			Color wrenchSmoke{ 0.3f, 0.33f, 0.35f };
 			Color wrenchSlam{ 0.35f, 0.75f, 1.0f };
@@ -94,6 +95,7 @@ namespace Fx
 			read(L"blast_smoke", g_c.blastSmoke);
 			read(L"scorch_glow", g_c.scorchGlow);
 			read(L"grenade_glow", g_c.grenadeGlow);
+			read(L"wrench_swipe", g_c.wrenchSwipe);
 			read(L"wrench_hit", g_c.wrenchHit);
 			read(L"wrench_smoke", g_c.wrenchSmoke);
 			read(L"wrench_slam", g_c.wrenchSlam);
@@ -102,6 +104,7 @@ namespace Fx
 			read(L"wrench_trail", g_c.wrenchTrail);
 			read(L"wrench_trail_end", g_c.wrenchTrailEnd);
 			g_c.bolt = g_c.bolt * intensity(L"bolt_intensity", 5.0f);
+			g_c.wrenchSwipe = g_c.wrenchSwipe * intensity(L"wrench_swipe_intensity", 4.0f);
 			SKSE::log::info("fx: {} colours from the game's effect data", fromGame);
 		}
 
@@ -638,6 +641,21 @@ namespace Fx
 		// Bombs' lights are keyed apart from bolts'.
 		constexpr std::uint32_t kBombKey = 0x80000000u;
 
+		// The swing streak: the wrench's inner and outer points (game units) and when (vfx.rs
+		// SWIPE_SPAN: around its effects locator out past its head, metres along its handle at his
+		// size; SWIPE_LIFE: how long it lingers), and its ribbon's pieces, kept from frame to frame.
+		constexpr float kSwipeFrom = 0.2f;
+		constexpr float kSwipeTo = 0.62f;
+		constexpr float kSwipeLife = 0.12f;
+		struct SwipeSample
+		{
+			RE::NiPoint3 inner, outer;
+			float        t;
+		};
+		std::deque<SwipeSample> g_swipe;
+		std::vector<Part>       g_swipeParts;
+		float                   g_clock = 0.0f;
+
 		void UpdateBolts(float a_dt, const View& a_view)
 		{
 			const float m = M();
@@ -756,12 +774,13 @@ namespace Fx
 
 	void Update(float a_dt)
 	{
+		g_clock += a_dt;
 		if (!g_arcDrawn) {
 			HideArc(0);
 		}
 		const bool arc = g_arcDrawn;
 		g_arcDrawn = false;
-		if (g_pieces.empty() && g_bolts.empty() && !arc && g_lights.empty()) {
+		if (g_pieces.empty() && g_bolts.empty() && !arc && g_lights.empty() && g_swipe.empty()) {
 			return;
 		}
 		if (!Root()) {
@@ -799,6 +818,74 @@ namespace Fx
 			DropLight(l);
 		}
 		g_lights.clear();
+		for (auto& part : g_swipeParts) {
+			Release(part);
+		}
+		g_swipeParts.clear();
+		g_swipe.clear();
+	}
+
+	void Swipe(std::optional<RE::NiTransform> a_wrench)
+	{
+		if (!Available()) {
+			return;
+		}
+		if (a_wrench) {
+			const auto& w = *a_wrench;
+			// Its handle's points, metres at his size: its world scale has his size in it.
+			const auto along = [&](float a_metres) { return w.translate + w.rotate * RE::NiPoint3{ 0.0f, a_metres, 0.0f } * w.scale; };
+			g_swipe.push_back({ along(kSwipeFrom), along(kSwipeTo), g_clock });
+		}
+		while (!g_swipe.empty() && g_clock - g_swipe.front().t > kSwipeLife) {
+			g_swipe.pop_front();
+		}
+		std::size_t used = 0;
+		// A quad between each two samples: a parallelogram through their middles, as wide as their
+		// edges on average, showing its slice of the texture (u across the wrench, v by age: it's
+		// brightest at v = 0) and fading out with age (the sandbox's ribbon's vertex alpha).
+		if (g_swipe.size() >= 2 && Root()) {
+			for (std::size_t i = g_swipe.size() - 1; i > 0; --i) {
+				const auto& a = g_swipe[i];      // the newer
+				const auto& b = g_swipe[i - 1];  // the older
+				if (used == g_swipeParts.size()) {
+					g_swipeParts.push_back(Make("quad_swipe_wrench_blend", false, g_c.wrenchSwipe));
+				}
+				Part&              part = g_swipeParts[used++];
+				const RE::NiPoint3 across = ((a.outer - a.inner) + (b.outer - b.inner)) * 0.5f;
+				const RE::NiPoint3 along = ((a.inner + a.outer) - (b.inner + b.outer)) * 0.5f;
+				RE::NiPoint3       normal = across.Cross(along);
+				const float        nl = normal.Length();
+				if (!part.node || nl < 1e-4f) {
+					if (part.node && !part.node->GetAppCulled()) {
+						part.node->SetAppCulled(true);
+					}
+					continue;
+				}
+				normal = normal / nl;
+				const float s = std::max(across.Length(), along.Length());
+				RE::NiMatrix3 m = Columns(across / s, along / s, normal / s);
+				part.node->local.translate = (a.inner + a.outer + b.inner + b.outer) * 0.25f;
+				part.node->local.rotate = m;
+				part.node->local.scale = s;
+				if (part.node->GetAppCulled()) {
+					part.node->SetAppCulled(false);
+				}
+				const float ageA = std::clamp((g_clock - a.t) / kSwipeLife, 0.0f, 1.0f);
+				const float ageB = std::clamp((g_clock - b.t) / kSwipeLife, 0.0f, 1.0f);
+				if (auto* material = part.shader ? static_cast<RE::BSEffectShaderMaterial*>(part.shader->material) : nullptr) {
+					for (int k = 0; k < 2; ++k) {
+						material->texCoordOffset[k] = { 0.0f, ageA };
+						material->texCoordScale[k] = { 1.0f, std::max(ageB - ageA, 1e-3f) };
+					}
+				}
+				Tint(part, g_c.wrenchSwipe, 1.0f - 0.5f * (ageA + ageB));
+			}
+		}
+		for (std::size_t i = used; i < g_swipeParts.size(); ++i) {
+			if (g_swipeParts[i].node && !g_swipeParts[i].node->GetAppCulled()) {
+				g_swipeParts[i].node->SetAppCulled(true);
+			}
+		}
 	}
 
 	void BombGlow(std::uint32_t a_id, const RE::NiPoint3& a_at)

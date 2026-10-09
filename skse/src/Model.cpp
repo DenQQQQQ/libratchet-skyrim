@@ -863,6 +863,15 @@ namespace Model
 		return hand->world.translate;
 	}
 
+	std::optional<RE::NiTransform> HeldWrench()
+	{
+		auto* wrench = g_wrench.node.get();
+		if (!wrench || !wrench->parent || wrench->GetAppCulled() || wrench->parent == s.model.get() || Combat::ThrownWrench()) {
+			return std::nullopt;
+		}
+		return wrench->world;
+	}
+
 	std::optional<RE::NiTransform> PistolLocator(std::string_view a_name)
 	{
 		auto* gun = g_pistol.node.get();

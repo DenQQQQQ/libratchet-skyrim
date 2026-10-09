@@ -45,6 +45,8 @@ namespace Model
 	std::string_view CurrentClip();
 	// Where his gun hand is (his igLoc_RT_gunAttach, game units), once his model is posed.
 	std::optional<RE::NiPoint3> GunHand();
+	// The OmniWrench in his hand (drawn there, not thrown): where it is in the world.
+	std::optional<RE::NiTransform> HeldWrench();
 	// A locator of the Burst Pistol in his hand (its glTF name: igLoc_bulletEmit,
 	// igLoc_shell_eject), in the world, while it's drawn.
 	std::optional<RE::NiTransform> PistolLocator(std::string_view a_name);

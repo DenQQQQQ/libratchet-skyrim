@@ -44,6 +44,11 @@ namespace Fx
 	// under it if it's near.
 	void Explosion(const RE::NiPoint3& a_at, float a_radius, std::optional<float> a_ground);
 
+	// The wrench's swing streak (the sandbox's SwipeStreak): each frame he swings, where the wrench
+	// in his hand is (its world transform: its handle along its y); a ribbon through where its head
+	// has been over the last 0.12 s, fading with age. nullopt when he isn't swinging.
+	void Swipe(std::optional<RE::NiTransform> a_wrench);
+
 	// A wrench hit (a_dir from him to the target, unit), its sparks bouncing at a_floor.
 	void WrenchHit(const RE::NiPoint3& a_at, const RE::NiPoint3& a_dir, std::optional<float> a_floor);
 	// The Hyper-Strike landing at a_at on the ground (a_radius: its reach, game units).
