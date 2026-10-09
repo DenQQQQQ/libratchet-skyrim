@@ -27,6 +27,10 @@ repository is unchanged.
   full hold peaks at 1.500 m in both, shorter holds within 0.02 m, the double jump at 2.800 m in
   both, a ground dash 7.00 m (6.99), and every landing within one frame of the replay (see
   [MODLOG.md](MODLOG.md)).
+- **Walls and ledges,** by Rift Apart's rules: jumping at a wall he sticks to it, slides, and
+  jumps off it on a press (once per jump on Skyrim's walls, which mark none for wall jumps). He
+  catches a lip with a real drop below it, hangs, and climbs up on a press. Both are checked in
+  game on placed walls.
 - A glide comes down softly: the height it sinks doesn't count toward fall damage.
 - **He fights:** the OmniWrench (the sim's three-swing combo with its lunges, the Hyper-Strike in
   the air, the throw), the Burst Pistol (hip fire and aimed, strafing) and the Shatterbomb (hold
