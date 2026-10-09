@@ -127,7 +127,8 @@ selected, and follows the log.
   bear: he mustn't take its body for a wall. Last, a ledge: from a platform placed 4 m up he
   jumps at a capped wall 3 m ahead, and has to catch its lip and climb up on a new press.
 - Then it fights a cow (placed ahead with its AI off and 1000 health): the wrench combo, a
-  Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb. Each passes
+  Hyper-Strike, the pistol from the hip and aimed, a wrench throw and a Shatterbomb (also in
+  first person). Each passes
   if the cow lost at least the expected damage (× the save's difficulty multiplier) from enough
   hits.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,

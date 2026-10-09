@@ -573,5 +573,7 @@ fixed:
 - Smaller: the throw's log said 0.0 m for throws aimed past 30 m. The glove refilled only while
   the Shatterbomb was out; now it refills whichever gun is out. Looping clips' times (his and
   Clank's) wrap, so hours of idling can't run their float precision out.
-- 22/22 pass. The knockdown case has no automated test: the test's own step doesn't run while
-  he's off foot.
+- A new case throws a Shatterbomb in first person. The throw and the blast work there
+  (screenshots: the cow 8 m out, the blast on it), and the next case is back behind him.
+  **23/23 pass.** The knockdown case has no automated test: the test's own step doesn't run
+  while he's off foot.

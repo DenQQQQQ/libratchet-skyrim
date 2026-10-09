@@ -55,6 +55,8 @@ namespace AutoTest
 			// The Shatterbomb out for this fight (fire held winds a throw up, let go throws); the
 			// Burst Pistol again after it.
 			bool        shatterbomb = false;
+			// In first person (his model isn't drawn there; what he throws still has to be).
+			bool        firstPerson = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -84,6 +86,7 @@ namespace AutoTest
 			// A Shatterbomb (170.5 damage within 1 m of its blast, 85.25 at 6 m): wound up 0.4 s,
 			// thrown at the cow 8 m ahead.
 			{ .name = "shatterbomb", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true },
+			{ .name = "shatterbomb in first person", .hold = -1.0f, .duration = 3.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 0.4f, .minDamage = 150.0f, .shatterbomb = true, .firstPerson = true },
 			// Then a neutral hunter (EncHunterNordM), awake, who has to fight back once hit (the
 			// owner: hits raised no hostility until a kill).
 			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },
@@ -942,6 +945,12 @@ namespace AutoTest
 			}
 			if (c.duration > 0.0f) {
 				Combat::Select(c.shatterbomb ? Combat::Gun::kShatterbomb : Combat::Gun::kBurstPistol);
+				if (c.firstPerson) {
+					if (auto* camera = RE::PlayerCamera::GetSingleton()) {
+						camera->ForceFirstPerson();
+					}
+					s.thirdPerson = false;  // the next case puts the camera back behind him
+				}
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
 				s.bounty = WhiterunBounty();
