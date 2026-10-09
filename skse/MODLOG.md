@@ -650,3 +650,60 @@ shots wanted.
   ported from the sandbox into a library both use, and comes next.
 - Known: the game sometimes crashes as the test quits it (a pathfinding job reading Whiterun's
   navmesh, twice in two days, both right after "done"). Not seen in play.
+
+## 2026-10-09: his clips as the sandbox picks them, his steps, Rift Apart's shots
+
+- **The clips.** A new crate, `crates/libratchet-anim`, ports the sandbox's clip choice
+  (`ratchet_model.rs`: play_clips, setup_clips, lean_into_turns, blend_swing_loop) without Bevy,
+  with Bevy 0.19's crossfades and clip clocks; ratchet.dll gives it as `ratchet_anim_*` (C API
+  version 2). Each frame the plugin hands it the sim, how he really moves and the weapons' state,
+  and blends the layers it gets back as Bevy's graph does (`Anim::Library::Mix`, the upper body
+  from RC_spine_1). So the strafe jumps and landings, the glide's intro and its lean into turns,
+  the run's leans, the eight dash directions, the grips, aim, recoil, throw and catch layers are
+  the sandbox's. The plugin's own clip choice stays only as a fallback (no animator in the DLL).
+  In game: the animator is on over 170 clips; the movement, pistol, wrench, wall, ledge and bear
+  cases pass. Screenshots show the glide with the heli-pack out and the aimed pistol stance.
+- **His steps and efforts.** The sandbox sounds steps, foley, swishes, voice efforts and the
+  wrench's swing from the clips' own events, on the clip clock. The sound converter now writes
+  `clip_sounds.txt` (428 sounds: each clip's sound events mapped to moments, its Footstep events
+  as steps, the swings' from the wrench's clips, the landing's left to the touchdown), and the
+  plugin plays them as the animator's clock passes them (`ratchet_anim_sound_due`). The moves'
+  own sounds are then the sandbox's five: the jump's push-off, the landing, the dashes, the
+  heli-pack and the slam. Before, he had no steps at all.
+- **Test fix: the wall jump.** It failed now and then: he met the wall 2.0 m out at 1.05 m up,
+  and below 1.0 m the sim drops him off it, before the test's second press 0.3 s on. The wall is
+  2.4 m out: he meets it near the top of his jump (1.44 m up) and jumps off.
+- **Rift Apart's shots.** The game's effect art (extracted by tools/extract_riftapart_vfx.py)
+  is converted by `skse/tools/ratchet_vfx_to_skyrim.py` (new; build.ps1 runs it): its 19
+  textures as DDS, a camera quad per texture (added and blended), its 7 effect meshes, all with
+  Skyrim's effect shader, and `fx.ini` with the game's effect colours. Two findings on the way:
+  SSE's effect shader block has no environment-map fields (those are Fallout 4's), and Skyrim's
+  effect shaders want tangents in the vertex layout (5328 of the game's own 6633 effect shapes
+  have them; none of the textured ones go without). `Fx.cpp` ports the sandbox's vfx.rs: every
+  piece moves, grows, fades and shifts colour over its life as there (camera-facing, stretched
+  along its velocity or a trail, spinning, bouncing), each copy with its own material.
+  - The Burst Pistol flies its own bolts now, as the sandbox does: 80 m/s to 45 m (the game's
+    ShotPrius), a ray each step; the first thing it meets stops it, a body takes the shot's damage
+    (the hit raises the assault and combat), level geometry takes a mark. With them: the muzzle
+    flash at the gun's igLoc_bulletEmit, the tracer, its glow and the streak behind it, the smoke
+    trail, the impact (flare, glow, sparks bouncing off, smoke, the glowing bullet mark) and a
+    spent shell tumbling out of igLoc_shell_eject. Without the art, Skyrim's spell bolt as before.
+  - The Shatterbomb's blast (flash, fireball, the shockwave dome, crystal shards, smoke, debris,
+    the scorch with its embers), the wrench's hits, the Hyper-Strike's landing and the thrown
+    wrench's trail have theirs too. Skyrim's lightning-rune look is only the fallback now.
+  - Hung first under Skyrim's shadow scene node, nothing was drawn. Under the player's cell's 3D
+    (the root undoing that node's transform) it is: the screenshots show the blast's fireball,
+    shards and dome at the cow, and the pistol's green flash at his hand. Marks sit 1-2 game units
+    off what they're on (the sandbox's 4-10 mm is lost in Skyrim's depth buffer).
+- **Tests.**
+  - A new case jumps while aiming: the sandbox's choice plays `strafe_jump_idle`. Aiming, the sim
+    jumps Rift Apart's strafe jump (1.0 m, not 1.5 m), which the flat replay can't follow (it
+    doesn't aim): that case checks the clip only.
+  - "Hitting a guard is a crime" failed in the full suite: the guard fought back, but no bounty.
+    Bisected: no single case before it caused it; a bounty came exactly when a guard on patrol was
+    near enough to see the hit. The victim alone never raised one. The case places a witness
+    guard 4 m to the side now, and the test's clearing of hostiles spares him and pauses during
+    the case (it killed the witnesses before they could report).
+  - The game crashed now and then as the test quit it, in a pathfinding job reading Whiterun's
+    navmesh (three times, each a second after "done", with actors in combat). The test now turns
+    AI off (`ToggleAI`) and waits 1.5 s before quitting; no crash since.

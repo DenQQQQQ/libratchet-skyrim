@@ -3,6 +3,7 @@
 
 #include "AutoTest.h"
 #include "Combat.h"
+#include "Fx.h"
 #include "Input.h"
 #include "Model.h"
 #include "Physics.h"
@@ -85,6 +86,7 @@ namespace Jump
 			std::vector<Ratchet::Tick> ticks;         // this jump's (or dash's) frames, for the sandbox replay
 			RatchetVec3       startVelocity{};        // his velocity as it started (sim axes)
 			float             airborne = 0.0f;        // seconds the sim has had him off the ground
+			std::optional<float> lastGround;          // the ground's distance the sim stepped with, metres
 		};
 		Host g;
 
@@ -284,11 +286,42 @@ namespace Jump
 			return Moving(a_ctrl) ? "JumpDirectionalStart" : "JumpStandingStart";
 		}
 
-		// Rift Apart's sounds for this step's moves (the game's own events for them).
+		// Rift Apart's sounds for this step's moves (the game's own events for them). With his
+		// clips sounding his steps, efforts, swishes and swings (Model::ClipSounds), only what the
+		// sandbox plays from the moves themselves: the jump's push-off, the landing, the dashes,
+		// the heli-pack and the slam.
 		void MoveSounds(RE::PlayerCharacter* a_player, const RatchetStepResult& a_r, std::uint32_t a_before, float a_airborne)
 		{
 			const RE::NiPoint3 at = a_player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 1.0f * UnitsPerMetre() };
 			const auto e = a_r.events;
+			if (Model::ClipSounds()) {
+				if (e & RATCHET_EVENT_JUMPED) {
+					Sounds::Play("footstep_jump", at);
+				}
+				if (e & RATCHET_EVENT_LANDED && !(a_before == RATCHET_STATE_FALL && a_airborne <= kBriefFall)) {
+					Sounds::Play("land", at);
+					Sounds::Play("footstep_land", at);
+				}
+				if (e & RATCHET_EVENT_DASHED) {
+					Sounds::Play("phantom_dash", at);
+				}
+				if (e & RATCHET_EVENT_AIR_DASHED) {
+					Sounds::Play("air_dash", at);
+				}
+				if (e & RATCHET_EVENT_GLIDE_STARTED) {
+					Sounds::Play("heli_extend", at);
+				}
+				if (a_r.state == RATCHET_STATE_GLIDE) {
+					Sounds::Loop("heli_loop", at);
+				} else if (a_before == RATCHET_STATE_GLIDE) {
+					Sounds::Stop("heli_loop");
+					Sounds::Play("heli_retract", at);
+				}
+				if (e & RATCHET_EVENT_SMASH_IMPACT) {
+					Sounds::Play("wrench_slam", at);
+				}
+				return;
+			}
 			if (e & (RATCHET_EVENT_JUMPED | RATCHET_EVENT_WALL_JUMPED | RATCHET_EVENT_LEDGE_JUMPED)) {
 				Sounds::Play("jump", at);
 				Sounds::Play("jump_swish", at);
@@ -704,6 +737,7 @@ namespace Jump
 			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(feet));
 			g_traceRays = false;
 			const float airborne = g.airborne;
+			g.lastGround = contact.has_ground_distance ? std::optional(contact.ground_distance) : std::nullopt;
 			g.airborne = r.state != RATCHET_STATE_GROUND ? g.airborne + a_dt : 0.0f;
 			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0, in.melee != 0 };
 
@@ -996,7 +1030,9 @@ namespace Jump
 												  .ledgeMove = g.last.ledge_move, .verticalSpeed = g.last.velocity.y,
 												  .meleeSwing = g.last.melee_swing, .strafing = Combat::Strafing(), .strafeAngle = strafeAngle,
 												  .aimAt = Combat::AimTarget(), .shots = Combat::Shots(), .throws = Combat::Throws(),
-												  .hasFacing = true, .facingYaw = g.last.facing_yaw });
+												  .hasFacing = true, .facingYaw = g.last.facing_yaw, .sim = g.sim, .groundDistance = g.lastGround });
+					// The weapons' effects, after his pose (they start at his gun's muzzle).
+					Fx::Update(dt);
 				}
 			}
 			static inline REL::Relocation<decltype(Update)> _Update;

@@ -63,6 +63,25 @@ namespace Combat
 	std::uint32_t Shots();
 	std::uint32_t Throws();
 
+	// What his clips need from the weapons each frame (libratchet-anim's input, as the sandbox's
+	// arsenal and wrench keep it).
+	struct AnimState
+	{
+		bool          shatterbomb = false;  // the Shatterbomb out (else the Burst Pistol)
+		bool          aiming = false;       // the aim button held
+		bool          trigger = false;      // the fire button held
+		float         stance = 0.0f;        // seconds left of strafing after the newest shot
+		std::uint32_t shots = 0;
+		std::uint32_t grenadeThrows = 0;
+		bool          cooking = false;      // a Shatterbomb throw winding up
+		std::uint32_t equips = 0;           // weapons drawn so far
+		RE::NiPoint3  aimAt;                // what the crosshair is on (game units)
+		bool          wrenchOut = false;    // from a throw until just after its catch
+		std::uint32_t wrenchThrows = 0;
+		std::uint32_t wrenchCatches = 0;
+	};
+	AnimState ForAnimation();
+
 	// Tests: the buttons, as if held (nullopt gives them back).
 	struct TestButtons
 	{

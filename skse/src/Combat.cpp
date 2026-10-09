@@ -2,6 +2,7 @@
 #include "Combat.h"
 
 #include "AutoTest.h"
+#include "Fx.h"
 #include "Input.h"
 #include "Jump.h"
 #include "Model.h"
@@ -29,6 +30,9 @@ namespace Combat
 		constexpr float kAimedRate = 3.0f;
 		constexpr float kHipRate = 6.0f;
 		constexpr float kRange = 45.0f;
+		// Its bolt (ShotPrius InitialMotion): 80 m/s, no gravity. With Rift Apart's effect art the
+		// plugin flies it, as the sandbox does; without, Skyrim's spell bolt does.
+		constexpr float kBoltSpeed = 80.0f;
 		// Firing from the hip, he keeps strafing this long after the last shot (the sandbox's).
 		constexpr float kStrafeAfterShot = 0.1f;
 
@@ -81,6 +85,16 @@ namespace Combat
 			std::string  sounds;    // its throw's sounds belong to it (its flight's hum stops at the blast)
 		};
 
+		// A Burst Pistol bolt the plugin flies (game units).
+		struct Bolt
+		{
+			RE::NiPoint3  at;
+			RE::NiPoint3  dir;
+			float         travelled = 0.0f;
+			float         damage = 0.0f;
+			std::uint32_t look = 0;  // its effect (Fx::Bolt)
+		};
+
 		struct State
 		{
 			std::optional<TestButtons> test;
@@ -109,6 +123,9 @@ namespace Combat
 			float          thrownFor = 0.0f;    // seconds out
 			float          thrownFar = 0.0f;    // metres out at most
 			std::vector<RE::ActorHandle> struck;  // hit by this throw already
+			float          throwAnim = 0.0f;    // seconds left of his throw's clip (the sandbox's throw_anim)
+			std::uint32_t  catches = 0;
+			std::uint32_t  equips = 0;          // weapons drawn so far
 			// The guns: which is out, and the Shatterbomb's trigger as libarsenal's Weapon keeps it.
 			Gun               gun = Gun::kBurstPistol;
 			bool              pickHeld[2] = {};
@@ -123,6 +140,8 @@ namespace Combat
 			std::uint32_t     bombsMade = 0;  // for each bomb's sounds' name
 			// Shots on their way to someone: the assault they are, when the bolt gets there.
 			std::vector<std::pair<RE::ActorHandle, float>> shotAt;
+			// The pistol's own bolts in flight.
+			std::vector<Bolt> bolts;
 			float             sinceBlast = 100.0f;
 			// Where he was at the last step, and in which world (a worldspace, or an interior cell).
 			std::optional<RE::NiPoint3> lastAt;
@@ -230,6 +249,12 @@ namespace Combat
 				}
 				Deal(a_target, info.damage, stagger);
 				++hits;
+				// Where it lands: his side of their body, half their height up.
+				const RE::NiPoint3 at = NearestOfBody(a_target, me) + RE::NiPoint3{ 0.0f, 0.0f, a_target->GetHeight() * 0.5f };
+				RE::NiPoint3       way{ d.x, d.y, 0.0f };
+				const float        l = way.Length();
+				way = l > 1.0f ? way / l : RE::NiPoint3{ ahead.x, ahead.y, 0.0f };
+				Fx::WrenchHit(at, way, a_target->GetPositionZ());
 			});
 			SKSE::log::info("combat: swing {} hits {} ({:.1f} damage each)", a_r.melee_swing + 1, hits, info.damage * Settings::Get().damageMult);
 		}
@@ -251,6 +276,7 @@ namespace Combat
 				Deal(a_target, damage, 1.0f);
 				++hits;
 			});
+			Fx::WrenchSlam(me, radius * u);
 			SKSE::log::info("combat: slam hits {} ({:.1f} damage within {:.1f} m)", hits, damage * Settings::Get().damageMult, radius);
 		}
 
@@ -350,6 +376,10 @@ namespace Combat
 				}
 				c.struck.push_back(handle);
 				Deal(a_target, kThrowDamage, 0.5f);
+				RE::NiPoint3 way{ path.x, path.y, 0.0f };
+				const float  l = way.Length();
+				way = l > 1.0f ? way / l : RE::NiPoint3{ 1.0f, 0.0f, 0.0f };
+				Fx::WrenchHit(middle, way, a_target->GetPositionZ());
 				SKSE::log::info("combat: the thrown wrench hits");
 			});
 		}
@@ -379,6 +409,7 @@ namespace Combat
 				}
 				Strike(a_player, c.wrenchAt, now);
 			}
+			Fx::WrenchTrail(c.wrenchAt, now);
 			c.wrenchAt = now;
 			c.wrenchSpin = spin;
 			if (caught) {
@@ -387,6 +418,9 @@ namespace Combat
 				c.struck.clear();
 				Sounds::Stop("wrench_throw_loop");
 				Sounds::Play("wrench_catch", now);
+				// The sandbox's SHOW_AFTER: his throw's clip ends soon after the catch.
+				c.throwAnim = std::min(c.throwAnim, 0.35f);
+				++c.catches;
 				SKSE::log::info("combat: the wrench is back after {:.2f} s, {:.1f} m out at most", c.thrownFor, c.thrownFar);
 			} else {
 				Sounds::Loop("wrench_throw_loop", now);
@@ -415,6 +449,7 @@ namespace Combat
 				return;
 			}
 			c.gun = a_gun;
+			++c.equips;
 			// No throw kept through a switch (the sandbox: a throw wound up, switched away and back,
 			// went at once).
 			c.bombTrigger = false;
@@ -498,7 +533,14 @@ namespace Combat
 			c.tally.blasted += hits;
 			c.sinceBlast = 0.0f;
 			c.tally.damage += total;
-			Spells::Blast(a_at);
+			if (Fx::Available()) {
+				// The ground under it, if it's near (the sandbox's: within 1.5 m of 0.2 m above it).
+				const auto below = Physics::GroundDistance(a_at + RE::NiPoint3{ 0.0f, 0.0f, 0.2f * s * u }, 1.5f * s);
+				const auto ground = below ? std::optional(a_at.z + 0.2f * s * u - *below * u) : std::nullopt;
+				Fx::Explosion(a_at, kBlastOuter * s * u, ground);
+			} else {
+				Spells::Blast(a_at);
+			}
 			Sounds::Play("grenade_explode", a_at);
 			// The game's explosion shake reaches him in full within 30 m (MediumExplosion's radii).
 			if (a_player->GetPosition().GetDistance(a_at) < 30.0f * s * u) {
@@ -507,6 +549,52 @@ namespace Combat
 			AutoTest::OnMove("blast");
 			SKSE::log::info("combat: a Shatterbomb goes off {:.1f} m from him, hitting {} ({:.1f} damage in all)",
 				a_player->GetPosition().GetDistance(a_at) / u, hits, total);
+		}
+
+		// The pistol's bolts fly straight on at 80 m/s × scale to 45 m × scale, each step a ray
+		// (libarsenal's Projectile::step and the sandbox's sweep): the first thing it meets stops it.
+		// A body takes its damage (the hit raises the assault, as the wrench's do); level geometry
+		// takes a mark.
+		void FlyBolts(RE::PlayerCharacter* a_player, float a_dt)
+		{
+			const float s = Settings::Get().scale;
+			const float u = Units();
+			const float range = kRange * s * u;
+			for (std::size_t i = 0; i < c.bolts.size();) {
+				auto&              b = c.bolts[i];
+				const float        step = std::min(kBoltSpeed * s * u * a_dt, range - b.travelled);
+				const RE::NiPoint3 next = b.at + b.dir * step;
+				const auto         hit = Physics::Ray(b.at, next);
+				bool               done = false;
+				if (hit) {
+					auto* target = hit->ref ? hit->ref->As<RE::Actor>() : nullptr;
+					Fx::BoltTrail(b.at, hit->point);
+					Fx::MoveBolt(b.look, hit->point);
+					Fx::EndBolt(b.look);
+					Fx::BoltImpact(hit->point, hit->normal, target == nullptr);
+					Sounds::Play("bolt_impact", hit->point);
+					if (target && target != a_player && !target->IsDead()) {
+						Spells::Hit(target, b.damage, 0.0f);
+						c.tally.damage += b.damage;
+					}
+					done = true;
+				} else {
+					Fx::BoltTrail(b.at, next);
+					Fx::MoveBolt(b.look, next);
+					b.at = next;
+					b.travelled += step;
+					if (b.travelled >= range - 1.0f) {
+						Fx::EndBolt(b.look);
+						done = true;
+					}
+				}
+				if (done) {
+					b = c.bolts.back();
+					c.bolts.pop_back();
+				} else {
+					++i;
+				}
+			}
 		}
 
 		// The bombs fly (exactly, under constant gravity: libarsenal's Projectile::step) and go off
@@ -595,7 +683,9 @@ namespace Combat
 				c.spread = std::min(spread.max, c.spread + spread.grow);
 			}
 			c.spread = std::clamp(c.spread, spread.min, spread.max);
-			const RE::NiPoint3 muzzle = HandAt(a_player);
+			// From the gun's muzzle (its igLoc_bulletEmit), as the sandbox fires it, or his hand.
+			const auto         emit = Model::PistolLocator("igLoc_bulletEmit");
+			const RE::NiPoint3 muzzle = emit ? emit->translate : HandAt(a_player);
 			const auto [aim, something] = AimPoint();
 			RE::NiPoint3 dir = aim - muzzle;
 			const float  distance = dir.Length();
@@ -604,21 +694,33 @@ namespace Combat
 			}
 			dir.Unitize();
 			const RE::NiPoint3 shot = Scatter(dir, c.spread);
-			Spells::Shoot(muzzle, shot, kShotDamage * Settings::Get().damageMult);
-			// Who it's going to hit: Skyrim's bolt hurts them but raises nothing (the owner: the
-			// pistol made nobody hostile), so the assault is ours, when the bolt gets there.
-			if (const auto hit = Physics::Ray(muzzle, muzzle + shot * (kRange * Settings::Get().scale * Units()))) {
-				if (auto* target = hit->ref ? hit->ref->As<RE::Actor>() : nullptr; target && target != a_player && !target->IsDead()) {
-					c.shotAt.emplace_back(target->GetHandle(), hit->point.GetDistance(muzzle) / 2500.0f);
+			const float        damage = kShotDamage * Settings::Get().damageMult;
+			if (Fx::Available()) {
+				// Rift Apart's bolt: the plugin flies it (FlyBolts), with the game's flash, bolt and
+				// streak, and a spent shell out of the ejector.
+				Fx::MuzzleFlash(muzzle, shot);
+				c.bolts.push_back({ muzzle, shot, 0.0f, damage, Fx::Bolt(muzzle, shot) });
+				if (const auto eject = Model::PistolLocator("igLoc_shell_eject")) {
+					const auto ground = Physics::GroundDistance(eject->translate, 3.0f);
+					Fx::Shell(eject->translate, eject->rotate, ground ? std::optional(eject->translate.z - *ground * Units()) : std::nullopt);
+				}
+			} else {
+				Spells::Shoot(muzzle, shot, damage);
+				// Who it's going to hit: Skyrim's bolt hurts them but raises nothing (the owner:
+				// the pistol made nobody hostile), so the assault is ours, when the bolt gets there.
+				if (const auto hit = Physics::Ray(muzzle, muzzle + shot * (kRange * Settings::Get().scale * Units()))) {
+					if (auto* target = hit->ref ? hit->ref->As<RE::Actor>() : nullptr; target && target != a_player && !target->IsDead()) {
+						c.shotAt.emplace_back(target->GetHandle(), hit->point.GetDistance(muzzle) / 2500.0f);
+					}
+				}
+				if (something) {
+					// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
+					Sounds::Play("bolt_impact", aim, distance / 2500.0f);
 				}
 			}
 			Sounds::Play("pistol_shot", muzzle);
 			if (c.shotsInARow == 3) {
 				AutoTest::OnMove("shot");  // his aim pose is in by then
-			}
-			if (something) {
-				// The bolt arrives when Skyrim's bolt would (it flies at 2500 units/s).
-				Sounds::Play("bolt_impact", aim, distance / 2500.0f);
 			}
 			c.sinceShot = 0.0f;
 			++c.tally.shots;
@@ -725,6 +827,7 @@ namespace Combat
 		const bool throwHeld = t.throwWrench || Input::ControlHeld(s.throwControl);
 		if (throwHeld && !c.throwHeld && !c.thrown && c.releaseIn < 0.0f && CanFire(a_state)) {
 			c.releaseIn = kThrowRelease;
+			c.throwAnim = 1.4f;  // the sandbox's THROW_ANIM
 			c.throwView = a_view;
 		}
 		c.throwHeld = throwHeld;
@@ -747,6 +850,7 @@ namespace Combat
 			return;
 		}
 		c.simState = a_r.state;
+		c.throwAnim = std::max(0.0f, c.throwAnim - a_dt);
 		DropIfCarriedOff(a_player);
 		Refill(a_dt);
 		const bool wrench = a_r.state == RATCHET_STATE_MELEE || a_r.state == RATCHET_STATE_SMASH || a_r.state == RATCHET_STATE_SMASH_LAND;
@@ -771,6 +875,7 @@ namespace Combat
 		} else {
 			Shatterbomb(a_dt);
 		}
+		FlyBolts(a_player, a_dt);
 		for (auto& [target, in] : c.shotAt) {
 			in -= a_dt;
 			if (in <= 0.0f) {
@@ -801,6 +906,8 @@ namespace Combat
 			Sounds::StopOwned(b.sounds);
 		}
 		c.bombs.clear();
+		c.bolts.clear();
+		Fx::Clear();
 		c.bombIn = -1.0f;
 		c.bombTrigger = false;
 		c.cooking = false;
@@ -825,6 +932,7 @@ namespace Combat
 		if (c.thrown) {
 			Fly(a_player, a_dt);
 		}
+		FlyBolts(a_player, a_dt);
 		FlyBombs(a_player, a_dt);
 	}
 
@@ -851,6 +959,24 @@ namespace Combat
 	std::uint32_t Shots() { return c.shots; }
 
 	std::uint32_t Throws() { return c.throws; }
+
+	AnimState ForAnimation()
+	{
+		AnimState a;
+		a.shatterbomb = c.gun == Gun::kShatterbomb;
+		a.aiming = c.aim;
+		a.trigger = c.fire;
+		a.stance = std::max(0.0f, kStrafeAfterShot - c.sinceShot);
+		a.shots = c.shots;
+		a.grenadeThrows = c.bombThrows;
+		a.cooking = WindingUp();
+		a.equips = c.equips;
+		a.aimAt = c.aimAt ? *c.aimAt : AimPoint().first;
+		a.wrenchOut = c.thrown != nullptr || c.releaseIn >= 0.0f || c.throwAnim > 0.0f;
+		a.wrenchThrows = c.throws;
+		a.wrenchCatches = c.catches;
+		return a;
+	}
 
 	std::optional<std::pair<RE::NiPoint3, float>> ThrownWrench()
 	{

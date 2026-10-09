@@ -160,5 +160,34 @@ if ($Install) {
     } else {
         Write-Warning "No riftapart-assets\ratchet.glb: no Ratchet model (tools\extract_riftapart_ratchet.py makes it)"
     }
+
+    # His weapons' effect art (skse\tools\ratchet_vfx_to_skyrim.py): textures, the effect pieces'
+    # NIF templates and fx.ini's palette, converted again when the extracted art or the tools are
+    # newer than the last conversion.
+    $vfxSrc = Join-Path (Find-GameData "riftapart-assets") "vfx"
+    $vfxOut = Join-Path $here "..\target\skse\vfx"
+    $fxIni = Join-Path $vfxOut "SKSE\Plugins\RatchetMovement\fx.ini"
+    if (Test-Path $vfxSrc) {
+        $tools = Join-Path $here "tools"
+        $vstale = -not (Test-Path $fxIni)
+        if (-not $vstale) {
+            $made = (Get-Item $fxIni).LastWriteTime
+            $vstale = @(Get-ChildItem $vfxSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0
+        }
+        if ($vstale) {
+            Write-Host "Converting his weapons' effect art from $vfxSrc..."
+            uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_vfx_to_skyrim.py") --vfx $vfxSrc --out $vfxOut | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "converting the effect art failed" }
+        }
+        # No stale files from an older conversion.
+        foreach ($old in "meshes\RatchetMovement\fx", "textures\RatchetMovement\fx") {
+            $p = Join-Path $ModDir $old
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+        }
+        Copy-Item -Recurse -Force (Join-Path $vfxOut "*") $ModDir
+        Write-Host "His weapons' effects from $vfxOut"
+    } else {
+        Write-Warning "No $vfxSrc`: no effect art for his weapons (tools\extract_riftapart_vfx.py makes it)"
+    }
     Write-Host "Installed to $dest"
 }

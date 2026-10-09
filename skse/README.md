@@ -95,6 +95,22 @@ picks and blends his clips by the sandbox's rules. Clank hangs on Ratchet's `Cla
 INI: `bRatchet = 0` keeps the Dragonborn, `bClank = 0` leaves Clank off. `skse/tools/nif.py` is
 the NIF reader/writer the converter uses.
 
+His sounds (`skse/tools/ratchet_sounds_to_skyrim.py`) come with `clip_sounds.txt`: the steps,
+foley, swishes, efforts and swings his clips call for, played on the clip clock as the sandbox
+plays them.
+
+## His weapons' effects
+`build.ps1 -Install` also converts the game's effect art (`riftapart-assets/vfx`, made by
+`tools/extract_riftapart_vfx.py`) with `skse/tools/ratchet_vfx_to_skyrim.py` into
+`target/skse/vfx` and the mod: `textures/RatchetMovement/fx/*.dds`, a camera quad per texture
+(`meshes/RatchetMovement/fx/quad_<texture>_add.nif` and `_blend.nif`), the effect meshes
+(muzzle flash, tracer, projectile, shockwave dome, impact blasts, shards, the pistol's shell), all
+with Skyrim's effect shader, and `SKSE/Plugins/RatchetMovement/fx.ini` (the game's effect
+colours). `src/Fx.cpp` builds the sandbox's effects from them (`apps/sandbox/src/vfx.rs`): the
+Burst Pistol's flash, bolt, streak, trail, impacts and shells (the plugin flies the bolts itself
+then, at the game's 80 m/s), the Shatterbomb's blast, the wrench's hits, the Hyper-Strike's landing
+and the thrown wrench's trail. Without the art, Skyrim's spell bolt and rune explosion stand in.
+
 ## Checking the jump
 At load the plugin runs libratchet's flat-floor jump on its own (the same test as the sandbox
 and `crates/libratchet/tests/movement.rs`) and logs the apex for a tap and for a full hold. Every
@@ -165,7 +181,12 @@ options: `-NoBuild`, `-HoldEnd <s>`, `-CameraYaw <radians>` (2.5 looks at his fr
   asked (a wall). When Skyrim's state loses him over a bump with the ground still within 0.35 m,
   the controller is held in its air state with the sim's velocity, along the slope under him and
   up a step ahead (`bNativeGround = 0` does that all the time, the older way).
-- **Animations.** With `bRatchet = 1` his own clips play. Skyrim's behaviour graph (the hidden
+- **Animations.** With `bRatchet = 1` his own clips play, picked as the sandbox picks them:
+  `crates/libratchet-anim` (through ratchet.dll's `ratchet_anim_*`) reads the sim's state and his
+  weapons each frame and gives the clips to blend, each at a time and a weight, with the sandbox's
+  crossfades (strafe jumps and landings, the glide's intro and lean, the run's leans, the
+  directional dashes, the grips, aim, recoil and throw layers). The plugin samples and blends them
+  as Bevy's animation graph does (`Anim::Library::Mix`). Skyrim's behaviour graph (the hidden
   Dragonborn's, or the visible one with `bRatchet = 0`) gets its jump events: a takeoff for each
   jump and double jump, `JumpFall` at each top (alternated with `JumpFallDirectional` every 4 s,
   since the vanilla fall lands itself at 5.2 s), and the matching landing (INI `bAnimations`).

@@ -13,6 +13,13 @@ tools/extract_riftapart_sounds.py) and writes, into a folder laid out like Skyri
 
   Files are paths under Data (Sound\\FX\\RatchetMovement\\run_foley\\1060039170.wav), each with
   its length (loops start their next round when it's over).
+- SKSE/Plugins/RatchetMovement/clip_sounds.txt, the moments his clips sound and when, as the
+  sandbox reads them (apps/sandbox/src/ratchet_model.rs clip_sounds): from the converter's
+  manifests next to the sounds folder (ratchet.json, and wrench.json for the swings), each clip's
+  sound events (mapped to moments by sounds.json; silent ones left out, and the landing's, which
+  plays at touchdown instead) and its Footstep events, one line each:
+
+      <clip> <seconds> <moment>
 
 These are game data: the output stays on this PC (target/ and the MO2 mod), never in the repo.
 """
@@ -24,6 +31,41 @@ import numpy as np
 import soundfile as sf
 
 SOUND_DIR = "Sound\\FX\\RatchetMovement"
+# The swings: the wrench's own clips sound them in the game (the sandbox's MELEE_CLIPS).
+MELEE_CLIPS = ("melee_1", "melee_2", "melee_3")
+
+
+def clip_sounds(manifests, events):
+    """Each clip's sounds, "<clip> <seconds> <moment>" lines: an event both manifests call for at
+    nearly the same time once, footsteps at the clips' Footstep events (a step at the very end of
+    a looping clip is the one at its start)."""
+    out = {}
+    for path, only_swings in manifests:
+        if not os.path.exists(path):
+            continue
+        doc = json.load(open(path, encoding="utf-8"))
+        for name, a in doc.get("animations", {}).items():
+            if only_swings and name not in MELEE_CLIPS:
+                continue
+            raw = out.setdefault(name, [])
+            for t, event in a.get("sounds", []):
+                if not any(e == event and abs(u - t) < 0.1 for u, e in raw):
+                    raw.append((float(t), event))
+            end = float(a.get("seconds", 1e9))
+            for t in a.get("events", {}).get("Footstep", []):
+                def near(u, t=t):
+                    return abs(u - t) < 0.1 or (t > end - 0.05 and u < 0.05)
+                if not any(e == "footstep" and near(u) for u, e in raw):
+                    raw.append((float(t), "footstep"))
+    lines = []
+    for name, raw in sorted(out.items()):
+        for t, event in sorted(raw):
+            if event == "Play_FOL_ratchet_land":
+                continue  # the sandbox plays the landing at touchdown instead
+            moment = event if event == "footstep" else events.get(event)
+            if moment:
+                lines.append(f"{name} {t:.4f} {moment}")
+    return lines
 
 
 def main():
@@ -61,6 +103,14 @@ def main():
     with open(txt, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
     print(f"{len(manifest['moments'])} moments, {len(converted)} files, {total / 1e6:.1f} MB of WAV; {txt}")
+
+    assets = os.path.dirname(os.path.abspath(a.sounds))
+    clips = clip_sounds([(os.path.join(assets, "ratchet.json"), False), (os.path.join(assets, "wrench.json"), True)],
+                        manifest.get("events", {}))
+    clip_txt = os.path.join(a.out, "SKSE", "Plugins", "RatchetMovement", "clip_sounds.txt")
+    with open(clip_txt, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(clips) + "\n")
+    print(f"{len(clips)} clip sounds; {clip_txt}")
 
 
 if __name__ == "__main__":

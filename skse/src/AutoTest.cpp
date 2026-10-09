@@ -65,6 +65,10 @@ namespace AutoTest
 			float       rampDeg = 0.0f;
 			RE::FormID  climb = 0;
 			float       minClimb = 0.0f;
+			// The aim button held through it (he strafes), and a clip whose name starts with this
+			// that has to play in it (the sandbox's choice, from libratchet-anim).
+			bool        aimHeld = false;
+			const char* wantClip = nullptr;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -80,6 +84,7 @@ namespace AutoTest
 			{ "full hold", 0.5f },
 			{ "standing jump steered forward", 0.5f, 0.0f, true },
 			{ "running jump", 0.5f, 0.8f, true },
+			{ .name = "strafe jump", .hold = 0.5f, .aimHeld = true, .wantClip = "strafe_jump" },
 			{ "double jump", 0.3f, 0.0f, false, 0.4f, 0.1f },
 			{ "glide", 0.3f, 0.0f, false, 0.4f, 3.0f },
 			{ "dash", -1.0f, 0.0f, true, 0.0f, 0.0f, 0.0f },
@@ -93,7 +98,7 @@ namespace AutoTest
 			{ .name = "run up a 30 degree ramp", .hold = -1.0f, .runFor = 2.0f, .rampDeg = 30.0f, .minClimb = 4.0f },
 			{ .name = "run up stairs", .hold = -1.0f, .runFor = 2.5f, .climb = 0x000C9B5D, .minClimb = 4.5f },
 			// A wall placed 2 m ahead (Whiterun's test spot has none): a full jump at it.
-			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.0f },
+			{ .name = "wall jump", .hold = 0.5f, .airStick = true, .wallAt = 2.4f },
 			{ .name = "wrench combo", .hold = -1.0f, .airStick = true, .duration = 2.5f, .targetAt = 1.3f, .melee = { 0.0f, 0.2f, 0.45f }, .minDamage = 55.0f, .minHits = 3 },
 			{ .name = "hyper-strike", .hold = 0.3f, .duration = 2.5f, .targetAt = 1.5f, .melee = { 0.35f, -1.0f, -1.0f }, .minDamage = 45.0f, .minHits = 1 },
 			{ .name = "burst pistol", .hold = -1.0f, .duration = 2.0f, .targetAt = 8.0f, .fireFrom = 0.0f, .fireTo = 1.0f, .minDamage = 30.0f },
@@ -110,7 +115,7 @@ namespace AutoTest
 			// owner: hits raised no hostility until a kill).
 			{ .name = "a hit makes him fight", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 15.0f, .minHits = 1, .awake = true, .target = 0x00073FBF },
 			// And a Whiterun guard (GuardWhiterunImperialExterior): hitting him is an assault.
-			{ .name = "hitting a guard is a crime", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 0.0f, .minHits = 1, .awake = true, .target = 0x001000EC, .crime = true },
+			{ .name = "hitting a guard is a crime", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.6f, -1.0f, -1.0f }, .minDamage = 0.0f, .minHits = 1, .awake = true, .target = 0x001000EC, .crime = true },
 			// A full jump at a bear (EncBear, its AI off) 2 m ahead: a big body, but no wall.
 			{ .name = "no wall on a bear", .hold = 0.5f, .airStick = true, .targetAt = 2.0f, .target = 0x00023A8A, .noWall = true },
 			// A ledge (a placed platform and wall: Rift Apart catches a lip only with 3 m of drop
@@ -175,10 +180,12 @@ namespace AutoTest
 			std::vector<std::string> shotsThisCase;  // moments already shot (a second apex gets "2")
 			// The fights' target: a cow (EncCow) with its AI off and plenty of health.
 			RE::ActorHandle target;
+			RE::ActorHandle witness;  // a crime case's: Skyrim's assault needs one besides the victim
 			bool            targetPlaced = false;
 			float           targetHealth = 0.0f;  // as the fight began
 			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
 			bool            heliSeen = false;     // Clank's heli-pack came out during this case
+			std::vector<std::string> clipsSeen;   // his clips during this case
 			// The statics placed for this case (removed after it), and what he did on the wall.
 			std::vector<RE::ObjectRefHandle> placed;
 			bool                        wallPlaced = false;
@@ -217,6 +224,11 @@ namespace AutoTest
 			SKSE::log::info("autotest: FAIL {}: {}", kCases[std::min<int>(s.index, static_cast<int>(std::size(kCases)) - 1)].name, a_what);
 		}
 
+		void RunConsole(const std::string& a_command);
+
+		// Seconds until the game quits once the run is done (< 0: not quitting).
+		float g_quitIn = -1.0f;
+
 		void Finish()
 		{
 			if (s.done) {
@@ -225,7 +237,11 @@ namespace AutoTest
 			s.done = true;
 			SKSE::log::info("autotest: done, {} passed, {} failed", s.passed, s.failed);
 			if (s.quit) {
-				RE::Main::GetSingleton()->quitGame = true;
+				// Quitting with actors pathing crashed the game now and then (a pathfinding job
+				// reading Whiterun's navmesh as it went away, right after "done"): AI off first,
+				// and a moment for the jobs under way to finish.
+				RunConsole("ToggleAI");
+				g_quitIn = 1.5f;
 			}
 		}
 
@@ -406,6 +422,7 @@ namespace AutoTest
 			s.dashPressed = false;
 			s.targetPlaced = false;
 			s.heliSeen = false;
+			s.clipsSeen.clear();
 			for (const auto& placed : s.placed) {
 				if (const auto ref = placed.get()) {
 					ref->Disable();
@@ -413,6 +430,10 @@ namespace AutoTest
 				}
 			}
 			s.placed.clear();
+			if (const auto witness = s.witness.get()) {
+				witness->KillImmediate();  // (not disabled: a disabled actor pathing crashed Skyrim's pathing thread)
+			}
+			s.witness = {};
 			s.jumpFrom.reset();
 			s.onLedge = -1.0f;
 			s.climbPress = 0.0f;
@@ -467,6 +488,19 @@ namespace AutoTest
 			}
 			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
 			target->SetPosition(*s.startPos + ahead * (a_metres * Units()) + RE::NiPoint3{ 0.0f, 0.0f, 0.2f * Units() }, true);
+			// A crime needs a witness: the victim alone raised no bounty (in the test runs, a bounty
+			// came only when a guard on patrol was near). Another guard, 4 m to the side, awake.
+			if (kCases[s.index].crime && !s.witness.get()) {
+				auto*      base = RE::TESForm::LookupByID<RE::TESNPC>(a_base);
+				const auto placed = base ? player->PlaceObjectAtMe(base, false) : nullptr;
+				if (auto* witness = placed ? placed->As<RE::Actor>() : nullptr) {
+					const RE::NiPoint3 side{ ahead.y, -ahead.x, 0.0f };
+					witness->SetPosition(*s.startPos + side * (4.0f * Units()) + ahead * (2.0f * Units()) + RE::NiPoint3{ 0.0f, 0.0f, 0.2f * Units() }, true);
+					witness->Update3DPosition(true);
+					s.witness = witness->GetHandle();
+					SKSE::log::info("autotest: {}: a witness, {}, 4 m to the side", kCases[s.index].name, witness->GetName());
+				}
+			}
 			// Its 3D too: with its AI off it stays where the last fight left it otherwise (pictures
 			// showed the cow by him while its body was hit 6 m out).
 			target->Update3DPosition(true);
@@ -759,8 +793,9 @@ namespace AutoTest
 			}
 			const float reach = 60.0f * Units();
 			const RE::Actor* target = Target();
+			const RE::Actor* witness = s.witness.get().get();
 			lists->ForEachHighActor([&](RE::Actor* a_actor) {
-				if (a_actor && a_actor != player && a_actor != target && !a_actor->IsDead() &&
+				if (a_actor && a_actor != player && a_actor != target && a_actor != witness && !a_actor->IsDead() &&
 					a_actor->GetPosition().GetDistance(player->GetPosition()) < reach && a_actor->IsHostileToActor(player)) {
 					SKSE::log::info("autotest: clearing {} (hostile to him)", a_actor->GetName());
 					a_actor->KillImmediate();
@@ -929,6 +964,12 @@ namespace AutoTest
 
 	Buttons Press(float a_dt, bool a_grounded, bool a_busy, std::uint32_t a_state)
 	{
+		if (g_quitIn > 0.0f) {
+			g_quitIn -= a_dt;
+			if (g_quitIn <= 0.0f) {
+				RE::Main::GetSingleton()->quitGame = true;
+			}
+		}
 		if (!s.active || s.done) {
 			return {};
 		}
@@ -937,7 +978,11 @@ namespace AutoTest
 			return {};
 		}
 		s.total += a_dt;
-		ClearHostiles();
+		// Not while a crime is being reported: the guards it turns hostile are its witnesses (cleared
+		// at once, the bounty came or not by where their patrol had them).
+		if (s.index >= static_cast<int>(std::size(kCases)) || !kCases[s.index].crime) {
+			ClearHostiles();
+		}
 		if (s.total > kTimeout + s.holdEnd) {
 			Fail(std::format("the run took over {:.0f} s", kTimeout));
 			Finish();
@@ -1055,6 +1100,11 @@ namespace AutoTest
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
 				s.bounty = WhiterunBounty();
+				if (auto* target = Target(); target && c.crime) {
+					auto* player = RE::PlayerCharacter::GetSingleton();
+					SKSE::log::info("autotest: {}: before the hit, {} is {}in combat, {}hostile to him; he's {}in combat", c.name, target->GetName(),
+						target->IsInCombat() ? "" : "not ", target->IsHostileToActor(player) ? "" : "not ", player->IsInCombat() ? "" : "not ");
+				}
 				if (auto* target = Target(); target && c.awake) {
 					target->EnableAI(true);  // awake from the fight's start (it would wander off while he settles)
 				}
@@ -1088,6 +1138,9 @@ namespace AutoTest
 		const float t = s.pressed;  // since the case started
 		s.pressed += a_dt;
 		s.heliSeen = s.heliSeen || Clank::HeliOut();
+		if (const std::string clip(Model::CurrentClip()); !clip.empty() && std::ranges::find(s.clipsSeen, clip) == s.clipsSeen.end()) {
+			s.clipsSeen.push_back(clip);
+		}
 		if (a_state == RATCHET_STATE_WALL_STICK && !s.stuckSeen) {
 			s.stuckSeen = true;
 			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && c.ledgeAt > 0.0f) {
@@ -1152,6 +1205,9 @@ namespace AutoTest
 				NextCase();
 			}
 			return {};
+		}
+		if (c.aimHeld) {
+			Combat::SetTestButtons(Combat::TestButtons{ .aim = true });
 		}
 		Buttons b;
 		b.jump = c.hold >= 0.0f && (t == 0.0f || t < c.hold);
@@ -1279,34 +1335,55 @@ namespace AutoTest
 				kCases[s.index].name, a_jump.distance, a_jump.landDz, a_jump.airTime);
 			return;
 		}
-		// The sandbox replayed the same frames (time steps, button and stick) on a flat floor, down
-		// to where he landed.
-		std::string bad;
-		if (std::abs(a_jump.apex - a_jump.sandboxApex) > kApexTolerance) {
-			bad += " apex";
-		}
-		if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance + a_jump.apexFrame) {
-			bad += " apex-time";
-		}
-		if (std::abs(a_jump.airTime - a_jump.sandboxAirTime) > kAirTimeTolerance + a_jump.landFrame) {
-			bad += " air-time";
-		}
-		if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {
-			bad += " landing-height";
-		}
-		if (std::abs(a_jump.distance - a_jump.sandboxDistance) > kDistanceTolerance) {
-			bad += " distance";
-		}
-		if (bad.empty()) {
-			++s.passed;
+		if (kCases[s.index].aimHeld) {
+			// Aiming, the sim jumps Rift Apart's strafe jump (lower); the flat replay doesn't aim,
+			// so its numbers aren't this jump's.
+			SKSE::log::info("autotest: {}: apex {:.3f} m at {:.3f} s, landed {:+.3f} m after {:.3f} s (aimed: not replayed)", kCases[s.index].name,
+				a_jump.apex, a_jump.apexTime, a_jump.landDz, a_jump.airTime);
 		} else {
-			++s.failed;
+			// The sandbox replayed the same frames (time steps, button and stick) on a flat floor,
+			// down to where he landed.
+			std::string bad;
+			if (std::abs(a_jump.apex - a_jump.sandboxApex) > kApexTolerance) {
+				bad += " apex";
+			}
+			if (std::abs(a_jump.apexTime - a_jump.sandboxApexTime) > kApexTimeTolerance + a_jump.apexFrame) {
+				bad += " apex-time";
+			}
+			if (std::abs(a_jump.airTime - a_jump.sandboxAirTime) > kAirTimeTolerance + a_jump.landFrame) {
+				bad += " air-time";
+			}
+			if (s.flatGround && std::abs(a_jump.landDz) > kFloorTolerance) {
+				bad += " landing-height";
+			}
+			if (std::abs(a_jump.distance - a_jump.sandboxDistance) > kDistanceTolerance) {
+				bad += " distance";
+			}
+			if (bad.empty()) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			SKSE::log::info(
+				"autotest: {} {}: apex {:.3f} m (sandbox {:.3f}) at {:.3f} s ({:.3f}) for a {:.3f} s hold, {:.2f} m across ({:.2f}), landed {:+.3f} m after {:.3f} s ({:.3f}){}",
+				bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
+				a_jump.hold, a_jump.distance, a_jump.sandboxDistance, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime,
+				bad.empty() ? "" : " - off:" + bad);
 		}
-		SKSE::log::info(
-			"autotest: {} {}: apex {:.3f} m (sandbox {:.3f}) at {:.3f} s ({:.3f}) for a {:.3f} s hold, {:.2f} m across ({:.2f}), landed {:+.3f} m after {:.3f} s ({:.3f}){}",
-			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_jump.apex, a_jump.sandboxApex, a_jump.apexTime, a_jump.sandboxApexTime,
-			a_jump.hold, a_jump.distance, a_jump.sandboxDistance, a_jump.landDz, a_jump.airTime, a_jump.sandboxAirTime,
-			bad.empty() ? "" : " - off:" + bad);
+		// A clip the sandbox picks for it has to have played.
+		if (const char* want = kCases[s.index].wantClip) {
+			const bool seen = std::ranges::any_of(s.clipsSeen, [&](const std::string& a_clip) { return a_clip.starts_with(want); });
+			if (seen) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			std::string clips;
+			for (const auto& clip : s.clipsSeen) {
+				clips += (clips.empty() ? "" : ", ") + clip;
+			}
+			SKSE::log::info("autotest: {} {}: {} {} (clips: {})", seen ? "PASS" : "FAIL", kCases[s.index].name, want, seen ? "played" : "never played", clips);
+		}
 		// A glide (the second press held on): Clank's heli-pack has to have come out.
 		if (kCases[s.index].againHold > 1.0f && Clank::Enabled()) {
 			if (s.heliSeen) {

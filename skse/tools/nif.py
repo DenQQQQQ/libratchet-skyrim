@@ -3,8 +3,8 @@
 
 It covers the blocks a skinned character model needs: NiNode, BSFadeNode, BSTriShape, NiSkinInstance,
 BSDismemberSkinInstance, NiSkinData, NiSkinPartition, BSLightingShaderProperty, BSShaderTextureSet,
-NiAlphaProperty and the simple extra data blocks. Other blocks are kept as raw bytes, so a file reads
-and writes back unchanged.
+NiAlphaProperty and the simple extra data blocks, and BSEffectShaderProperty for effect meshes. Other
+blocks are kept as raw bytes, so a file reads and writes back unchanged.
 
 Written from the NIF format as documented by the NifTools project (nif.xml). `python nif.py FILE`
 reads a file, checks every block against the size the header records for it, and writes it back
@@ -364,7 +364,7 @@ SHADER_TYPE_EXTRA = {
     5: "3f",       # skin tint: colour
     6: "3f",       # hair tint: colour
     7: "2f",       # parallax occlusion: max passes, scale
-    11: "f2f2f4f", # multilayer parallax: inner thickness, refraction scale, inner texture scale, envmap strength
+    11: "ff2ff",   # multilayer parallax: inner thickness, refraction scale, inner texture scale (u, v), envmap strength
     14: "4f",      # sparkle snow
     16: "f3f3f",   # eye envmap: scale, left and right reflection centres
 }
@@ -413,6 +413,51 @@ def write_lighting_shader(w, b):
     fmt = SHADER_TYPE_EXTRA.get(b["shader_type"], "")
     if fmt:
         w.pack(fmt, *b["type_extra"])
+
+
+# BSEffectShaderProperty: unlit effect shading (one texture, a base colour, falloff). Skyrim and
+# SSE files end at the greyscale texture: the env map, normal and env mask textures and the env
+# map scale after it are Fallout 4's and later's (nif.xml: BSVER >= 130), not SSE's (100).
+def read_effect_shader(r, b):
+    read_object_net(r, b)
+    b["flags1"] = r.u32()
+    b["flags2"] = r.u32()
+    b["uv_offset"] = list(r.unpack("2f"))
+    b["uv_scale"] = list(r.unpack("2f"))
+    b["source_texture"] = r.sized_string()
+    b["texture_clamp_mode"] = r.u8()
+    b["lighting_influence"] = r.u8()
+    b["env_map_min_lod"] = r.u8()
+    b["unused_byte"] = r.u8()
+    b["falloff_start_angle"] = r.f32()
+    b["falloff_stop_angle"] = r.f32()
+    b["falloff_start_opacity"] = r.f32()
+    b["falloff_stop_opacity"] = r.f32()
+    b["base_color"] = list(r.unpack("4f"))
+    b["base_color_scale"] = r.f32()
+    b["soft_falloff_depth"] = r.f32()
+    b["greyscale_texture"] = r.sized_string()
+
+
+def write_effect_shader(w, b):
+    write_object_net(w, b)
+    w.u32(b["flags1"])
+    w.u32(b["flags2"])
+    w.pack("2f", *b["uv_offset"])
+    w.pack("2f", *b["uv_scale"])
+    w.sized_string(b["source_texture"])
+    w.u8(b["texture_clamp_mode"])
+    w.u8(b["lighting_influence"])
+    w.u8(b["env_map_min_lod"])
+    w.u8(b["unused_byte"])
+    w.f32(b["falloff_start_angle"])
+    w.f32(b["falloff_stop_angle"])
+    w.f32(b["falloff_start_opacity"])
+    w.f32(b["falloff_stop_opacity"])
+    w.pack("4f", *b["base_color"])
+    w.f32(b["base_color_scale"])
+    w.f32(b["soft_falloff_depth"])
+    w.sized_string(b["greyscale_texture"])
 
 
 def read_texture_set(r, b):
@@ -468,6 +513,7 @@ BLOCKS = {
     "NiSkinData": (read_skin_data, write_skin_data),
     "NiSkinPartition": (read_skin_partition, write_skin_partition),
     "BSLightingShaderProperty": (read_lighting_shader, write_lighting_shader),
+    "BSEffectShaderProperty": (read_effect_shader, write_effect_shader),
     "BSShaderTextureSet": (read_texture_set, write_texture_set),
     "NiAlphaProperty": (read_alpha, write_alpha),
     "BSXFlags": (read_int_extra, write_int_extra),

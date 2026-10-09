@@ -65,6 +65,7 @@ namespace Anim
 	public:
 		bool Load(const std::filesystem::path& a_file);
 		const std::vector<Joint>& Joints() const { return _joints; }
+		const std::vector<Clip>&  Clips() const { return _clips; }
 		const Clip* Find(std::string_view a_name) const;
 
 		Pose Rest() const;

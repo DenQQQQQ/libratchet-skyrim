@@ -25,6 +25,10 @@ namespace Model
 		// The sim's facing (radians, atan2(x, z) in its axes): he turns the way Rift Apart turns him.
 		bool          hasFacing = false;
 		float         facingYaw = 0.0f;
+		// The sim, for his clips (libratchet-anim reads its state), and how far down the ground
+		// was at its last step (metres, if any was found).
+		const RatchetSim*    sim = nullptr;
+		std::optional<float> groundDistance;
 	};
 
 	// Reads the clips (at plugin load). False: no model (the files aren't installed).
@@ -32,10 +36,18 @@ namespace Model
 	bool Enabled();
 	// Each frame after Skyrim has moved the player.
 	void Update(RE::PlayerCharacter* a_player, float a_dt, const Drive& a_drive);
+	// After a load: no clip from before it.
+	void Reset();
+	// His clips sound his steps, efforts, swishes and swings (clip_sounds.txt, on the sandbox's
+	// clip clock): the moves' own sounds are then only those the sandbox plays from them.
+	bool ClipSounds();
 	// What clip plays (for logs and tests).
 	std::string_view CurrentClip();
 	// Where his gun hand is (his igLoc_RT_gunAttach, game units), once his model is posed.
 	std::optional<RE::NiPoint3> GunHand();
+	// A locator of the Burst Pistol in his hand (its glTF name: igLoc_bulletEmit,
+	// igLoc_shell_eject), in the world, while it's drawn.
+	std::optional<RE::NiTransform> PistolLocator(std::string_view a_name);
 
 	// Tests: hold off attaching him, and show some of his shapes only (-1 all, -2 none, else that
 	// one).

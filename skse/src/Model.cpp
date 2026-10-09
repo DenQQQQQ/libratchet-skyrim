@@ -5,6 +5,7 @@
 #include "Clank.h"
 #include "Combat.h"
 #include "Settings.h"
+#include "Sounds.h"
 
 namespace Model
 {
@@ -47,6 +48,15 @@ namespace Model
 			bool                      attachAllowed = true;
 			int                       showOnly = -1;
 			std::vector<RE::BSGeometry*> shapes;
+			// His clips as the sandbox picks them (libratchet-anim): what it plays this frame, and
+			// where he was (a jump of more than 5 m in a frame, or a new world, is a respawn).
+			RatchetAnim*                  anim = nullptr;
+			std::vector<RatchetAnimLayer> raw;
+			std::vector<Anim::Layer>      layers;
+			std::optional<RE::NiPoint3>   lastFeet;
+			const void*                   lastWorld = nullptr;
+			// The sounds each clip calls for: seconds into it, the moment.
+			std::unordered_map<std::string, std::vector<std::pair<float, std::string>>> clipSounds;
 		};
 		State s;
 
@@ -599,6 +609,78 @@ namespace Model
 			}
 		}
 
+		// His clips, as the sandbox's animation graph plays them: libratchet-anim picks them from
+		// the sim's state and his weapons, with their crossfades and clocks, and the library blends
+		// them as Bevy does (a_velocity: how he really moves, m/s, Skyrim's axes).
+		void Animate(RE::PlayerCharacter* a_player, const Drive& a_drive, const RE::NiPoint3& a_velocity, float a_dt)
+		{
+			const float        u = UnitsPerMetre();
+			const auto         weapons = Combat::ForAnimation();
+			const RE::NiPoint3 feet = a_player->GetPosition();
+			const void*        world = a_player->GetWorldspace() ? static_cast<const void*>(a_player->GetWorldspace()) :
+			                                                       static_cast<const void*>(a_player->GetParentCell());
+			const bool         respawned = s.lastFeet && (world != s.lastWorld || feet.GetDistance(*s.lastFeet) > 5.0f * u);
+			s.lastFeet = feet;
+			s.lastWorld = world;
+			const auto sim = [u](const RE::NiPoint3& a_p) { return RatchetVec3{ a_p.x / u, a_p.z / u, -a_p.y / u }; };
+
+			RatchetAnimInput in{};
+			in.dt = a_dt;
+			in.scale = Settings::Get().scale;
+			in.velocity = { a_velocity.x, a_velocity.z, -a_velocity.y };
+			in.feet = sim(feet);
+			in.has_ground_distance = a_drive.groundDistance ? 1 : 0;
+			in.ground_distance = a_drive.groundDistance.value_or(0.0f);
+			in.events = a_drive.events;
+			in.respawned = respawned ? 1 : 0;
+			in.slot = static_cast<std::uint8_t>(weapons.shatterbomb ? RATCHET_SLOT_SHATTERBOMB : RATCHET_SLOT_BURST_PISTOL);
+			in.aiming = weapons.aiming ? 1 : 0;
+			in.trigger = weapons.trigger ? 1 : 0;
+			in.stance = weapons.stance;
+			in.shots = weapons.shots;
+			in.grenade_throws = weapons.grenadeThrows;
+			in.cooking = weapons.cooking ? 1 : 0;
+			in.equips = weapons.equips;
+			in.aim_target = sim(weapons.aimAt);
+			in.wrench_throwing = weapons.wrenchOut ? 1 : 0;
+			in.wrench_throws = weapons.wrenchThrows;
+			in.wrench_catches = weapons.wrenchCatches;
+
+			const auto& clips = s.lib.Clips();
+			s.raw.resize(clips.size());
+			const std::uint32_t n = ratchet_anim_update(s.anim, a_drive.sim, &in, s.raw.data(), static_cast<std::uint32_t>(s.raw.size()));
+			s.layers.clear();
+			for (std::uint32_t i = 0; i < n; ++i) {
+				const auto& l = s.raw[i];
+				if (l.clip >= clips.size()) {
+					continue;
+				}
+				const auto kind = l.kind == RATCHET_LAYER_ADDITIVE        ? Anim::Layer::Kind::kAdditive :
+				                  l.kind == RATCHET_LAYER_BASE_UPPER_BODY ? Anim::Layer::Kind::kBaseUpperBody :
+				                                                            Anim::Layer::Kind::kBase;
+				s.layers.push_back({ &clips[l.clip], l.time, l.weight, kind });
+			}
+			s.lib.Mix(s.layers, s.pose);
+			const std::string_view picked = ratchet_anim_clip_name(s.anim);
+			if (picked != s.clipName && Settings::Get().traceJumps) {
+				SKSE::log::info("clip: {} ({} layers)", picked, s.layers.size());
+			}
+			s.clipName = picked;
+
+			// The sounds his clip calls for, on its clock (a frame after the pose, as the sandbox's).
+			RatchetAnimClock clock{};
+			if (!s.clipSounds.empty() && ratchet_anim_clock(s.anim, &clock) && clock.clip < clips.size()) {
+				if (const auto it = s.clipSounds.find(clips[clock.clip].name); it != s.clipSounds.end()) {
+					const RE::NiPoint3 at = feet + RE::NiPoint3{ 0.0f, 0.0f, 0.5f * Settings::Get().scale * u };
+					for (const auto& [t, moment] : it->second) {
+						if (ratchet_anim_sound_due(s.anim, t)) {
+							Sounds::Play(moment, at);
+						}
+					}
+				}
+			}
+		}
+
 		void PickClip(const Drive& a_drive, float a_speed, float a_vy, float a_dt)
 		{
 			const bool air = a_drive.simJump ? a_drive.simState != RATCHET_STATE_GROUND : !a_drive.grounded;
@@ -720,8 +802,42 @@ namespace Model
 			return false;
 		}
 		s.enabled = s.lib.Load(a_pluginDir / L"RatchetMovement" / L"ratchet.anim");
+		if (s.enabled) {
+			// The sandbox's clip choice, given his clips (no JumpPeak events in ratchet.anim: the
+			// swing jump plays at 1x).
+			s.lib.SetUpperBody("RC_spine_1");
+			std::vector<RatchetClipInfo> infos;
+			for (const auto& clip : s.lib.Clips()) {
+				infos.push_back({ clip.name.c_str(), clip.seconds, clip.rootDistance, -1.0f });
+			}
+			s.anim = ratchet_anim_new(infos.data(), static_cast<std::uint32_t>(infos.size()));
+			SKSE::log::info("ratchet model: {}", s.anim ? std::format("the sandbox's clip choice over {} clips", infos.size()) :
+			                                               "no animator from ratchet.dll: the plugin's own clip choice");
+			// skse\tools\ratchet_sounds_to_skyrim.py: "<clip> <seconds> <moment>" lines.
+			std::ifstream file(a_pluginDir / L"RatchetMovement" / L"clip_sounds.txt");
+			std::string   clip, moment;
+			float         t = 0.0f;
+			std::size_t   count = 0;
+			while (file >> clip >> t >> moment) {
+				s.clipSounds[clip].emplace_back(t, moment);
+				++count;
+			}
+			if (s.anim && Settings::Get().sounds) {
+				SKSE::log::info("ratchet model: {} clip sounds in {} clips", count, s.clipSounds.size());
+			}
+		}
 		return s.enabled;
 	}
+
+	void Reset()
+	{
+		if (s.anim) {
+			ratchet_anim_reset(s.anim);
+		}
+		s.lastFeet.reset();
+	}
+
+	bool ClipSounds() { return Enabled() && s.anim && !s.clipSounds.empty() && Settings::Get().sounds; }
 
 	bool Enabled() { return s.enabled && !s.failed; }
 
@@ -745,6 +861,28 @@ namespace Model
 			return std::nullopt;
 		}
 		return hand->world.translate;
+	}
+
+	std::optional<RE::NiTransform> PistolLocator(std::string_view a_name)
+	{
+		auto* gun = g_pistol.node.get();
+		if (!gun || !gun->parent || gun->GetAppCulled()) {
+			return std::nullopt;
+		}
+		// ratchet_to_skyrim.py --name burstpistol prefixes its nodes RP_.
+		auto* found = gun->GetObjectByName(RE::BSFixedString(std::format("RP_{}", a_name)));
+		if (!found) {
+			found = gun->GetObjectByName(RE::BSFixedString(std::string(a_name)));
+		}
+		if (!found) {
+			static bool logged = false;
+			if (!logged) {
+				logged = true;
+				SKSE::log::warn("ratchet model: the Burst Pistol has no {} node", a_name);
+			}
+			return std::nullopt;
+		}
+		return found->world;
 	}
 
 	void SetAttachAllowed(bool a_allowed) { s.attachAllowed = a_allowed; }
@@ -808,26 +946,30 @@ namespace Model
 			}
 		}
 
-		PickClip(a_drive, speed, v.z / scale, a_dt);
-		if (!s.cur.clip) {
-			return;
-		}
-		s.cur.time += a_dt * s.cur.rate;
-		// A looping clip's time wraps (hours of idling would run its float precision out).
-		if (s.cur.loop && s.cur.clip->seconds > 0.0f) {
-			s.cur.time = std::fmod(s.cur.time, s.cur.clip->seconds);
-		}
-		if (s.prev.clip && s.fade < 1.0f) {
-			s.prev.time += a_dt * s.prev.rate;
-			s.fade = std::min(1.0f, s.fade + a_dt / s.fadeLen);
-			s.lib.Sample(*s.prev.clip, s.prev.time, s.prev.loop, s.pose);
-			s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.other);
-			const float w = s.fade * s.fade * (3.0f - 2.0f * s.fade);
-			Anim::Blend(s.pose, s.other, w);
+		if (s.anim && a_drive.sim) {
+			Animate(a_player, a_drive, v, a_dt);
 		} else {
-			s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.pose);
+			PickClip(a_drive, speed, v.z / scale, a_dt);
+			if (!s.cur.clip) {
+				return;
+			}
+			s.cur.time += a_dt * s.cur.rate;
+			// A looping clip's time wraps (hours of idling would run its float precision out).
+			if (s.cur.loop && s.cur.clip->seconds > 0.0f) {
+				s.cur.time = std::fmod(s.cur.time, s.cur.clip->seconds);
+			}
+			if (s.prev.clip && s.fade < 1.0f) {
+				s.prev.time += a_dt * s.prev.rate;
+				s.fade = std::min(1.0f, s.fade + a_dt / s.fadeLen);
+				s.lib.Sample(*s.prev.clip, s.prev.time, s.prev.loop, s.pose);
+				s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.other);
+				const float w = s.fade * s.fade * (3.0f - 2.0f * s.fade);
+				Anim::Blend(s.pose, s.other, w);
+			} else {
+				s.lib.Sample(*s.cur.clip, s.cur.time, s.cur.loop, s.pose);
+			}
+			AddLayers(a_player, a_drive, speed, a_dt);
 		}
-		AddLayers(a_player, a_drive, speed, a_dt);
 
 		for (std::size_t i = 0; i < s.nodes.size(); ++i) {
 			auto* node = s.nodes[i];
