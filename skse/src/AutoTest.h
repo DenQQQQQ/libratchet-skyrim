@@ -65,4 +65,6 @@ namespace AutoTest
 	void OnDashed(const Dash& a_dash);
 	// The jump code gave the player back to Skyrim in the air (he died, was ragdolled...).
 	void OnHandedBack(const char* a_why);
+	// The sim's rays into the world are logged (with [Debug] bTraceJumps): during the ledge case.
+	bool TraceRays();
 }

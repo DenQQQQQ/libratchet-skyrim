@@ -21,6 +21,11 @@ namespace Jump
 		// Dashing, ground this close under his feet still holds him (metres): he's pressed down
 		// onto it, but a slope going down falls away a little each frame.
 		constexpr float kDashGroundReach = 0.3f;
+		// In a flight, Skyrim's controller standing him on something is a landing when there's
+		// ground this close under his feet (metres: a capsule on a 50° slope is about 0.2 m above
+		// it), or once it has stood him there this long (seconds: an edge he rests on).
+		constexpr float kLandReach = 0.5f;
+		constexpr float kEdgeLanding = 0.25f;
 
 		// The sandbox's body at scale 1 (apps/sandbox/src/main.rs BODY_HEIGHT, BODY_HALF_WIDTH,
 		// WALL_PROBE_REACH): the wall probe looks from his middle, 1 m out, with side probes
@@ -70,6 +75,7 @@ namespace Jump
 			Measure           m;
 			std::vector<Ratchet::Tick> ticks;         // this jump's (or dash's) frames, for the sandbox replay
 			RatchetVec3       startVelocity{};        // his velocity as it started (sim axes)
+			float             edgeTime = 0.0f;        // in a flight, Skyrim's controller has stood him on an edge this long
 		};
 		Host g;
 
@@ -320,12 +326,25 @@ namespace Jump
 			}
 		}
 
+		// The tests' ledge case logs the sim's rays (from where he stood as it stepped).
+		bool        g_traceRays = false;
+		RatchetVec3 g_rayOrigin{};
+
 		// The sim's rays into Skyrim's world (it catches ledges with them): sim axes, metres.
 		std::uint8_t WorldRay(void*, RatchetVec3 a_from, RatchetVec3 a_to, RatchetVec3* a_point, RatchetVec3* a_normal)
 		{
 			const float u = UnitsPerMetre();
 			const auto game = [u](const RatchetVec3& a_v) { return RE::NiPoint3{ a_v.x * u, -a_v.z * u, a_v.y * u }; };
 			const auto hit = Physics::Ray(game(a_from), game(a_to));
+			if (g_traceRays) {
+				// Relative to where he stood when the sim last stepped (sim axes, metres).
+				const RatchetVec3 at = g_rayOrigin;
+				SKSE::log::info("ray: ({:.2f} {:.2f} {:.2f}) -> ({:.2f} {:.2f} {:.2f}): {}", a_from.x - at.x, a_from.y - at.y, a_from.z - at.z,
+					a_to.x - at.x, a_to.y - at.y, a_to.z - at.z,
+					hit ? std::format("hit at {:.0f}% ({:.2f} {:.2f} {:.2f}) normal ({:.2f} {:.2f} {:.2f})", hit->fraction * 100.0f, ToSim(hit->point).x - at.x,
+							  ToSim(hit->point).y - at.y, ToSim(hit->point).z - at.z, hit->normal.x, hit->normal.z, -hit->normal.y) :
+						  "nothing");
+			}
 			if (!hit) {
 				return 0;
 			}
@@ -465,7 +484,19 @@ namespace Jump
 			const auto ground = Physics::GroundDistance(feet, 20.0f);
 			// Skyrim's controller says whether he stands. In a ground move it's kept in its air
 			// state, and then the ground right under his feet is what holds him up.
-			const bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach);
+			bool grounded = Grounded(ctrl) || (g.groundMove && ground && *ground < kDashGroundReach);
+			// In a flight, its capsule (the Dragonborn's, half again his height) also "stands" on
+			// an edge it meets at his chest, with nothing under his feet: a ledge he'd catch. Such
+			// a stand isn't a landing, unless it lasts (an edge he really rests on).
+			if (g.ours && !g.groundMove && Grounded(ctrl) && !(ground && *ground < kLandReach)) {
+				g.edgeTime += a_dt;
+				if (g.edgeTime < kEdgeLanding) {
+					grounded = false;
+					ctrl->context.currentState = RE::hkpCharacterStateType::kInAir;
+				}
+			} else {
+				g.edgeTime = 0.0f;
+			}
 			// The buttons as they are: the sim makes the jump, double jump, glide and dashes of them.
 			const AutoTest::Buttons test = AutoTest::Press(a_dt, grounded, g.ours, g.last.state);
 			RatchetInput in{};
@@ -539,7 +570,10 @@ namespace Jump
 				}
 			}
 
+			g_traceRays = Settings::Get().traceJumps && g.ours && !g.groundMove && AutoTest::TraceRays();
+			g_rayOrigin = ToSim(feet);
 			const RatchetStepResult r = ratchet_step(g.sim, a_dt, in, contact, ToSim(feet));
+			g_traceRays = false;
 			const Ratchet::Tick tick{ a_dt, in.jump != 0, in.move_x, in.move_z, in.dash != 0, in.melee != 0 };
 
 			// A flight ended (a new jump can start in the same step); the slam lands into its
@@ -685,9 +719,10 @@ namespace Jump
 			Combat::Step(a_player, g.sim, r, a_dt);
 			if (Settings::Get().traceJumps && (g.ours || in.jump || in.dash || r.events || AutoTest::Active())) {
 				SKSE::log::info(
-					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} z {:.1f} ctrl {}",
+					"trace: dt {:.4f} jump {} dash {} grounded {} ground {}{:.2f} ceiling {} stick {:.2f},{:.2f} -> state {} events {:#x} v {:.2f},{:.3f},{:.2f} facing {:.2f} z {:.1f} ctrl {}",
 					a_dt, in.jump, in.dash, contact.grounded, contact.has_ground_distance ? "" : "none ", contact.ground_distance, contact.hit_ceiling,
-					in.move_x, in.move_z, r.state, r.events, r.velocity.x, r.velocity.y, r.velocity.z, z, static_cast<int>(ctrl->context.currentState));
+					in.move_x, in.move_z, r.state, r.events, r.velocity.x, r.velocity.y, r.velocity.z, r.facing_yaw, z,
+					static_cast<int>(ctrl->context.currentState));
 			}
 			g.last = r;
 			g.lastDt = a_dt;

@@ -463,7 +463,35 @@ The owner asked for Clank on his back.
   creature's side? A case jumps at a bear (EncBear, AI off) 2 m ahead with the stick forward: he
   landed on its back and never stuck. A body is round, so the probe's two side rays come back at
   an angle and the three-ray check turns it down. **20/20 pass.**
-- Ledges have no test yet. Rift Apart catches a lip only with at least 3 m of drop below it
-  (`GroundClearance.MinHeight`, 0.5 m under the lip) and no more than 3.5 m above where he last
-  stood (`RecoveryMaxHeightAboveLastGround`). On flat ground both hold only for a lip exactly
-  3.5 m up, so a ledge test needs a drop in front of the wall, not a wall on flat ground.
+
+## 2026-10-09: the first ledge test, and Skyrim's capsule standing on edges
+
+- Rift Apart catches a lip only with at least 3 m of drop below it (`GroundClearance.MinHeight`,
+  0.5 m under the lip) and no more than 3.5 m above where he last stood
+  (`RecoveryMaxHeightAboveLastGround`). On flat ground both hold only for a lip exactly 3.5 m up.
+  So the ledge case builds a drop: a floor piece (`WRIntFloorSTMid01Large`, 14.6 m square) 4 m
+  up as a platform he's put on, and 2.5 m ahead of him a wall reaching 2.05 m above it. A full
+  jump with the stick forward tops out about a metre short of the wall. That's inside the
+  catch's reach (1.2 m) and outside the wall stick's (0.775 m). Once he hangs, the stick is let
+  go and jump is pressed 0.8 s later.
+- **The Dragonsreach wall piece has almost no top.** Its face is solid, but rays straight down
+  onto its top mostly pass through, apart from a sliver sloped 14°, about 0.2 m below the
+  top. Its walls meet Dragonsreach's ceiling, so nobody stands on them. The catch's rays found no
+  top, and the sliver gave Skyrim's capsule something to "stand" on. A second floor piece now
+  caps the wall, flush with its face. The case measures the ledge with rays as it starts (the
+  log shows the top at 2.05 m all along it, and the face 2.51 m ahead up to 2.0 m).
+- **Skyrim's capsule standing on an edge isn't a landing any more.** His capsule is still the
+  Dragonborn's, half again his height. In a sim flight, Skyrim's controller says he stands
+  whenever the capsule rests on something, even an edge at his chest with 4 m of air under his
+  feet, and the flight ended there. That's how the first run "landed" on the sliver. Now, in a
+  flight, such a stand counts as a landing only with ground within 0.5 m under his feet (a
+  capsule on a 50° slope is about 0.2 m above it), or once it has lasted 0.25 s (an edge he
+  really rests on). Until then the controller is put back in its air state and the sim flies
+  on, so the capsule slides off the edge. With the capped ledge the catch also passes without
+  this; it's for the decorative tops Skyrim's buildings are full of.
+- In game: **he caught the lip at the top of his jump (1.50 m up), hung, climbed on the press,
+  and stood on the ledge (+2.12 m)**. Screenshots show him reaching for the lip, then hanging by
+  both hands. **21/21 pass.**
+- Test tools: `ingame.ps1 -Only <name>` runs only the cases whose names contain it (about 40 s
+  for one). With `[Debug] bTraceJumps`, the ledge case logs every ray the sim casts into the
+  world, relative to his feet, and the trace shows his facing.

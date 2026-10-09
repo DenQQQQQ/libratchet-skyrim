@@ -45,6 +45,13 @@ namespace AutoTest
 			float       wallJumpAfter = 0.3f;
 			// A jump at the target: he mustn't take its body for a wall.
 			bool        noWall = false;
+			// A ledge: he jumps from a platform ledgeFrom metres up toward a wall ledgeAt metres
+			// ahead, its lip ledgeUp above the platform (0: none). He has to catch the lip and,
+			// climbAfter seconds on, climb up on a new press.
+			float       ledgeAt = 0.0f;
+			float       ledgeUp = 2.0f;
+			float       ledgeFrom = 4.0f;
+			float       climbAfter = 0.8f;  // past the catch's own move, which takes no buttons
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -78,6 +85,11 @@ namespace AutoTest
 			{ .name = "hitting a guard is a crime", .hold = -1.0f, .airStick = true, .duration = 2.0f, .targetAt = 1.3f, .melee = { 0.0f, -1.0f, -1.0f }, .minDamage = 0.0f, .minHits = 1, .awake = true, .target = 0x001000EC, .crime = true },
 			// A full jump at a bear (EncBear, its AI off) 2 m ahead: a big body, but no wall.
 			{ .name = "no wall on a bear", .hold = 0.5f, .airStick = true, .targetAt = 2.0f, .target = 0x00023A8A, .noWall = true },
+			// A ledge (a placed platform and wall: Rift Apart catches a lip only with 3 m of drop
+			// below it and at most 3.5 m above where he last stood). A full jump tops out about a
+			// metre short of the wall, inside the catch's reach (1.2 m) and outside the wall
+			// stick's (0.775 m).
+			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 2.5f },
 		};
 
 		// How close the game has to come to the sandbox replaying the same frames: what differs is
@@ -107,6 +119,7 @@ namespace AutoTest
 			float       held = 0.0f;
 			bool        thirdPerson = false;    // the camera was put behind him
 			bool        shots = true;           // screenshots (bShots)
+			std::string only;                   // only the cases whose names contain this (sOnly; empty: all)
 			bool        watchMap = false;       // log the engine's Map calls (bWatchMap)
 			float       cameraYaw = 0.0f;       // the camera's turn round him from behind (fCameraYaw)
 
@@ -137,14 +150,20 @@ namespace AutoTest
 			float           targetHealth = 0.0f;  // as the fight began
 			std::uint32_t   bounty = 0;           // his bounty in Whiterun as the fight began
 			bool            heliSeen = false;     // Clank's heli-pack came out during this case
-			// The wall case's wall, and what he did on it.
-			RE::ObjectRefHandle         wall;
+			// The statics placed for this case (removed after it), and what he did on the wall.
+			std::vector<RE::ObjectRefHandle> placed;
 			bool                        wallPlaced = false;
 			float                       onWall = -1.0f;    // seconds on it so far (< 0: not stuck yet)
 			float                       wallPress = 0.0f;  // seconds the jump off it has been held
 			std::optional<RE::NiPoint3> stuckAt;
 			bool                        wallJumped = false;
 			bool                        stuckSeen = false;  // on a wall at all during this case
+			// What he did on the ledge.
+			std::optional<RE::NiPoint3> jumpFrom;          // where he stands on the platform
+			float                       onLedge = -1.0f;   // seconds hanging so far (< 0: not yet)
+			float                       climbPress = 0.0f; // seconds the climb's jump has been held
+			std::optional<RE::NiPoint3> hungAt;
+			bool                        climbed = false;
 			float healthBefore = 0.0f;
 			float total = 0.0f;
 			int   passed = 0;
@@ -339,11 +358,18 @@ namespace AutoTest
 			s.dashPressed = false;
 			s.targetPlaced = false;
 			s.heliSeen = false;
-			if (const auto wall = s.wall.get()) {
-				wall->Disable();
-				wall->SetDelete(true);
+			for (const auto& placed : s.placed) {
+				if (const auto ref = placed.get()) {
+					ref->Disable();
+					ref->SetDelete(true);
+				}
 			}
-			s.wall = {};
+			s.placed.clear();
+			s.jumpFrom.reset();
+			s.onLedge = -1.0f;
+			s.climbPress = 0.0f;
+			s.hungAt.reset();
+			s.climbed = false;
 			s.wallPlaced = false;
 			s.onWall = -1.0f;
 			s.wallPress = 0.0f;
@@ -396,25 +422,118 @@ namespace AutoTest
 			av->RestoreActorValue(RE::ActorValue::kHealth, 10000.0f);
 		}
 
-		// The wall case's wall: a flat Dragonsreach wall piece (WRIntCastleWallDoubleHighExStr01Quad,
-		// 14.6 m wide and 7.3 m tall, its slab 100 units off its origin by its bounds), across his
-		// way with its face a_metres ahead, sunk half a metre into the ground.
+		// A static placed in the world for a case, turned to the start's heading.
+		RE::ObjectRefHandle Place(RE::FormID a_base, const RE::NiPoint3& a_at)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(a_base);
+			auto* handler = RE::TESDataHandler::GetSingleton();
+			if (!player || !base || !handler) {
+				return {};
+			}
+			return handler->CreateReferenceAtLocation(base, a_at, RE::NiPoint3{ 0.0f, 0.0f, s.startHeading }, player->GetParentCell(),
+				player->GetWorldspace(), nullptr, nullptr, {}, false, false);
+		}
+
+		// The wall: a flat Dragonsreach wall piece (WRIntCastleWallDoubleHighExStr01Quad, 14.6 m
+		// wide and 7.3 m tall, its slab 100 units ahead of its origin by its bounds), across his way
+		// with its face a_metres ahead of a_from and its top a_top above it.
+		constexpr RE::FormID kWallBase = 0x000D6BB6;
+		constexpr float      kWallHeight = 512.0f;  // game units
+		constexpr float      kWallSlab = 100.0f;
+
+		RE::ObjectRefHandle PlaceWallAt(const RE::NiPoint3& a_from, float a_metres, float a_top)
+		{
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 at = a_from + ahead * (a_metres * Units() - kWallSlab) + RE::NiPoint3{ 0.0f, 0.0f, a_top * Units() - kWallHeight };
+			return Place(kWallBase, at);
+		}
+
+		// The wall case's wall, sunk half a metre into the ground.
 		void PlaceWall(float a_metres)
 		{
-			constexpr RE::FormID kWallBase = 0x000D6BB6;
-			constexpr float      kSlabOffset = 100.0f;  // game units
+			if (!s.startPos) {
+				return;
+			}
+			const auto wall = PlaceWallAt(*s.startPos, a_metres, kWallHeight / Units() - 0.5f);
+			s.placed.push_back(wall);
+			SKSE::log::info("autotest: a wall {:.1f} m ahead{}", a_metres, wall ? "" : ": couldn't place it");
+		}
+
+		// The ledge case: a floor piece (WRIntFloorSTMid01Large, 14.6 m square, flat at its
+		// origin) a_case.ledgeFrom metres up with its front edge half a metre ahead of where he'll
+		// stand, the wall a_case.ledgeAt ahead of that spot reaching a_case.ledgeUp above the
+		// floor, and another floor piece on the wall as the ledge's top (the wall piece's own top
+		// has next to no collision: Dragonsreach's walls meet its ceiling), its front edge on the
+		// wall's face; then he's put on the floor.
+		void PlaceLedge(const Case& a_case)
+		{
+			constexpr RE::FormID kFloorBase = 0x001044AA;
+			constexpr float      kFloorHalf = 512.0f;  // game units
 			auto* player = RE::PlayerCharacter::GetSingleton();
-			auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(kWallBase);
-			auto* handler = RE::TESDataHandler::GetSingleton();
-			if (!player || !s.startPos || !base || !handler) {
-				SKSE::log::info("autotest: couldn't place the wall");
+			if (!player || !s.startPos) {
 				return;
 			}
 			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
-			const RE::NiPoint3 at = *s.startPos + ahead * (a_metres * Units() - kSlabOffset) - RE::NiPoint3{ 0.0f, 0.0f, 0.5f * Units() };
-			s.wall = handler->CreateReferenceAtLocation(base, at, RE::NiPoint3{ 0.0f, 0.0f, s.startHeading }, player->GetParentCell(),
-				player->GetWorldspace(), nullptr, nullptr, {}, false, false);
-			SKSE::log::info("autotest: a wall {:.1f} m ahead{}", a_metres, s.wall ? "" : ": couldn't place it");
+			const RE::NiPoint3 from = *s.startPos + RE::NiPoint3{ 0.0f, 0.0f, a_case.ledgeFrom * Units() };
+			const auto platform = Place(kFloorBase, from + ahead * (0.5f * Units() - kFloorHalf));
+			const auto wall = PlaceWallAt(from, a_case.ledgeAt, a_case.ledgeUp);
+			const auto top = Place(kFloorBase, from + ahead * (a_case.ledgeAt * Units() + kFloorHalf) + RE::NiPoint3{ 0.0f, 0.0f, (a_case.ledgeUp + 0.05f) * Units() });
+			s.placed.insert(s.placed.end(), { platform, wall, top });
+			s.jumpFrom = from;
+			player->SetPosition(from + RE::NiPoint3{ 0.0f, 0.0f, 0.05f * Units() }, true);
+			SKSE::log::info("autotest: a platform {:.1f} m up, a ledge {:.1f} m ahead of it with its lip {:.2f} m above it (facing it is {:.2f} in the sim){}",
+				a_case.ledgeFrom, a_case.ledgeAt, a_case.ledgeUp + 0.05f, std::atan2(ahead.x, -ahead.y), platform && wall && top ? "" : ": couldn't place it all");
+		}
+
+		// The ledge case's wall as Skyrim's collision has it: straight down onto its top at points
+		// across its thickness and along it, and out at its face, from where he'll jump (metres).
+		void MeasureLedge(const Case& a_case)
+		{
+			if (!s.jumpFrom) {
+				return;
+			}
+			const RE::NiPoint3 ahead{ std::sin(s.startHeading), std::cos(s.startHeading), 0.0f };
+			const RE::NiPoint3 right{ ahead.y, -ahead.x, 0.0f };
+			const RE::NiPoint3 up{ 0.0f, 0.0f, Units() };
+			for (const float side : { -1.0f, 0.0f, 1.0f }) {
+				std::string tops;
+				for (const float in : { -0.1f, 0.05f, 0.15f, 0.25f, 0.35f, 0.45f, 0.55f }) {
+					const RE::NiPoint3 p = *s.jumpFrom + ahead * ((a_case.ledgeAt + in) * Units()) + right * (side * Units());
+					const auto hit = Physics::Ray(p + up * 6.0f, p - up * 1.0f);
+					tops += hit ? std::format(" {:+.2f}:{:.2f}m({:.2f})", in, (hit->point.z - s.jumpFrom->z) / Units(), hit->normal.z) :
+					              std::format(" {:+.2f}:none", in);
+				}
+				SKSE::log::info("autotest: the ledge's top {:+.0f} m along it (in from its face: height above the platform (normal up)):{}", side, tops);
+			}
+			std::string faces;
+			for (const float h : { 0.5f, 1.0f, 1.5f, 1.8f, 1.9f, 2.0f, 2.1f, 2.3f, 2.6f }) {
+				const RE::NiPoint3 p = *s.jumpFrom + up * h;
+				const auto hit = Physics::Ray(p, p + ahead * ((a_case.ledgeAt + 1.0f) * Units()));
+				faces += hit ? std::format(" {:.1f}:{:.2f}m", h, (hit->point - p).Length() / Units()) : std::format(" {:.1f}:none", h);
+			}
+			SKSE::log::info("autotest: the ledge's face (height: distance ahead):{}", faces);
+		}
+
+		// The ledge case: he caught the lip and climbed up on the new press.
+		void JudgeLedge(const Case& a_case, const Jump& a_jump)
+		{
+			std::string bad;
+			if (!s.hungAt) {
+				bad += " no-catch";
+			}
+			if (!s.climbed) {
+				bad += " no-climb";
+			}
+			if (bad.empty()) {
+				++s.passed;
+			} else {
+				++s.failed;
+			}
+			const auto up = [](const RE::NiPoint3& a_p) { return s.jumpFrom ? (a_p.z - s.jumpFrom->z) / Units() : 0.0f; };
+			SKSE::log::info("autotest: {} {}: {}, {}, landed {:+.2f} m from the platform after {:.3f} s (the lip {:.2f} m up){}", bad.empty() ? "PASS" : "FAIL",
+				a_case.name, s.hungAt ? std::format("caught it hanging {:.2f} m up", up(*s.hungAt)) : "never caught it",
+				s.climbed ? "climbed" : "never climbed", a_jump.landDz, a_jump.airTime, a_case.ledgeUp + 0.05f, bad.empty() ? "" : " - off:" + bad);
 		}
 
 		// The wall case: he stuck to the wall, jumped off it, and landed at least a metre further
@@ -650,6 +769,11 @@ namespace AutoTest
 		TestWindow::SetFolder(shots);
 		s.shots = GetPrivateProfileIntW(L"AutoTest", L"bShots", 1, trigger.c_str()) != 0;
 		s.watchMap = GetPrivateProfileIntW(L"AutoTest", L"bWatchMap", 0, trigger.c_str()) != 0;
+		GetPrivateProfileStringW(L"AutoTest", L"sOnly", L"", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
+		s.only.clear();
+		for (const wchar_t* c = buf; *c; ++c) {
+			s.only.push_back(static_cast<char>(*c));  // case names are ASCII
+		}
 		GetPrivateProfileStringW(L"AutoTest", L"fCameraYaw", L"0", buf, static_cast<DWORD>(std::size(buf)), trigger.c_str());
 		s.cameraYaw = std::wcstof(buf, nullptr);
 		TestWindow::Install(GetPrivateProfileIntW(L"AutoTest", L"bCorner", 1, trigger.c_str()) != 0);
@@ -721,6 +845,10 @@ namespace AutoTest
 			return {};
 		}
 		const Case& c = kCases[s.index];
+		if (!s.only.empty() && std::string_view(c.name).find(s.only) == std::string_view::npos) {
+			NextCase();
+			return {};
+		}
 
 		if (s.pressed < 0.0f) {
 			auto* player = RE::PlayerCharacter::GetSingleton();
@@ -754,6 +882,11 @@ namespace AutoTest
 				s.wallPlaced = true;
 				PlaceWall(c.wallAt);
 			}
+			if (c.ledgeAt > 0.0f && s.startPos && !s.wallPlaced && s.settle > 0.0f) {
+				s.wallPlaced = true;
+				PlaceLedge(c);
+				return {};
+			}
 			if (s.settle < kSettle) {
 				return {};
 			}
@@ -786,6 +919,9 @@ namespace AutoTest
 			s.healthBefore = Health();
 			s.pressed = 0.0f;
 			s.elapsed = 0.0f;
+			if (c.ledgeAt > 0.0f) {
+				MeasureLedge(c);
+			}
 			if (c.duration > 0.0f) {
 				Combat::TakeTally();
 				s.targetHealth = TargetHealth();
@@ -862,6 +998,24 @@ namespace AutoTest
 				b.jump = true;
 			}
 		}
+		// The ledge: the same, hanging from it, the press climbs.
+		if (c.ledgeAt > 0.0f) {
+			if (a_state == RATCHET_STATE_LEDGE_HANG) {
+				if (s.onLedge < 0.0f) {
+					s.onLedge = 0.0f;
+					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						s.hungAt = player->GetPosition();
+					}
+					Input::SetTestStick(std::nullopt);
+				}
+				s.onLedge += a_dt;
+			}
+			s.climbed = s.climbed || a_state == RATCHET_STATE_LEDGE_CLIMB;
+			if (s.onLedge >= c.climbAfter && s.climbPress < 0.15f) {
+				s.climbPress += a_dt;
+				b.jump = true;
+			}
+		}
 		if (b.jump || b.dash) {
 			return b;
 		}
@@ -914,6 +1068,10 @@ namespace AutoTest
 		}
 		if (kCases[s.index].wallAt > 0.0f) {
 			JudgeWall(kCases[s.index], a_jump);
+			return;
+		}
+		if (kCases[s.index].ledgeAt > 0.0f) {
+			JudgeLedge(kCases[s.index], a_jump);
 			return;
 		}
 		if (kCases[s.index].noWall) {
@@ -995,6 +1153,11 @@ namespace AutoTest
 		SKSE::log::info("autotest: {} {}: {:.2f} m (sandbox {:.2f}) in {:.3f} s ({:.3f}), {:+.2f} m up{}",
 			bad.empty() ? "PASS" : "FAIL", kCases[s.index].name, a_dash.distance, a_dash.sandbox.distance, a_dash.time, a_dash.sandbox.time,
 			a_dash.climb, bad.empty() ? "" : " - off:" + bad);
+	}
+
+	bool TraceRays()
+	{
+		return s.active && !s.done && s.index < static_cast<int>(std::size(kCases)) && kCases[s.index].ledgeAt > 0.0f && s.pressed >= 0.0f;
 	}
 
 	void OnHandedBack(const char* a_why)
