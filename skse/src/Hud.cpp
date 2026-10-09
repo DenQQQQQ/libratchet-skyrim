@@ -131,4 +131,44 @@ namespace Hud
 		std::scoped_lock lock(g_textLock);
 		return g_text;
 	}
+
+	void LogMovie(std::string_view a_menu, int a_depth)
+	{
+		auto* tasks = SKSE::GetTaskInterface();
+		if (!tasks) {
+			return;
+		}
+		tasks->AddUITask([menu = std::string(a_menu), a_depth] {
+			auto*      ui = RE::UI::GetSingleton();
+			const auto movie = ui ? ui->GetMovieView(menu) : nullptr;
+			RE::GFxValue root;
+			if (!movie || !movie->GetVariable(&root, "_root")) {
+				SKSE::log::info("hud: no movie for {}", menu);
+				return;
+			}
+			const auto rect = movie->GetVisibleFrameRect();
+			SKSE::log::info("hud: {}'s movie, its visible stage {:.0f},{:.0f} to {:.0f},{:.0f}", menu, rect.left, rect.top, rect.right, rect.bottom);
+			std::function<void(const RE::GFxValue&, const std::string&, int)> walk = [&](const RE::GFxValue& a_clip, const std::string& a_path, int a_level) {
+				a_clip.VisitMembers([&](const char* a_name, const RE::GFxValue& a_value) {
+					if (!a_value.IsDisplayObject()) {
+						return;
+					}
+					const std::string path = a_path + "." + a_name;
+					RE::GFxValue::DisplayInfo info;
+					a_value.GetDisplayInfo(&info);
+					RE::GFxValue text, color;
+					const bool says = a_value.GetMember("text", &text) && text.IsString();
+					if (says && a_value.GetMember("textColor", &color) && color.IsNumber()) {
+						SKSE::log::info("hud:   {}'s text colour {:06X}", a_path + "." + a_name, static_cast<std::uint32_t>(color.GetNumber()));
+					}
+					SKSE::log::info("hud:   {} at {:.0f},{:.0f}, {:.0f}% x {:.0f}%, alpha {:.0f}, {}{}", path, info.GetX(), info.GetY(), info.GetXScale(),
+						info.GetYScale(), info.GetAlpha(), info.GetVisible() ? "shown" : "hidden", says ? std::format(": '{:.80}'", text.GetString()) : "");
+					if (a_level + 1 < a_depth) {
+						walk(a_value, path, a_level + 1);
+					}
+				});
+			};
+			walk(root, "_root", 0);
+		});
+	}
 }

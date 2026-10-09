@@ -8,6 +8,8 @@
 #include "Fx.h"
 #include "Items.h"
 #include "Jump.h"
+#include "LoadScreens.h"
+#include "MainMenu.h"
 #include "Model.h"
 #include "RatchetDll.h"
 #include "Settings.h"
@@ -35,6 +37,8 @@ namespace
 			}
 			Combat::Install();
 			Bolts::Install();
+			LoadScreens::Install();
+			MainMenu::Install();
 			AutoTest::Install();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:

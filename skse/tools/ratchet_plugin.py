@@ -6,6 +6,8 @@ It holds no game data: names, numbers, and the paths of the models the converter
 
   RatchetBurstPistol  WEAP  0x800  the Burst Pistol: equipped, it's the gun he fires
   RatchetShatterbomb  WEAP  0x801  the Shatterbomb, the same
+  RatchetLoad*        STAT  0x810+ the loading screens' models (the SKSE plugin puts them, and its
+                                   tips, on every loading screen)
 
 The SKSE plugin puts both in the player's inventory once a game (it keeps that in its co-save).
 Equipping one (the inventory, a favourite's hotkey) makes it the gun; with neither equipped he has
@@ -74,15 +76,39 @@ def weapon(form_id, editor_id, name, model, value, weight, damage, bounds):
     ])
 
 
+# The loading screens' models (skse/build.ps1 converts them: posed, in Skyrim's axes and units),
+# in the order the plugin's LoadScreens.cpp expects them: form ID, editor ID, model, bounds.
+LOADSCREENS = [
+    (0x810, "RatchetLoadRatchet", "loadscreen_ratchet", (-40, -30, 0, 40, 30, 90)),
+    (0x811, "RatchetLoadClank", "loadscreen_clank", (-20, -15, 0, 20, 15, 45)),
+    (0x812, "RatchetLoadWrench", "loadscreen_wrench", (-15, -15, -40, 15, 15, 40)),
+    (0x813, "RatchetLoadBurstPistol", "loadscreen_burstpistol", (-10, -20, -10, 10, 20, 10)),
+    (0x814, "RatchetLoadShatterbomb", "loadscreen_shatterbomb", (-8, -8, -8, 8, 8, 8)),
+    (0x815, "RatchetLoadBolt", "loadscreen_bolt", (-10, -10, -10, 10, 10, 10)),
+]
+
+
+def static(form_id, editor_id, model, bounds):
+    return record("STAT", form_id, [
+        sub("EDID", zstring(editor_id)),
+        sub("OBND", struct.pack("<6h", *bounds)),
+        sub("MODL", zstring(model)),
+        sub("DNAM", struct.pack("<fI", 90.0, 0)),  # max angle, no directional material
+    ])
+
+
 def plugin():
     pistol = weapon(OWN | 0x800, "RatchetBurstPistol", "Burst Pistol", "RatchetMovement\\burstpistol.nif",
                     value=100, weight=2.0, damage=11, bounds=(-8, -14, -6, 8, 14, 6))
     bomb = weapon(OWN | 0x801, "RatchetShatterbomb", "Shatterbomb", "RatchetMovement\\shatterbomb.nif",
                   value=150, weight=1.0, damage=170, bounds=(-6, -6, -6, 6, 6, 6))
     weapons = [pistol, bomb]
-    groups = [group("WEAP", weapons)]
+    statics = [static(OWN | fid, eid, f"RatchetMovement\\{name}.nif", bounds) for fid, eid, name, bounds in LOADSCREENS]
+    groups = [group("STAT", statics), group("WEAP", weapons)]
     # HEDR: the records and groups after TES4, and the next free object ID.
-    header = [sub("HEDR", struct.pack("<fiI", 1.7, len(weapons) + len(groups), 0x802)), sub("CNAM", zstring("riftapart-skyrim"))]
+    next_id = max(fid for fid, *_ in LOADSCREENS) + 1
+    header = [sub("HEDR", struct.pack("<fiI", 1.7, len(weapons) + len(statics) + len(groups), next_id)),
+              sub("CNAM", zstring("riftapart-skyrim"))]
     for master in MASTERS:
         header += [sub("MAST", zstring(master)), sub("DATA", struct.pack("<Q", 0))]
     tes4 = record("TES4", 0, header, flags=ESM | ESL)
@@ -133,7 +159,9 @@ def main():
     sizes = {"DATA": 10, "DNAM": 100, "CRDT": 24, "VNAM": 4, "ETYP": 4, "OBND": 12, "HEDR": 12}
     for kind, form_id, editor_id, fields in parsed:
         for t, n in fields:
-            if t in sizes and not (kind == "TES4" and t == "DATA"):
+            if kind == "STAT" and t == "DNAM":
+                assert n == 8, (editor_id, t, n)
+            elif t in sizes and not (kind == "TES4" and t == "DATA"):
                 assert n == sizes[t], (editor_id, t, n)
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, "RatchetMovement.esl")

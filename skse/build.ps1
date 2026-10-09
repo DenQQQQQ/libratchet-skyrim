@@ -11,6 +11,9 @@ param(
     [switch]$Install,
     [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
     [string]$Mo2Profile = "Spire",
+    # RAD Video Tools' encoder (the owner's download: radgametools.com, unpacked from its
+    # installer), for the startup video; without it, Skyrim's own plays.
+    [string]$RadVideo = "G:\dev\tools\RADTools\bin\radvideo64.exe",
     [string]$ConfigsDir = "",
     [string]$VsDir = "G:\dev\VS2022BuildTools",
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "G:\dev\tools\vcpkg" })
@@ -74,6 +77,8 @@ function Enable-Plugin([string]$profileDir, [string]$name) {
 }
 
 if ($Install) {
+    # Tools that aren't the models' or the effects' converters (their changes don't make those stale).
+    $notConverters = @("ratchet_plugin.py", "ratchet_menu_to_skyrim.py", "ratchet_intro_to_skyrim.py")
     $dest = Join-Path $ModDir "SKSE\Plugins"
     New-Item -ItemType Directory -Force (Join-Path $dest "RatchetMovement") | Out-Null
     foreach ($f in "RatchetMovement.dll", "RatchetMovement.pdb", "RatchetMovement\ratchet.dll") {
@@ -118,7 +123,7 @@ if ($Install) {
         $stale = -not (Test-Path $nif)
         if (-not $stale) {
             $made = (Get-Item $nif).LastWriteTime
-            $stale = (Get-Item $glb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
+            $stale = (Get-Item $glb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -notin $notConverters -and $_.LastWriteTime -gt $made }).Count -gt 0
         }
         if ($stale) {
             Write-Host "Converting Ratchet from $glb..."
@@ -142,20 +147,33 @@ if ($Install) {
                 $others += @{ Name = "bolt_${tier}_0$look"; Prefix = "RB_"; Clips = $false; TextureDir = "RatchetMovement\bolts"; Without = "its bolts are drawn as the bronze ones, or not at all" }
             }
         }
+        # The loading screens' models (RatchetMovement.esl's RatchetLoad* statics): Ratchet and
+        # Clank standing in their idles' first frame, the weapons and a gold bolt, each in
+        # Skyrim's axes and units at its root, sharing the models' own textures.
+        $others += @(
+            @{ Name = "loadscreen_ratchet"; Glb = "ratchet"; Prefix = "RC_"; Clips = $false; TextureDir = "RatchetMovement\ratchet"; Pose = "idle"; Loadscreen = $true; Without = "a loading screen without him" },
+            @{ Name = "loadscreen_clank"; Glb = "clank"; Prefix = "RK_"; Clips = $false; TextureDir = "RatchetMovement\clank"; Pose = "idle"; Loadscreen = $true; Without = "a loading screen without Clank" },
+            @{ Name = "loadscreen_wrench"; Glb = "wrench"; Prefix = "RW_"; Clips = $false; TextureDir = "RatchetMovement\wrench"; Loadscreen = $true; Without = "a loading screen without the wrench" },
+            @{ Name = "loadscreen_burstpistol"; Glb = "burstpistol"; Prefix = "RP_"; Clips = $false; TextureDir = "RatchetMovement\burstpistol"; Loadscreen = $true; Without = "a loading screen without the pistol" },
+            @{ Name = "loadscreen_shatterbomb"; Glb = "shatterbomb"; Prefix = "RS_"; Clips = $false; TextureDir = "RatchetMovement\shatterbomb"; Loadscreen = $true; Without = "a loading screen without the Shatterbomb" },
+            @{ Name = "loadscreen_bolt"; Glb = "bolt_golden_01"; Prefix = "RB_"; Clips = $false; TextureDir = "RatchetMovement\bolts"; Loadscreen = $true; Without = "a loading screen without the bolt" }
+        )
         foreach ($w in $others) {
-            $wglb = Join-Path (Split-Path $glb) "$($w.Name).glb"
+            $wglb = Join-Path (Split-Path $glb) "$(if ($w.Glb) { $w.Glb } else { $w.Name }).glb"
             $wnif = Join-Path $converted "meshes\RatchetMovement\$($w.Name).nif"
             if (-not (Test-Path $wglb)) { Write-Warning "No $wglb`: $($w.Without)"; continue }
             $wstale = -not (Test-Path $wnif)
             if (-not $wstale) {
                 $made = (Get-Item $wnif).LastWriteTime
-                $wstale = (Get-Item $wglb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
+                $wstale = (Get-Item $wglb).LastWriteTime -gt $made -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -notin $notConverters -and $_.LastWriteTime -gt $made }).Count -gt 0
             }
             if ($wstale) {
                 Write-Host "Converting $($w.Name) from $wglb..."
                 $clipArgs = @()
                 if (-not $w.Clips) { $clipArgs += "--no-clips" }
                 if ($w.TextureDir) { $clipArgs += @("--texture-dir", $w.TextureDir) }
+                if ($w.Pose) { $clipArgs += @("--pose", $w.Pose) }
+                if ($w.Loadscreen) { $clipArgs += "--loadscreen" }
                 uv run --python 3.12 --with numpy --with pillow (Join-Path $tools "ratchet_to_skyrim.py") --glb $wglb --out $converted --name $w.Name --prefix $w.Prefix @clipArgs | Out-Host
                 if ($LASTEXITCODE -ne 0) { throw "converting $($w.Name) failed" }
             }
@@ -205,7 +223,7 @@ if ($Install) {
         $vstale = -not (Test-Path $fxIni)
         if (-not $vstale) {
             $made = (Get-Item $fxIni).LastWriteTime
-            $vstale = @(Get-ChildItem $vfxSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -ne "ratchet_plugin.py" -and $_.LastWriteTime -gt $made }).Count -gt 0
+            $vstale = @(Get-ChildItem $vfxSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or @(Get-ChildItem $tools -Filter *.py | Where-Object { $_.Name -notin $notConverters -and $_.LastWriteTime -gt $made }).Count -gt 0
         }
         if ($vstale) {
             Write-Host "Converting his weapons' effect art from $vfxSrc..."
@@ -221,6 +239,47 @@ if ($Install) {
         Write-Host "His weapons' effects from $vfxOut"
     } else {
         Write-Warning "No $vfxSrc`: no effect art for his weapons (tools\extract_riftapart_vfx.py makes it)"
+    }
+
+    # Rift Apart's main menu and startup video (skse\tools\ratchet_menu_to_skyrim.py,
+    # ratchet_intro_to_skyrim.py): its logo where Skyrim's emblem is, its menu music, and its title
+    # card as the video at launch, from riftapart-assets\menu (tools\extract_riftapart_menu.py
+    # makes it); made again when the extraction or a tool is newer.
+    $menuSrc = Join-Path (Find-GameData "riftapart-assets") "menu"
+    $menuOut = Join-Path $here "..\target\skse\menu"
+    if (Test-Path $menuSrc) {
+        $menuTool = Join-Path $here "tools\ratchet_menu_to_skyrim.py"
+        $introTool = Join-Path $here "tools\ratchet_intro_to_skyrim.py"
+        $mstale = -not (Test-Path $menuOut)
+        if (-not $mstale) {
+            $made = @(Get-ChildItem $menuOut -Recurse -File | Sort-Object LastWriteTime | Select-Object -First 1)
+            $made = if ($made) { $made[0].LastWriteTime } else { [datetime]::MinValue }
+            $mstale = @(Get-ChildItem $menuSrc -File | Where-Object { $_.LastWriteTime -gt $made }).Count -gt 0 -or
+                (Get-Item $menuTool).LastWriteTime -gt $made -or (Get-Item $introTool).LastWriteTime -gt $made
+        }
+        if ($mstale) {
+            Write-Host "Converting Rift Apart's menu from $menuSrc..."
+            if (Test-Path $menuOut) { Remove-Item -Recurse -Force $menuOut }
+            uv run --python 3.12 --with numpy --with pillow --with soundfile $menuTool --menu $menuSrc --out $menuOut | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "converting the menu failed" }
+            if (Test-Path $RadVideo) {
+                Write-Host "Making the startup video with $RadVideo..."
+                uv run --python 3.12 --with numpy --with pillow --with soundfile $introTool --menu $menuSrc --rad $RadVideo --out $menuOut --work (Join-Path $here "..\target\skse\intro-frames") | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "making the startup video failed" }
+            } else {
+                Write-Warning "No $RadVideo`: Skyrim's own startup video (see -RadVideo)"
+            }
+        }
+        foreach ($old in "meshes\interface\logo", "Video") {
+            $p = Join-Path $ModDir $old
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+        }
+        if (Test-Path $menuOut) {
+            Copy-Item -Recurse -Force (Join-Path $menuOut "*") $ModDir
+            Write-Host "Rift Apart's menu from $menuOut"
+        }
+    } else {
+        Write-Warning "No $menuSrc`: Skyrim's own main menu (tools\extract_riftapart_menu.py makes it)"
     }
 
     # His guns as Skyrim weapons: the plugin file in the mod's root, enabled in the profile.

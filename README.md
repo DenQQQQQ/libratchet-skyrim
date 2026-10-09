@@ -100,6 +100,13 @@ sounds are Opus, which Bevy can't play: the extractor converts them with `ffmpeg
 your PATH (`--opus keep` keeps the `.opus` files instead). Without the folder the sandbox is silent.
 Recorded demos log their sounds; `tools/mix_demo_audio.py` lays them under the video.
 
+For the Skyrim plugin's main menu, startup video and loading screens: the title logo, title card,
+menu music and press-start sound, into `riftapart-assets/menu/`:
+
+```bash
+python tools/extract_riftapart_menu.py --game "<your Rift Apart folder>" --alert "<ALERT folder>"
+```
+
 ## Run the sandbox
 
 ```bash

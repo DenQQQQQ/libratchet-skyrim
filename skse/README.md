@@ -59,6 +59,12 @@ repository is unchanged.
 - **Rift Apart's look and sound:** the game's own effects for his shots, blasts and swings (with
   their lights), its sounds mixed and looped as the sandbox mixes them, and its follow camera
   (framing, field of view, shakes, the wheel's zoom). See the sections below.
+- **Rift Apart's start:** the startup video is its act 1 title card (its logo on a rift nebula)
+  out of black with its press-start sting, instead of Bethesda's logo; the main menu has its
+  title logo where Skyrim's dragon emblem is, and its menu music (the intro, then its seamless
+  loop) instead of Skyrim's theme; every loading screen shows one of Ratchet (in his idle), Clank,
+  the OmniWrench, the Burst Pistol, the Shatterbomb or a gold bolt, with a tip on his moves
+  (Rift Apart has no loading screens or tips of its own: these are ours).
 - **On Skyrim's ground:** up slopes and stairs in Skyrim's own ground movement at Rift Apart's
   speed; through load doors and loads with nothing left behind; out of the way when he's on a
   horse, swimming, in furniture, knocked down or in a kill move.
@@ -108,6 +114,19 @@ no Creation Kit, no game data): a light plugin with the two guns as weapons (`Ra
 `-Install` puts it in the mod's root and enables it in the MO2 profile (`-Mo2Profile`, Spire). MO2
 keeps its own list while it runs and writes it over the files when the game closes: refresh it
 (F5) and check the plugin is ticked. Whether a game has had the guns is kept in SKSE's co-save.
+The plugin file also holds the loading screens' six models as statics (`RatchetLoad*`).
+
+Rift Apart's start comes from `riftapart-assets/menu` (`tools/extract_riftapart_menu.py`):
+`skse/tools/ratchet_menu_to_skyrim.py` makes the main menu's logo file
+(`meshes/interface/logo/logo.nif`, and the Anniversary Edition's two: the logo as two one-sided
+quads where the emblem was) and its music (`Sound/FX/RatchetMovement/menu`), and
+`skse/tools/ratchet_intro_to_skyrim.py` the startup video (`Video/BGS_Logo.bik`, Bink 1 at the
+original's 1920 x 1080 and 23.976 frames a second) with RAD's own encoder: RAD Video Tools
+(radgametools.com's `RADTools.7z`, its installer unpacked with 7-Zip rather than run, at
+`G:\dev\tools\RADTools\bin\radvideo64.exe`, or `-RadVideo`). Without it, Skyrim's video stays.
+The loading screens' models are converted with the others (`ratchet_to_skyrim.py --pose idle
+--loadscreen`: his idle's first frame baked into the skeleton, Skyrim's axes and units on a node
+under the root, which the loading screen moves).
 
 ## Ratchet's model
 `build.ps1 -Install` converts `riftapart-assets/ratchet.glb` (made by
@@ -208,6 +227,9 @@ selected, and follows the log.
   (`coc`), shots again; then the same across a load of the most recent save. The new shots'
   effects have to be alive under the new cell's 3D with none left from the old place, and
   Ratchet posed and Clank playing there.
+- Every run pictures the main menu (and logs its movie's pieces) and each loading screen.
+  `-Only "loading screens"` runs the loading screens' gallery: six loads of the most recent save,
+  each with one of the models on every loading screen, pictured five times through it.
 - Each jump gets a PASS or FAIL against a fresh sim replaying the same frames (time steps,
   button, stick) on a flat floor down to where he landed: apex within 0.03 m, apex time within
   0.025 s, air time within 0.03 s, distance within 0.2 m, no health lost (and back on the floor

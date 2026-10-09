@@ -43,6 +43,10 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - `tools/extract_riftapart_vfx.py`: GPLv3. Exports the effect art the sandbox's weapon effects
   use (`riftapart-assets/vfx/`, gitignored), with a colour palette read from the game's effect
   materials and particle data.
+- `tools/extract_riftapart_menu.py`: GPLv3. Exports the title logo, the act 1 title card, the
+  menu music (the pause menu's playlist: an intro and its seamless loop) and the press-start
+  sound into `riftapart-assets/menu/` (gitignored), for the Skyrim plugin's main menu, startup
+  video and loading screens. The install's `dag` file lists every asset path.
 - Bevy gotchas:
   - `LinearRgba * k` scales alpha too. Reset alpha when you brighten a colour for a material
     (see `vfx.rs`).

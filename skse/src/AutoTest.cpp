@@ -9,6 +9,7 @@
 #include "Hud.h"
 #include "Input.h"
 #include "Items.h"
+#include "LoadScreens.h"
 #include "Model.h"
 #include "Settings.h"
 #include "Physics.h"
@@ -122,6 +123,9 @@ namespace AutoTest
 			int         wantBolts = 0;
 			float       walkAt = -1.0f;
 			bool        outOfReach = false;
+			// The loading screens' gallery: each of Rift Apart's models on a loading screen in turn
+			// (a load of the most recent save each, pictured). Run only when -Only names it.
+			bool        gallery = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -222,6 +226,7 @@ namespace AutoTest
 			{ .name = "jump onto a top a hair too high", .hold = 0.5f, .airStick = true, .ledgeAt = 2.0f, .ledgeUp = 1.55f, .ledgeFrom = 0.0f, .onTop = true },
 			{ .name = "camera zoom", .hold = -1.0f, .zoom = true },
 			{ .name = "sound lab", .hold = -1.0f, .soundLab = true },
+			{ .name = "loading screens", .hold = -1.0f, .gallery = true },
 			// The effects hang under the player's cell's 3D, which goes at a load door or a load:
 			// through the Bannered Mare's door, then a load of the most recent save. Last, as they
 			// leave him away from the start.
@@ -259,6 +264,7 @@ namespace AutoTest
 			bool        shots = true;           // screenshots (bShots)
 			std::string only;                   // only the cases whose names contain this (sOnly; empty: all)
 			bool        watchMap = false;       // log the engine's Map calls (bWatchMap)
+			std::string lookShown;              // the loading screens' model (in the gallery case)
 			float       cameraYaw = 0.0f;       // the camera's turn round him from behind (fCameraYaw)
 
 			// bDiagnose: steps before the jumps that find what hangs the renderer, each logged
@@ -340,6 +346,11 @@ namespace AutoTest
 			bool                clankThere = false;    // and Clank playing on his back
 			// The zoom case: its step, the time in it, the wheel's distance at each step and the
 			// camera's from him (metres), and whether the last notch went to first person.
+			// The loading screens' gallery: the model it's on, the time since its last step, and
+			// whether a load it started is under way.
+			int                 galleryStep = 0;
+			float               galleryTime = 0.0f;
+			bool                galleryLoading = false;
 			int                 zoomStep = 0;
 			float               zoomTime = 0.0f;
 			float               zoomFrom = 0.0f;
@@ -629,6 +640,9 @@ namespace AutoTest
 			s.zoomStep = 0;
 			s.zoomTime = 0.0f;
 			s.zoomFirst = false;
+			s.galleryStep = 0;
+			s.galleryTime = 0.0f;
+			s.galleryLoading = false;
 			s.shotsThisCase.clear();
 			++s.index;
 		}
@@ -1223,6 +1237,42 @@ namespace AutoTest
 			}
 		}
 
+		// The loading screens' gallery: each of Rift Apart's six models on every loading screen in
+		// turn, a load of the most recent save each (its loading screen is pictured 1.5 s in), a
+		// second in the world between them.
+		void Gallery(const Case& a_case, float a_dt)
+		{
+			constexpr int kModels = 6;
+			s.galleryTime += a_dt;
+			if (s.galleryLoading) {
+				if (s.loads > s.loadsBefore && s.galleryTime > 1.0f) {
+					s.galleryLoading = false;
+					s.galleryTime = 0.0f;
+					++s.galleryStep;
+				}
+				return;
+			}
+			if (s.galleryTime < 1.0f) {
+				return;
+			}
+			if (s.galleryStep >= kModels) {
+				++s.passed;
+				SKSE::log::info("autotest: PASS {}: {} loading screens shown, a model each", a_case.name, kModels);
+				NextCase();
+				return;
+			}
+			s.lookShown = LoadScreens::ShowOnly(s.galleryStep);
+			s.loadsBefore = s.loads;
+			s.galleryLoading = true;
+			s.galleryTime = 0.0f;
+			SKSE::log::info("autotest: {}: {} on the loading screens, then a load", a_case.name, s.lookShown);
+			SKSE::GetTaskInterface()->AddTask([] {
+				auto* saves = RE::BGSSaveLoadManager::GetSingleton();
+				saves->PopulateSaveList();
+				saves->LoadMostRecentSaveGame();
+			});
+		}
+
 		// The camera's distance from him (metres), and whether it's first person.
 		float CameraFromHim()
 		{
@@ -1393,13 +1443,36 @@ namespace AutoTest
 					});
 					return RE::BSEventNotifyControl::kContinue;
 				}
+				// The loading screens: a picture a moment into each (the gallery case shows each of
+				// Rift Apart's models on one in turn).
+				if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && a_event->opening && !s.done) {
+					const int n = ++loadings;
+					SKSE::log::info("autotest: loading screen {}{}", n, s.lookShown.empty() ? "" : ": " + s.lookShown);
+					std::thread([n] {
+						// Pictures through it (its model moves), and its movie's pieces once.
+						for (int k = 1; k <= 5; ++k) {
+							std::this_thread::sleep_for(500ms);
+							TestWindow::Shot(std::format("loading_screen_{}_{}", n, k));
+							if ((k == 2 || k == 5) && n <= 2) {
+								Hud::LogMovie(RE::LoadingMenu::MENU_NAME, 3);
+							}
+						}
+					}).detach();
+					return RE::BSEventNotifyControl::kContinue;
+				}
 				if (!a_event || !a_event->opening || a_event->menuName != RE::MainMenu::MENU_NAME || started) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				started = true;
-				// A moment for the menu to settle before leaving it.
+				// A moment for the menu to settle (it fades in) before leaving it: its pictures, and
+				// its pieces.
 				std::thread([] {
-					std::this_thread::sleep_for(2s);
+					std::this_thread::sleep_for(3s);
+					TestWindow::Shot("main_menu");
+					Hud::LogMovie(RE::MainMenu::MENU_NAME, 3);
+					std::this_thread::sleep_for(3s);
+					TestWindow::Shot("main_menu_2");
+					std::this_thread::sleep_for(500ms);
 					SKSE::GetTaskInterface()->AddTask([] {
 						// A save, not a new game: a new game (coc from the main menu) asks AE's
 						// survival-mode question, which blocks the run. Then, if asked, coc to the
@@ -1418,6 +1491,7 @@ namespace AutoTest
 				return RE::BSEventNotifyControl::kContinue;
 			}
 			bool started = false;
+			std::atomic<int> loadings = 0;
 		};
 	}
 
@@ -1554,7 +1628,7 @@ namespace AutoTest
 			return {};
 		}
 		const Case& c = kCases[s.index];
-		if (!Picked(c.name) || (c.soundLab && s.only.empty())) {
+		if (!Picked(c.name) || ((c.soundLab || c.gallery) && s.only.empty())) {
 			NextCase();
 			return {};
 		}
@@ -1760,6 +1834,10 @@ namespace AutoTest
 		if (c.given) {
 			JudgeGiven(c);
 			NextCase();
+			return {};
+		}
+		if (c.gallery) {
+			Gallery(c, a_dt);
 			return {};
 		}
 		if (c.door) {

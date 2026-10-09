@@ -9,7 +9,9 @@ YOUR OWN Rift Apart install) into what the SKSE plugin draws in Skyrim SE:
 The same for Clank (--name clank: clank.nif, clank.anim) and the weapons (the wrench's and the
 pistol's with their clips; --no-clips for the Shatterbomb and its glove). A model with no skin
 (the bolt pickups: bolt_<tier>_0<n>.glb) becomes rigid shapes holding their own vertices; models
-sharing textures can share their folder (--texture-dir).
+sharing textures can share their folder (--texture-dir). For Skyrim's loading screens, --pose
+bakes a clip's frame into the skeleton (he stands in it) and --loadscreen turns the model into
+Skyrim's axes and units at its root, as the game's own loading-screen art is.
 
 The output is game data: it stays on this PC (the build installs it into the MO2 mod), never in
 the repository.
@@ -48,6 +50,11 @@ MAX_TEXTURE = 1024  # uncompressed for now: 4 MB each at 1024
 # Every clip goes in, the wrench's and the guns' too (the plugin fights with them now). A pattern
 # here would leave matching clips out.
 SKIP_CLIPS = re.compile(r"^$")
+# Set from --pose and --loadscreen: a clip's frame baked into the skeleton, and the root in
+# Skyrim's axes (z up: glTF's (x, y, z) to (x, -z, y)) and game units (a metre is 1 / 0.0142875).
+POSE = None  # (clip name, seconds into it)
+LOADSCREEN = False
+UNITS_PER_METRE = 1.0 / 0.0142875
 
 COMPONENT = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
 WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
@@ -247,9 +254,32 @@ def rigid_shape(nf, gl, node, ni, prim, shader, alpha):
     return shape, nv, nt
 
 
+def clip_pose(gl, name, at):
+    """Each joint's translation, rotation and scale in clip `name` `at` seconds in (the key at or
+    before it), by node: what --pose bakes in."""
+    clips = [a for a in gl.g.get("animations", []) if a.get("name") == name]
+    if not clips:
+        raise ValueError(f"no clip {name!r} (it has {', '.join(a.get('name', '?') for a in gl.g.get('animations', []))})")
+    pose = {}
+    for ch in clips[0]["channels"]:
+        s = clips[0]["samplers"][ch["sampler"]]
+        times = gl.accessor(s["input"])
+        vals = gl.accessor(s["output"]).astype(np.float64)
+        k = min(max(int(np.searchsorted(times, at, side="right")) - 1, 0), len(times) - 1)
+        pose.setdefault(ch["target"]["node"], {})[ch["target"]["path"]] = [float(x) for x in vals[k]]
+    return pose
+
+
 def convert_model(gl, out_dir, manifest):
     g = gl.g
     nodes = g["nodes"]
+    if POSE:
+        # He stands in that frame: its keys over the rest pose (no matrix left to override them).
+        pose = clip_pose(gl, *POSE)
+        nodes = [dict(n) for n in nodes]
+        for i, keys in pose.items():
+            nodes[i].pop("matrix", None)
+            nodes[i].update(keys)
     # No skin: rigid shapes (the bolt pickups).
     skinned = bool(g.get("skins"))
     if skinned:
@@ -273,6 +303,14 @@ def convert_model(gl, out_dir, manifest):
 
     root = nf.add(node_block(ROOT_NAME, np.eye(3), np.zeros(3), 1.0))
     nf.blocks[root]["flags"] = 0x8000E
+    # What the model hangs under: the root, or for a loading screen a node turning it into
+    # Skyrim's axes and units ((x, y, z) to (x, -z, y), a metre in game units). Not the root
+    # itself: the loading screen sets the root's own place, turn and size.
+    holder = root
+    if LOADSCREEN:
+        up = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+        holder = nf.add(node_block(ROOT_NAME + "_Skyrim", up, np.zeros(3), UNITS_PER_METRE))
+        nf.blocks[root]["children"].append(holder)
     block_of_node = {}
 
     def add_tree(i, parent_block):
@@ -285,7 +323,7 @@ def convert_model(gl, out_dir, manifest):
                 add_tree(c, b)
 
     for r in rig_roots:
-        add_tree(r, root)
+        add_tree(r, holder)
 
     # Materials: textures once each.
     tex_dir = os.path.join(out_dir, "textures", *TEXTURE_DIR.split("\\"))
@@ -399,7 +437,7 @@ def convert_model(gl, out_dir, manifest):
             if not skinned:
                 shader, alpha = material(prim["material"]) if "material" in prim else (-1, -1)
                 shape, nv, nt = rigid_shape(nf, gl, node, ni, prim, shader, alpha)
-                nf.blocks[root]["children"].append(shape)
+                nf.blocks[holder]["children"].append(shape)
                 stats.append((PREFIX + node.get("name", f"shape{ni}"), nv, nt, 0, 0))
                 continue
             at = prim["attributes"]
@@ -484,7 +522,7 @@ def convert_model(gl, out_dir, manifest):
                 })
             partition = nf.add({"type": "NiSkinPartition", "data_size": len(buf), "vertex_size": vsize, "vertex_desc": desc,
                                 "vertex_data": bytes(buf), "partitions": partitions})
-            skin_inst = nf.add({"type": "BSDismemberSkinInstance", "data": skin_data, "partition": partition, "skeleton_root": root,
+            skin_inst = nf.add({"type": "BSDismemberSkinInstance", "data": skin_data, "partition": partition, "skeleton_root": holder,
                                 "bones": [block_of_node[joints[j]] for j in used], "body_parts": [(257, 32)] * len(partitions)})
             shader, alpha = material(prim["material"]) if "material" in prim else (-1, -1)
             # A part the plugin shows only at times (Clank's heli-pack: "part": "heli") is in the
@@ -499,7 +537,7 @@ def convert_model(gl, out_dir, manifest):
                 "shader": shader, "alpha": alpha,
                 "vertex_desc": desc, "num_triangles": 0, "num_vertices": 0, "data_size": 0, "particle_data_size": 0,
             })
-            nf.blocks[root]["children"].append(shape)
+            nf.blocks[holder]["children"].append(shape)
             stats.append((shape_name, nv, len(tris), len(used), len(partitions)))
 
     mesh_dir = os.path.join(out_dir, "meshes", *MESH_PATH.split("\\")[:-1])
@@ -612,9 +650,15 @@ def main():
     ap.add_argument("--prefix", default="RC_", help="put before every node name (keeps the models' nodes apart in one scene)")
     ap.add_argument("--no-clips", action="store_true", help="the model only (the Shatterbomb and its glove have no clips of their own)")
     ap.add_argument("--texture-dir", help="textures\\<this> instead of textures\\RatchetMovement\\<name> (models sharing their textures: the bolts)")
+    ap.add_argument("--pose", help="CLIP[@SECONDS]: that clip's frame baked into the skeleton (a loading screen's still)")
+    ap.add_argument("--loadscreen", action="store_true", help="the root in Skyrim's axes and game units, as loading-screen art is")
     a = ap.parse_args()
-    global PREFIX, MESH_PATH, TEXTURE_DIR, ANIM_FILE, ROOT_NAME
+    global PREFIX, MESH_PATH, TEXTURE_DIR, ANIM_FILE, ROOT_NAME, POSE, LOADSCREEN
     PREFIX = a.prefix
+    if a.pose:
+        clip, _, at = a.pose.partition("@")
+        POSE = (clip, float(at) if at else 0.0)
+    LOADSCREEN = a.loadscreen
     MESH_PATH = f"RatchetMovement\\{a.name}.nif"
     TEXTURE_DIR = a.texture_dir or f"RatchetMovement\\{a.name}"
     ANIM_FILE = f"{a.name}.anim"

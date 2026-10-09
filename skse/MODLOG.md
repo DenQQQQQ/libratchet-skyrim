@@ -1095,3 +1095,67 @@ vendor).
 - The approach loop (`bolt_approach`), and what the game does past the sandbox (zero gravity,
   moving platforms, hazards sending bolts straight to him, auto-collect rewards).
 
+## 2026-10-09 (late): Rift Apart's start: the startup video, the main menu, the loading screens
+
+The owner: "change the intro screen to the rift aparts lol", then all four of: the main menu's
+logo, its music, the startup video, the loading screens.
+
+### From Rift Apart (a research agent, then its extractor)
+- **`tools/extract_riftapart_menu.py`** (GPLv3, through ALERT): the install's `dag` file lists
+  every asset path (169,245), which made the search quick. The title logo is
+  `ui/loaded/authored/_art/textures/rcra_logo.texture` (the English one `uiicons.config` names),
+  its colour premultiplied: divided out, trimmed. The act 1 title card
+  (`textures/ui/act1_rc_logo_black_screen.texture`, the logo on a violet rift nebula) at 1920 x
+  1080. The menu music: the pause menu's (`Play_UI_PauseMenu_Pause_menu_open` starts a playlist
+  of two intro + loop pairs; the first pair's intro from its clip's start with its sine fade-in,
+  then its loop, seamless); no front-end event plays any, so the main menu's own isn't known.
+  The press-start sound (`Play_UI_HUD_MENU_start_game`, its two audio layers) as the video's
+  sting.
+- Rift Apart has no loading screens (a spinning wrench) and no loading tips.
+
+### Built
+- **The main menu's logo** (`skse/tools/ratchet_menu_to_skyrim.py`): Skyrim SE's dragon emblem
+  is `meshes/interface/logo/logo.nif` (a lit mesh under a BSFadeNode "Logo", the same from both
+  sides, about 39 x 73 units round (23.8, 16.8, 0) in the XZ plane); the menu's Flash movie draws
+  only the list, the news and Bethesda's badge. Replaced by the logo as two one-sided unlit quads
+  where the emblem was, each reading the right way round from its side (the file's front faces
+  wind counter-clockwise round their normal, checked on the emblem's 3346 triangles), 46 units
+  tall. The Anniversary Edition's two logo files get the same.
+- **Its music** (`src/MainMenu.cpp`): while the main menu is up, the intro once a session, then
+  the loop over and over (a watcher restarts it), at 0.8 × the INI's sound volume; Skyrim's music
+  category (`$Music`, 00071E64) has its static volume set to 0 meanwhile and given back as the
+  menu goes (that one isn't saved with the settings).
+- **The startup video** (`skse/tools/ratchet_intro_to_skyrim.py`): Skyrim SE plays
+  `Video/BGS_Logo.bik`, Bink 1 (`BIKi`, 1920 x 1080, 23.976 frames a second) through
+  `bink2w64.dll`. 5.5 s of the title card out of black on a soft blue flash, pulling back from
+  1.08 to 1.0, back into black; the sting 0.3 s in. Encoded with RAD Video Tools' encoder (the
+  owner's OK to download `RADTools.7z` from radgametools.com; its NSIS installer wants admin and
+  isn't signed, so 7-Zip unpacked `radvideo64.exe` instead, which is signed by Epic Games). Its
+  command line: `Bink <frames????.png*1-N> <out> /V100 /F23.976 /O /#` and `BinkMix` for the
+  sound; `/#` is needed (without it, it waits on a dialog) and whole Windows paths (a relative
+  one, or forward slashes, made `BinkMix` fail with 8005).
+- **The loading screens** (`src/LoadScreens.cpp`): a `TESLoadScreen` holds its model (a bound
+  object), its size, turn, place, camera move and its text. All 377 of Skyrim's get one of six
+  statics in `RatchetMovement.esl` (`RatchetLoad*`): Ratchet and Clank in their idles' first
+  frame, the OmniWrench, the Burst Pistol, the Shatterbomb and a gold bolt, each converted with
+  `--pose idle --loadscreen`; and one of eleven tips on his moves (ours). Their looks are fitted
+  to the game's own (a standing Imperial: scale 1.4, turned 195°, lowered 140) and the gallery's
+  pictures. Things found on the way:
+  - The loading screen sets its model root's own transform: Skyrim's axes and units went on the
+    root at first, and the models came out 2 units tall (invisible). They're on a node under it.
+  - Each screen's own camera move framed the same model differently (5 moves; 212 of the 377
+    have `Cameras\LSCameraPanZoomInSmall.nif`): every screen gets that one. With none, the
+    models sat big and low.
+  - `LookupForm<TESBoundObject>` finds nothing (the abstract type): the form is looked up and
+    then `As<TESBoundObject>()`.
+  - Clank's model faces backwards (he rides on Ratchet's back): turned 195°, not 15°.
+  - The tip is set (the loading menu's `LoadingText` says it, white, shown), but the test window's
+    pictures never show a loading screen's text or its level meter, Skyrim's own included.
+
+### Tests
+- Every run pictures the main menu (and logs its movie's pieces) and each loading screen.
+- `-Only "loading screens"`: the gallery, six loads of the most recent save, one model on every
+  loading screen each, pictured five times through it: all six in frame, the same way each time.
+- The full run: 48/48 (the "jump onto a top a hair too high" case failed once before, landing
+  +1.52 m, and passed alone: an old borderline step-up, not from this).
+

@@ -10,4 +10,7 @@ namespace Hud
 	void BoltCounter(bool a_visible, std::uint32_t a_shown, std::uint32_t a_gain);
 	// For the tests: what the counter's fields say now ("" when there are none, or they're hidden).
 	std::pair<std::string, std::string> BoltCounterText();
+	// For finding a menu's pieces: its movie's display objects under _root, a_depth levels down,
+	// logged with their places, sizes and whether they show.
+	void LogMovie(std::string_view a_menu, int a_depth);
 }
