@@ -146,6 +146,7 @@ namespace Camera
 			float                fovScale = 0.0f;                 // tan(vertical/2) / tan(Skyrim's FOV/2), measured
 			float                distance = 0.0f;                 // the wheel's: metres back standing (0: the game's)
 			bool                 zoomedIn = false;                // the wheel went on into first person
+			RE::NiPoint3         look{ 0.0f, 1.0f, 0.0f };        // where it looks without its shakes (the mouse look)
 		};
 		Rig g;
 
@@ -501,6 +502,7 @@ namespace Camera
 				_Update(a_this, a_next);
 				RE::NiQuaternion look;
 				_GetRotation(a_this, look);
+				g.look = look.ToRotation().GetVectorY();
 				RE::NiPoint3 at = a_this->translation;
 				Place(look, at);
 				if (!g.active) {
@@ -569,6 +571,11 @@ namespace Camera
 			              std::string("off foot"));
 			Fx::Crosshair(std::nullopt);
 		}
+	}
+
+	std::optional<RE::NiPoint3> LookForward()
+	{
+		return g.active ? std::optional(g.look) : std::nullopt;
 	}
 
 	float ZoomDistance() { return g.distance; }

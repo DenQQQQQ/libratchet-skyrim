@@ -25,6 +25,10 @@ namespace Camera
 	// A short wobble (the Hyper-Strike's landing; the sandbox's own).
 	void Wobble(float a_seconds);
 
+	// Where Rift Apart's camera looks without its shakes (Skyrim's mouse look): the stick and the
+	// aim turn by it (the sandbox shakes only the drawn camera, not its rig). nullopt when it's off.
+	std::optional<RE::NiPoint3> LookForward();
+
 	// Tests: the wheel's zoom (metres back standing, the world's), and a notch of the wheel sent
 	// through Skyrim's third-person camera's own input handler (a_in: Zoom In).
 	float ZoomDistance();

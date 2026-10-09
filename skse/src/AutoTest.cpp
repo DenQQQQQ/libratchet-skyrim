@@ -100,6 +100,9 @@ namespace AutoTest
 			// The ledge case: this long on the lip (s), crouch is held instead of the climb's press
 			// (0: not): he has to let go and come back down.
 			float       dropAfter = 0.0f;
+			// The ledge case's top is a hair above his jump: he has to end up on it (the sandbox's
+			// step up onto a top within 0.35 m), not slide down its face.
+			bool        onTop = false;
 		};
 		// With the owner's configs (the sandbox, flat floor; heights and distances × scale, times
 		// the same at any scale): a press again at 0.4 s double-jumps at 0.42 s (peak 2.8 m at
@@ -179,6 +182,9 @@ namespace AutoTest
 			{ .name = "ledge grab", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f },
 			// And letting go of it (crouch: Skyrim's Sneak, the sandbox's C).
 			{ .name = "ledge drop", .hold = 0.5f, .airStick = true, .ledgeAt = 3.0f, .dropAfter = 1.5f },
+			// A top 1.6 m up, 2 m ahead, from the ground: his full jump peaks at 1.5 m, so he only
+			// gets onto it by the step up the sandbox's box move gives (0.35 m).
+			{ .name = "jump onto a top a hair too high", .hold = 0.5f, .airStick = true, .ledgeAt = 2.0f, .ledgeUp = 1.55f, .ledgeFrom = 0.0f, .onTop = true },
 			{ .name = "camera zoom", .hold = -1.0f, .zoom = true },
 			{ .name = "sound lab", .hold = -1.0f, .soundLab = true },
 			// The effects hang under the player's cell's 3D, which goes at a load door or a load:
@@ -269,6 +275,7 @@ namespace AutoTest
 			std::optional<RE::NiPoint3> hungAt;
 			bool                        climbed = false;
 			bool                        dropped = false;   // let go of it (a drop case)
+			int                         fightState = -1;   // the sim's state, last logged in a fight
 			// A door case: its step (0 shots, 1 through, 2 shots there), the time in it, how long he's
 			// stood in the new cell, where he was, the games loaded, and what the effects did there.
 			int                 doorStep = 0;
@@ -529,6 +536,7 @@ namespace AutoTest
 			s.hungAt.reset();
 			s.climbed = false;
 			s.dropped = false;
+			s.fightState = -1;
 			s.wallPlaced = false;
 			s.onWall = -1.0f;
 			s.wallPress = 0.0f;
@@ -780,10 +788,17 @@ namespace AutoTest
 		void JudgeLedge(const Case& a_case, const Jump& a_jump)
 		{
 			std::string bad;
-			if (!s.hungAt) {
+			if (a_case.onTop) {
+				// Onto the top (its lip ledgeUp + 0.05 up), not down its face.
+				if (a_jump.landDz < a_case.ledgeUp) {
+					bad += " not-on-top";
+				}
+			} else if (!s.hungAt) {
 				bad += " no-catch";
 			}
-			if (a_case.dropAfter > 0.0f) {
+			if (a_case.onTop) {
+				// (No catch or climb wanted.)
+			} else if (a_case.dropAfter > 0.0f) {
 				// Let go: down again, not up on the ledge.
 				if (!s.dropped) {
 					bad += " no-drop";
@@ -1557,14 +1572,23 @@ namespace AutoTest
 			return {};
 		}
 		if (c.duration > 0.0f) {
-			// A fight: the wrench presses and the trigger on their times, then the verdict.
+			// (The sim's states through a fight, logged as they change: a flaky combo said why.)
+			if (static_cast<int>(a_state) != s.fightState) {
+				SKSE::log::info("autotest: {} {:.3f} s: state {}", c.name, t, a_state);
+				s.fightState = static_cast<int>(a_state);
+			}
+			// A fight: the wrench presses and the trigger on their times, then the verdict. A press
+			// is the one frame whose span [t, t + dt) holds its time (frames tile the clock, so it's
+			// exactly one: "the first frame starting within a frame after it" missed one now and then
+			// when a long frame came before a shorter one, and the combo lost its third swing).
+			const auto inFrame = [&](float a_at) { return a_at >= 0.0f && a_at >= t && a_at < t + a_dt; };
 			Combat::TestButtons fight;
 			for (const float at : c.melee) {
-				fight.melee = fight.melee || (at >= 0.0f && t >= at && t < at + a_dt);
+				fight.melee = fight.melee || inFrame(at);
 			}
 			fight.fire = c.fireFrom >= 0.0f && t >= c.fireFrom && t < c.fireTo;
 			fight.aim = c.aim && (fight.fire || c.fireFrom < 0.0f);
-			fight.throwWrench = c.throwAt >= 0.0f && t >= c.throwAt && t < c.throwAt + a_dt;
+			fight.throwWrench = inFrame(c.throwAt);
 			Combat::SetTestButtons(fight);
 			if (t >= c.duration && (!a_busy || t >= c.duration + 3.0f)) {
 				JudgeFight(c);

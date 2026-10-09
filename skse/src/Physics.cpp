@@ -52,7 +52,9 @@ namespace Physics
 		const float units = RE::bhkWorld::GetWorldScaleInverse();
 		const float lift = 0.3f * units;
 		const float r = a_radius * units;
-		const RE::NiPoint3 offsets[] = { { 0.0f, 0.0f, 0.0f }, { r, 0.0f, 0.0f }, { -r, 0.0f, 0.0f }, { 0.0f, r, 0.0f }, { 0.0f, -r, 0.0f } };
+		// His footprint as the sandbox's box has it: a square on the world's axes, its corners too.
+		const RE::NiPoint3 offsets[] = { { 0.0f, 0.0f, 0.0f }, { r, 0.0f, 0.0f }, { -r, 0.0f, 0.0f }, { 0.0f, r, 0.0f }, { 0.0f, -r, 0.0f },
+			{ r, r, 0.0f }, { r, -r, 0.0f }, { -r, r, 0.0f }, { -r, -r, 0.0f } };
 		std::optional<float> nearest;
 		for (const auto& o : offsets) {
 			const RE::NiPoint3 from = a_feet + o + RE::NiPoint3{ 0.0f, 0.0f, lift };
@@ -74,11 +76,12 @@ namespace Physics
 	{
 		const float units = RE::bhkWorld::GetWorldScaleInverse();
 		const RE::NiPoint3 middle = a_feet + RE::NiPoint3{ 0.0f, 0.0f, a_middle * units };
-		// A face hit from his middle: steep enough to be a wall, and its distance along its own
-		// normal (a ray at an angle to it travels further than that).
+		// A face hit from his middle: steep enough to be a wall (within about 26° of upright: the
+		// sandbox's walls are upright, and a steep rock slope isn't one), and its distance along its
+		// own normal (a ray at an angle to it travels further than that).
 		const auto face = [&](const Hit& a_hit) -> std::optional<Wall> {
 			const float len = std::sqrt(a_hit.normal.x * a_hit.normal.x + a_hit.normal.y * a_hit.normal.y);
-			if (len < 0.7f) {
+			if (len < 0.9f) {
 				return std::nullopt;  // a floor, a slope or a ceiling
 			}
 			const RE::NiPoint2 n{ a_hit.normal.x / len, a_hit.normal.y / len };

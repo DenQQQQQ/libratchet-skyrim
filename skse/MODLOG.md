@@ -940,3 +940,42 @@ Skyrim's keyboard is DirectInput's), 1.2 s into the hang (the catch's own move t
 he dropped half a second sooner than on the test's crouch, and wasn't sneaking. The jump log says
 when he starts hanging from a ledge.
 
+### The combo's lost third swing: the test's press
+
+Twice in about ten full runs the combo's third swing never came. Each fight now logs the sim's
+states as they change: with the stick held, each swing ends at its early exit just before the
+next press (swing 2 at 0.441-0.443 s), and the press at 0.45 s starts the next from the ground a
+frame later. In the sim a press always queues or starts the next swing, so the press itself was
+lost: the test pressed in "the first frame starting within a frame after its time", measured
+with that frame's own length, and a long frame before a shorter one leaves a gap no frame
+starts in. A press is now the one frame whose span holds its time (frames tile the clock).
+
+### A second audit: how the hosts drive the sim
+
+Another agent compared the sandbox's `simulate()` and level queries with `Jump.cpp` and
+`Physics.cpp`. Fixed from it:
+
+- **Walls in the air and in moves.** The sandbox gives the sim the speed a wall let him have, in
+  any state. The plugin did that only on the ground, so a jump into a wall kept its full speed
+  into it and flew on at full speed once over its top; a dash into a wall then jumped with the
+  dash's speed. The speed he really made goes back to the sim in flights, dashes and swings too,
+  whenever it's clearly less than asked (the ground's rule).
+- **Stepping up in the air.** The sandbox's box move lifts him onto any top within 0.35 m (×
+  scale) above his feet in every state: coming down just short of a platform, he lands on it;
+  going up past a low edge, the jump goes on. In a free flight (a jump, double jump, fall, glide,
+  air dash, wall jump) a top that close ahead now lifts him onto it in time, as the ground moves'
+  step-up already did. A new case: a top 1.6 m up, 2 m ahead, his full jump peaking at 1.5 m.
+- **Steering without the shakes:** the stick and the aim turn by the camera's mouse look, not by
+  the camera after its recoil, blast or slam shake (the sandbox shakes only the drawn camera).
+- **His footprint is the sandbox's square:** the ground under him is looked for at its corners
+  too (9 rays), not only along the axes (a plus reached 0.25 m diagonally, not 0.49).
+- **Walls are near upright:** a face counts as one within about 26° of upright (it was 45°): he
+  doesn't stick to steep rock slopes.
+- **A Hyper-Strike out of a fall Skyrim started** is the sim's (its hop and slam), like a double
+  jump or a glide out of one.
+- Not changed: his collision body is still the Dragonborn's capsule (taller and wider than
+  Ratchet's box: ceilings come 0.6 m sooner, he touches edges first); shrinking the player stays
+  the owner's call (it's saved with the game). Skyrim's own "standing" still ends a flight (the
+  sandbox lands only on a top under his box); the old edge rule went with the single ray, and
+  bringing it back is for a careful day.
+

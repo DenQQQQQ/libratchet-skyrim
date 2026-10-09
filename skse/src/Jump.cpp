@@ -214,7 +214,8 @@ namespace Jump
 			if (!camera || !camera->cameraRoot) {
 				return view;
 			}
-			view.forward = camera->cameraRoot->world.rotate.GetVectorY();
+			// (Rift Apart's camera without its shakes: a recoil or a blast doesn't turn his run.)
+			view.forward = Camera::LookForward().value_or(camera->cameraRoot->world.rotate.GetVectorY());
 			const float len = std::sqrt(view.forward.x * view.forward.x + view.forward.y * view.forward.y);
 			if (len > 1e-4f) {
 				view.flatForward = { view.forward.x / len, view.forward.y / len };
@@ -481,6 +482,46 @@ namespace Jump
 			return out;
 		}
 
+		// In a flight, the speed up (m/s) that lifts him onto a step ahead in time: the first top
+		// higher than his feet and no higher than kStepUp, from half his footprint out to where he'll
+		// be in kStepLook, along a_across (Skyrim's x, y; m/s), with an upright face under it at his
+		// feet (a step's riser, as the sandbox's boxes have: ground sloping up ahead isn't one, he
+		// lands on it). 0: none, or a wall too high.
+		float StepUpAhead(const RE::NiPoint3& a_feet, RE::NiPoint2 a_across, float a_dt)
+		{
+			const float s = Settings::Get().scale;
+			const float u = UnitsPerMetre();
+			const float speed = std::sqrt(a_across.x * a_across.x + a_across.y * a_across.y);
+			if (speed <= 0.2f) {
+				return 0.0f;
+			}
+			const RE::NiPoint3 dir{ a_across.x / speed, a_across.y / speed, 0.0f };
+			const float        r = kFootprint * s;
+			const float        top = (kStepUp + 0.05f) * s;
+			for (float d = 0.5f * r; d <= r + speed * kStepLook; d += 0.1f * s) {
+				const RE::NiPoint3 at = a_feet + dir * (d * u);
+				const auto hit = Physics::Ray(at + RE::NiPoint3{ 0.0f, 0.0f, top * u }, at - RE::NiPoint3{ 0.0f, 0.0f, 0.05f * u });
+				if (!hit) {
+					continue;
+				}
+				const float h = (hit->point.z - a_feet.z) / u;
+				if (h < 0.03f * s) {
+					continue;  // no higher than his feet: he comes down on it as he is
+				}
+				if (h > kStepUp * s || hit->normal.z < kWalkable) {
+					return 0.0f;  // a wall: the controller stops him at it
+				}
+				// Its riser: level from just above his feet, out to it.
+				const RE::NiPoint3 low = a_feet + RE::NiPoint3{ 0.0f, 0.0f, std::min(0.05f * s, 0.5f * h) * u };
+				const auto         riser = Physics::Ray(low, low + dir * ((d + 0.05f * s) * u));
+				if (!riser || std::sqrt(riser->normal.x * riser->normal.x + riser->normal.y * riser->normal.y) < 0.7f) {
+					return 0.0f;  // ground rising ahead: he lands on it
+				}
+				return h / std::max(a_dt, (d - r) / speed);
+			}
+			return 0.0f;
+		}
+
 		// A ground move Skyrim's ground state carries out (GroundStateHook): the sim's velocity
 		// across the ground for his controller (Skyrim's axes, m/s), and what the state made of it.
 		struct Drive
@@ -719,20 +760,27 @@ namespace Jump
 					contact.landing_ahead = LandingAhead(feet, g.last.velocity, g.last.gravity) ? 1 : 0;
 				}
 			}
-			if (!g.ours || (g.groundMove && g.last.state == RATCHET_STATE_GROUND)) {
+			{
 				// The sim goes on from what he really does across the ground: Skyrim's locomotion, or
-				// the sim's own walk after the collisions (a wall stops him). So a jump keeps his
+				// the sim's own moves after the collisions (a wall stops him). So a jump keeps his
 				// speed. Not up and down: standing, Skyrim's vertical speed can sit a hair above
 				// zero, and the sim lands only when not rising (a fall it entered after a teleport
 				// never ended).
-				// In the sim's own walk, only when he went slower than it asked (a wall, or someone
-				// in the way): up stairs Skyrim moves him faster at times, and its steps' edges turn
-				// him, and fed back each frame that ran away with him, off the stairs' side.
+				// In the sim's own walk, dashes, swings and flights, only when he went slower than it
+				// asked (a wall, or someone in the way): up stairs Skyrim moves him faster at times,
+				// and its steps' edges turn him, and fed back each frame that ran away with him, off
+				// the stairs' side. In a flight too, as the sandbox's (any move that hit a wall gives
+				// the sim the speed it really had): a jump into a wall loses the speed into it, and
+				// doesn't fly on at full speed once he's over its top.
 				const RatchetVec3 v = ControllerVelocity(ctrl);
 				const float       asked = g.last.velocity.x * g.last.velocity.x + g.last.velocity.z * g.last.velocity.z;
 				const float       made = v.x * v.x + v.z * v.z;
 				if (!g.ours || made < 0.9f * asked) {
 					ratchet_set_velocity(g.sim, { v.x, g.last.velocity.y, v.z });
+					if (g.ours && !g.groundMove) {
+						SKSE::log::info("jump: something in his way took his speed across: {:.2f} of {:.2f} m/s (state {})", std::sqrt(made), std::sqrt(asked),
+							g.last.state);
+					}
 				}
 			}
 			if (g.ours && !g.groundMove) {
@@ -802,8 +850,9 @@ namespace Jump
 				}
 			} else if (!g.ours && r.state != RATCHET_STATE_GROUND &&
 					   r.events & (RATCHET_EVENT_DOUBLE_JUMPED | RATCHET_EVENT_GLIDE_STARTED | RATCHET_EVENT_AIR_DASHED | RATCHET_EVENT_WALL_STUCK |
-								   RATCHET_EVENT_LEDGE_GRABBED)) {
-				// Out of a fall Skyrim started (off a ledge): the sim's from here.
+								   RATCHET_EVENT_LEDGE_GRABBED | RATCHET_EVENT_SMASH_STARTED)) {
+				// Out of a fall Skyrim started (off a ledge): the sim's from here (a Hyper-Strike too:
+				// its hop and its slam's speed are the sim's).
 				g.startVelocity = ControllerVelocity(ctrl);
 				Launch(a_player, ctrl, r.velocity, false, r.events & RATCHET_EVENT_DOUBLE_JUMPED ? TakeoffEvent(ctrl) : "JumpFall");
 			} else {
@@ -873,8 +922,20 @@ namespace Jump
 					ctrl->fallTime = 0.0f;
 					AutoTest::OnMove("wall_jump");
 				}
-				// The whole velocity is the sim's in the air: up and across.
-				SetVelocity(ctrl, r.velocity);
+				// The whole velocity is the sim's in the air: up and across. Except up a step: a top
+				// ahead no higher than kStepUp above his feet lifts him onto it in time (the sandbox's
+				// box move steps up in every state). Coming down, he lands on a platform he fell just
+				// short of; going up, the jump carries on above it.
+				RatchetVec3 flight = r.velocity;
+				const bool  free = r.state == RATCHET_STATE_JUMP || r.state == RATCHET_STATE_DOUBLE_JUMP || r.state == RATCHET_STATE_FALL ||
+				                  r.state == RATCHET_STATE_GLIDE || r.state == RATCHET_STATE_AIR_DASH || r.state == RATCHET_STATE_WALL_JUMP;
+				if (free) {
+					// (0: no step. Only a step's lift: a fall's speed is below zero.)
+					if (const float lift = StepUpAhead(feet, { r.velocity.x, -r.velocity.z }, a_dt); lift > 0.0f && lift > flight.y) {
+						flight.y = lift;
+					}
+				}
+				SetVelocity(ctrl, flight);
 				if (r.state == RATCHET_STATE_GLIDE || r.state == RATCHET_STATE_WALL_STICK || r.state == RATCHET_STATE_LEDGE_HANG ||
 					r.state == RATCHET_STATE_LEDGE_CLIMB || r.state == RATCHET_STATE_SMASH) {
 					// A glide comes down softly, and so does a slide down a wall; hanging from a
