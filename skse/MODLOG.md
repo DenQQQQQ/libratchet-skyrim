@@ -1188,7 +1188,7 @@ and runs its `Install.bat`.
   - it refuses any file type outside scripts, docs and our binaries;
   - zip entries are named with "/", because Windows PowerShell's `ZipFile.CreateFromDirectory`
     writes "\";
-  - `.github/workflows/release.yml` runs it for a `v*` tag. Untested until the first push.
+  - `.github/workflows/release.yml` runs it on GitHub (see below).
 - **The owner's paths** left `build.ps1` and `ingame.ps1` for the gitignored `skse\local.psd1`
   (see `local.example.psd1`). Visual Studio is found with vswhere.
 - **Licences:** `LICENSE` (MIT), and in `LICENSES\` the GPL-3.0 text and ww2ogg's BSD-3 text.
@@ -1200,3 +1200,15 @@ and runs its `Install.bat`.
     clips, whose Oct 7 extraction predates later extractor changes;
   - installed into the MO2 mod with `-ModDir` (7 minutes with the cache), then the in-game
     run: 48/48 passed (Ratchet posed, Clank playing, every move, weapon and bolt case).
+
+### Publishing (2026-10-14)
+- Public at DenQQQQQ/libratchet-skyrim. Its history is this branch's, rewritten outside the
+  repo: one pseudonymous identity, UTC times.
+- **A local build embeds this PC's paths.** The plugin DLL holds its source and PDB paths
+  (`__FILE__`, CommonLib's log locations) and ratchet.dll its cargo registry's. Release binaries
+  come from GitHub's runner instead: only `D:\a\...` and `runneradmin` paths.
+- **The release workflow** (`.github/workflows/release.yml`, by hand, with a version) builds the
+  zip as an artifact and doesn't publish. The zip is tested in game first, then published with
+  `gh release create`.
+  - Its first run took 17 min (vcpkg cloned and bootstrapped, CommonLib built from scratch).
+  - Its binaries in the MO2 mod passed 48/48. The .esl is byte-identical to the local build's.

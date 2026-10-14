@@ -28,7 +28,8 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - Players' install: `install.ps1` / `Install.bat` (GPLv3) extract from the player's own Rift Apart
   and run `skse/convert.ps1` (the converters into Skyrim's formats, shared with `skse/build.ps1
   -Install`); `skse/package.ps1` makes the release zip (our files only, checked for game data);
-  `.github/workflows/release.yml` runs it for a tag. The player's guide is `INSTALL.md`.
+  `.github/workflows/release.yml` runs it on GitHub (Actions, by hand, with a version): test its zip in
+  game, then `gh release create`. The player's guide is `INSTALL.md`.
 - `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
   falloff, shell and camera-shake data). Pure Rust like libratchet; the host does aiming,
   collision, damage and effects. Run `cargo test -p libarsenal` after weapon changes.

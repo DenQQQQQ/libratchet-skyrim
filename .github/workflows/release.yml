@@ -1,15 +1,18 @@
 # Builds the SKSE plugin, ratchet.dll and the GDeflate decoder, and makes the release zip
-# (skse/package.ps1): this project's own files only, no game data. A tag v* publishes it as a
-# GitHub release; a manual run keeps it as the run's artifact.
+# (skse/package.ps1): this project's own files only, no game data. Run it from the Actions tab
+# (Release, Run workflow, with the version); the zip is the run's artifact. Test it in the game,
+# then publish it: gh release create v<version> RatchetMovement-<version>.zip
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 0.1.0"
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   package:
@@ -21,6 +24,8 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
 
       # vcpkg with its full history: skse/vcpkg.json pins a baseline commit.
       - name: vcpkg
@@ -33,21 +38,10 @@ jobs:
         shell: powershell
         run: |
           $env:VCPKG_ROOT = "$env:RUNNER_TEMP\vcpkg"
-          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "" }
-          ./skse/package.ps1 -Version $version
+          ./skse/package.ps1 -Version "${{ inputs.version }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release
+          name: RatchetMovement-${{ inputs.version }}
           path: target/release-pkg/*.zip
-
-      - name: Publish the release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/release-pkg/*.zip
-          body: |
-            Ratchet & Clank: Rift Apart's movement, weapons and bolts in Skyrim SE (SKSE).
-
-            This zip holds no game files. Unzip it and run `Install.bat`: it makes the mod from **your own** Rift Apart install. See [INSTALL.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
