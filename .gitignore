@@ -9,3 +9,25 @@
 /riftapart-assets
 __pycache__/
 *.pyc
+# This PC's own paths and notes, and agents' local state.
+/skse/local.psd1
+AGENTS.local.md
+.claude/
+.codex/
+# install.ps1 run from a checkout.
+/cache
+/work
+/output
+# Game-data formats: the extractors and converters make these on the user's PC from their own
+# Rift Apart. They never go into git.
+*.glb
+*.nif
+*.dds
+*.wem
+*.bnk
+*.bsa
+*.bik
+*.wav
+*.ogg
+*.opus
+*.esl

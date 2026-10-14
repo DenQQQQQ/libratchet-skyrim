@@ -13,8 +13,12 @@ back how to move.
   splits into pickups, the burst, bounces and rest, the swarm to the hero, and the HUD's
   counter, by the game's rules.
 - **`apps/sandbox`**: a Bevy test course to feel and measure the movement.
-- **Planned**: a Skyrim SE host (SKSE plugin) so the Dragonborn moves like Ratchet. See
-  [docs/skyrim-plan.md](docs/skyrim-plan.md).
+- **`skse/`**: the Skyrim SE host, an SKSE plugin: the player is Ratchet (Clank on his back), with
+  these moves, weapons and bolts, Rift Apart's camera, sounds and effects. See
+  [skse/README.md](skse/README.md).
+
+**To play it in Skyrim, see [INSTALL.md](INSTALL.md):** download the release, run `Install.bat`,
+and it makes the mod from your own copy of Rift Apart.
 
 Moves so far:
 
@@ -34,13 +38,16 @@ Bolts: a dummy knocked down drops the game's test dummy's 20 bolts, which burst 
 come to rest and swarm into Ratchet when he's near, counted on the game's bolt counter.
 
 Unofficial fan project, not affiliated with Insomniac Games, Sony, or Bethesda. Built with an AI
-coding agent (Claude Code).
+coding agent (Claude Code). **This repository contains no game files**: everything taken from the
+games (models, textures, animations, sounds, configs) is extracted on the user's own PC from their
+own copy.
 
 ## Where the numbers come from
 
 Rift Apart stores Ratchet's movement tuning in plain config files (`hero_traversal`,
-`hero_shared`, ...). This repo **does not contain them**. You extract them from **your own
-copy** of the game, and the library reads them at runtime:
+`hero_shared`, ...). This repo **does not contain those files**: you extract them from **your own
+copy** of the game, and the library reads them at runtime. (The code's defaults and a few rules
+use individual numbers measured or read from the game, marked as such where they're used.)
 
 ```bash
 git clone https://github.com/Tkachov/ALERT
@@ -163,6 +170,9 @@ See [MODLOG.md](MODLOG.md) for what's confirmed vs. assumed.
 
 ## Licence
 
-MIT, except the extractors that use ALERT (GPLv3): `tools/extract_riftapart_*.py`,
-`tools/riftapart_anim.py` and `tools/riftapart_wwise.py` (whose Vorbis repacking follows ww2ogg,
-BSD-3-Clause).
+MIT ([LICENSE](LICENSE)), except the files marked `SPDX-License-Identifier: GPL-3.0-or-later`,
+which are GPLv3 or later ([LICENSES/GPL-3.0-or-later.txt](LICENSES/GPL-3.0-or-later.txt)): the
+SKSE plugin in `skse/` (it links CommonLibSSE-NG), the installer scripts, and the extractors that
+use ALERT (`tools/extract_riftapart_*.py`, `tools/riftapart_anim.py`, `tools/riftapart_wwise.py`).
+`tools/riftapart_wwise.py`'s Vorbis repacking follows ww2ogg
+([BSD-3-Clause](LICENSES/BSD-3-Clause-ww2ogg.txt)).

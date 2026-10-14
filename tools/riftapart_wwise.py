@@ -3,8 +3,8 @@
 # event/container hierarchy, embedded and streamed .wem files, and repacks Wwise Vorbis .wem files
 # into standard Ogg Vorbis. Formats worked out for this project from the files themselves; the Vorbis
 # repacking follows ww2ogg, reimplemented here: Copyright (c) 2002, Xiph.org Foundation; Copyright
-# (c) 2009-2016, Adam Gashlin; used under its BSD-3-Clause license
-# (https://github.com/hcs64/ww2ogg/blob/master/COPYING). Reads assets through
+# (c) 2009-2016, Adam Gashlin; used under its BSD-3-Clause license, whose full text (conditions and
+# disclaimer) is in LICENSES/BSD-3-Clause-ww2ogg.txt. Reads assets through
 # ALERT's dat1lib (GPLv3). Runs on the user's own game files only.
 #
 # Layout:

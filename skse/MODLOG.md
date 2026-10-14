@@ -1159,3 +1159,44 @@ logo, its music, the startup video, the loading screens.
 - The full run: 48/48 (the "jump onto a top a hair too high" case failed once before, landing
   +1.52 m, and passed alone: an old borderline step-up, not from this).
 
+
+## 2026-10-14: a release for players: the installer, its guide, licences
+
+The owner wants the project public, with a guide and a script that makes the textures and the
+rest from a player's own Rift Apart. A player gets a release zip of our own files (no game data)
+and runs its `Install.bat`.
+
+- **`install.ps1` / `Install.bat`** (repo root, GPLv3):
+  - finds Rift Apart: Steam's `libraryfolders.vdf` and app 1895880's manifest, then the Epic
+    launcher's `.item` manifests, or `-RiftApart`;
+  - fetches its tools into `cache\` next to itself: uv 0.5.25 (SHA-256 pinned), which brings
+    Python 3.12 and pinned packages, all kept in `cache\`; ALERT at bc90ed9; ffmpeg from
+    `imageio-ffmpeg` when there's none on PATH (its gyan.dev build has libvorbis and the Opus
+    decoder);
+  - runs the five extractors into `work\`, and then `skse\convert.ps1` into the mod folder (default
+    `output\Ratchet Movement`; `-ModDir` writes straight into MO2's `mods`) next to the release's
+    `mod\` files;
+  - with `-Zip`, packs it for Vortex;
+  - on reinstall, empties a folder of this mod (so a running MO2 keeps it), keeping its INI and
+    MO2's `meta.ini`, and refuses any other non-empty folder.
+- **`skse\convert.ps1`**: the conversion `build.ps1 -Install` did, moved out unchanged (each
+  part again only when stale) so both use it. Its converters go through one `Invoke-Py`: Windows
+  PowerShell turns a tool's warnings on stderr into errors when its own output is redirected.
+- **`skse\package.ps1`**: builds, then makes `target\release-pkg\RatchetMovement-<v>.zip`:
+  - `mod\` (RatchetMovement.dll, the INI, ratchet.dll, the .esl), `tools\` (the extractors and
+    gdeflate_ffi.dll), and `skse\convert.ps1` with `skse\tools`;
+  - it refuses any file type outside scripts, docs and our binaries;
+  - zip entries are named with "/", because Windows PowerShell's `ZipFile.CreateFromDirectory`
+    writes "\";
+  - `.github/workflows/release.yml` runs it for a `v*` tag. Untested until the first push.
+- **The owner's paths** left `build.ps1` and `ingame.ps1` for the gitignored `skse\local.psd1`
+  (see `local.example.psd1`). Visual Studio is found with vswhere.
+- **Licences:** `LICENSE` (MIT), and in `LICENSES\` the GPL-3.0 text and ww2ogg's BSD-3 text.
+- **Checked:**
+  - the release zip, unzipped and run with no uv, Python or cargo on PATH: everything
+    downloaded, extracted and converted in 9 minutes, giving a 582 MB mod;
+  - against the owner's MO2 mod, file for file: the same 1139 files, minus the PDB. 1134 are
+    byte-identical. The rest are the owner's INI, plus Clank's model and clips and the pistol's
+    clips, whose Oct 7 extraction predates later extractor changes;
+  - installed into the MO2 mod with `-ModDir` (7 minutes with the cache), then the in-game
+    run: 48/48 passed (Ratchet posed, Clank playing, every move, weapon and bolt case).

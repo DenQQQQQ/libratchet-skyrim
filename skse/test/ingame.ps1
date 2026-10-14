@@ -38,12 +38,24 @@ param(
     # Record Skyrim's own audio (its process only) to audio.wav with the screenshots, and check it
     # for clipping and dropouts (test/audio_check.py).
     [switch]$Audio,
-    [string]$VsDir = "G:\dev\VS2022BuildTools",
-    [string]$Mo2 = "G:\Modding\MO2",
-    [string]$ModDir = "G:\Modding\MO2\mods\Ratchet Movement",
+    # MO2's folder, the mod's folder in it (default: <Mo2>\mods\Ratchet Movement), and Visual
+    # Studio for the audio recorder: from skse\local.psd1 when not given.
+    [string]$VsDir = "",
+    [string]$Mo2 = "",
+    [string]$ModDir = "",
     [string]$Executable = "SKSE"
 )
 $ErrorActionPreference = "Stop"
+
+$localFile = Join-Path $PSScriptRoot "..\local.psd1"
+if (Test-Path $localFile) {
+    $local = Import-PowerShellDataFile $localFile
+    foreach ($k in "VsDir", "Mo2", "ModDir") {
+        if (-not (Get-Variable $k -ValueOnly) -and $local[$k]) { Set-Variable $k $local[$k] }
+    }
+}
+if (-not $Mo2) { throw "MO2's folder: pass -Mo2 or set Mo2 in skse\local.psd1" }
+if (-not $ModDir) { $ModDir = Join-Path $Mo2 "mods\Ratchet Movement" }
 
 if (Get-Process SkyrimSE -ErrorAction SilentlyContinue) { throw "Skyrim is already running: close it first" }
 if (-not $NoBuild) {
@@ -71,6 +83,11 @@ if ($Audio) {
     if (-not (Test-Path $recorder) -or (Get-Item $source).LastWriteTime -gt (Get-Item $recorder).LastWriteTime) {
         $dir = Split-Path $recorder
         New-Item -ItemType Directory -Force $dir | Out-Null
+        if (-not $VsDir) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path $vswhere) { $VsDir = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath }
+            if (-not $VsDir) { throw "Visual Studio not found for the audio recorder: pass -VsDir" }
+        }
         $vcvars = Join-Path $VsDir "VC\Auxiliary\Build\vcvars64.bat"
         cmd /c "`"$vcvars`" >nul 2>nul && cl /nologo /EHsc /O2 /std:c++20 `"$source`" /Fo`"$dir\\`" /Fe`"$recorder`" ole32.lib mmdevapi.lib" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "couldn't build the audio recorder" }

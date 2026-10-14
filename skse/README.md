@@ -88,8 +88,13 @@ On foot, Skyrim's own jump, sprint, attacks, blocks, weapon drawing and shouts a
 hotkeys that pick his guns. On a horse everything is Skyrim's (an equipped gun is a dagger there).
 
 ## Build
-Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, and vcpkg (`VCPKG_ROOT`, or
-`G:\dev\tools\vcpkg`). Ninja comes from vcpkg.
+Needs MSVC (VS 2022 Build Tools), CMake 3.25+, Rust, uv, and vcpkg (`VCPKG_ROOT`). Ninja comes from
+vcpkg. This PC's paths (vcpkg, Visual Studio, the MO2 mod and profile, RAD Video Tools) can go in
+`skse\local.psd1` (not in git; copy `local.example.psd1`) instead of on the command line.
+
+Players don't build anything: they get the release zip and run its `Install.bat`
+([INSTALL.md](../INSTALL.md)). `skse\package.ps1` builds that zip (`target\release-pkg`): this
+project's own files only, no game data.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File skse\build.ps1            # build
@@ -102,16 +107,16 @@ powershell -ExecutionPolicy Bypass -File skse\build.ps1 -Install   # build and i
   10 minutes).
 - The build output is staged in `target/skse/cmake/stage/SKSE/Plugins`.
 
-`-Install` copies it into `G:\Modding\MO2\mods\Ratchet Movement` (a separate mod, easy to switch
-off), with the extracted Rift Apart configs from `riftapart-configs/` in
-`SKSE\Plugins\RatchetMovement\` and Ratchet's converted model. These are game data: they stay on
-this PC. It keeps an INI that's already there. Enable the mod in MO2's left pane and start Skyrim
-through SKSE.
+`-Install` copies it into the MO2 mod folder (`-ModDir`, e.g. `<MO2>\mods\Ratchet Movement`: a
+separate mod, easy to switch off), with the extracted Rift Apart configs from `riftapart-configs/`
+in `SKSE\Plugins\RatchetMovement\` and Ratchet's converted model (`skse\convert.ps1`, which the
+players' installer runs too). These are game data: they stay on this PC. It keeps an INI that's
+already there. Enable the mod in MO2's left pane and start Skyrim through SKSE.
 
 Every build also writes `RatchetMovement.esl` (`skse/tools/ratchet_plugin.py`, record by record:
 no Creation Kit, no game data): a light plugin with the two guns as weapons (`RatchetBurstPistol`
 0x800, `RatchetShatterbomb` 0x801; one-handed, either hand, on Ratchet's own models).
-`-Install` puts it in the mod's root and enables it in the MO2 profile (`-Mo2Profile`, Spire). MO2
+`-Install` puts it in the mod's root and enables it in the MO2 profile (`-Mo2Profile`). MO2
 keeps its own list while it runs and writes it over the files when the game closes: refresh it
 (F5) and check the plugin is ticked. Whether a game has had the guns is kept in SKSE's co-save.
 The plugin file also holds the loading screens' six models as statics (`RatchetLoad*`).
@@ -122,8 +127,8 @@ Rift Apart's start comes from `riftapart-assets/menu` (`tools/extract_riftapart_
 quads where the emblem was) and its music (`Sound/FX/RatchetMovement/menu`), and
 `skse/tools/ratchet_intro_to_skyrim.py` the startup video (`Video/BGS_Logo.bik`, Bink 1 at the
 original's 1920 x 1080 and 23.976 frames a second) with RAD's own encoder: RAD Video Tools
-(radgametools.com's `RADTools.7z`, its installer unpacked with 7-Zip rather than run, at
-`G:\dev\tools\RADTools\bin\radvideo64.exe`, or `-RadVideo`). Without it, Skyrim's video stays.
+(radgametools.com's `RADTools.7z`, its installer unpacked with 7-Zip rather than run; `-RadVideo`).
+Without it, Skyrim's video stays.
 The loading screens' models are converted with the others (`ratchet_to_skyrim.py --pose idle
 --loadscreen`: his idle's first frame baked into the skeleton, Skyrim's axes and units on a node
 under the root, which the loading screen moves).

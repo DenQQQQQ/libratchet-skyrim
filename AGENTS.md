@@ -24,7 +24,11 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
   `riftapart-assets/ratchet.glb` (gitignored game data), and the other models the sandbox
   uses (Clank, the weapons, the test dummy, the twelve bolt pickups: `--character bolts`). They
   need `tools/gdeflate-ffi` built in release (GDeflate decoder for the high-res data).
-- `crates/libratchet-ffi`: C API (`include/ratchet.h`) for the planned SKSE plugin.
+- `crates/libratchet-ffi`: C API (`include/ratchet.h`) for the SKSE plugin (`skse/`, see its README).
+- Players' install: `install.ps1` / `Install.bat` (GPLv3) extract from the player's own Rift Apart
+  and run `skse/convert.ps1` (the converters into Skyrim's formats, shared with `skse/build.ps1
+  -Install`); `skse/package.ps1` makes the release zip (our files only, checked for game data);
+  `.github/workflows/release.yml` runs it for a tag. The player's guide is `INSTALL.md`.
 - `crates/libarsenal`: weapons (trigger, ammo, spread, projectiles, lobbed aim, explosion
   falloff, shell and camera-shake data). Pure Rust like libratchet; the host does aiming,
   collision, damage and effects. Run `cargo test -p libarsenal` after weapon changes.
@@ -68,10 +72,9 @@ Project: Ratchet & Clank: Rift Apart movement, rebuilt as an engine-independent 
 - Don't run `cargo fmt` over the repo: there's no rustfmt config and the code isn't
   rustfmt-formatted (lines run to about 160 columns). Match the surrounding style by hand.
 
-## Environment (owner's PC)
-- Rust: `RUSTUP_HOME=G:\dev\tools\rust\rustup`, `CARGO_HOME=G:\dev\tools\rust\cargo`.
-- Ghidra 12.1.4 + JDK 21: `G:\dev\tools`. Project `../riftapart-decomp/ghidra/RiftApart.gpr`.
-  The MCP server `pyghidra` (pyghidra-mcp, stdio) is registered locally for this project and
-  opens that project. Only one process can have the project open at a time, so close it before
-  running headless Ghidra scripts.
-- Skyrim SE 1.6.1170 + SKSE, modded with MO2 at `G:\Modding\MO2`.
+## Environment
+- This PC's tool paths (Rust, Ghidra, MO2...) are in `AGENTS.local.md` when it exists (not in
+  git). Build paths for `skse/build.ps1` and `skse/test/ingame.ps1` go in `skse/local.psd1` (not
+  in git; see `skse/local.example.psd1`).
+- Publishing: nothing that identifies the owner (name, emails, usernames, machine paths, account
+  links) goes into commits, files or releases.

@@ -1,0 +1,53 @@
+# Builds the SKSE plugin, ratchet.dll and the GDeflate decoder, and makes the release zip
+# (skse/package.ps1): this project's own files only, no game data. A tag v* publishes it as a
+# GitHub release; a manual run keeps it as the run's artifact.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: astral-sh/setup-uv@v6
+
+      # vcpkg with its full history: skse/vcpkg.json pins a baseline commit.
+      - name: vcpkg
+        shell: powershell
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Build and package
+        shell: powershell
+        run: |
+          $env:VCPKG_ROOT = "$env:RUNNER_TEMP\vcpkg"
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "" }
+          ./skse/package.ps1 -Version $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: target/release-pkg/*.zip
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release-pkg/*.zip
+          body: |
+            Ratchet & Clank: Rift Apart's movement, weapons and bolts in Skyrim SE (SKSE).
+
+            This zip holds no game files. Unzip it and run `Install.bat`: it makes the mod from **your own** Rift Apart install. See [INSTALL.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).

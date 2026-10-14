@@ -5,7 +5,7 @@ before anything is installed. Items marked (verify) are from memory of how other
 mods work and need checking against CommonLibSSE-NG before relying on them.
 
 ## Target
-- Skyrim SE **1.6.1170** with SKSE (owner's install), managed by MO2 at `G:\Modding\MO2`.
+- Skyrim SE **1.6.1170** with SKSE (owner's install), managed by MO2.
 - Address Library, Nemesis and OAR are already installed there.
 
 ## Pieces
@@ -51,8 +51,7 @@ mods work and need checking against CommonLibSSE-NG before relying on them.
 
 ## Build tooling needed (not installed yet; needs the owner's OK)
 - vcpkg (git clone + bootstrap) for CommonLibSSE-NG and its dependencies.
-- CMake (installed) + Ninja (ships with VS Build Tools) + MSVC 14.44 (installed at
-  `G:\dev\VS2022BuildTools`).
+- CMake (installed) + Ninja (ships with VS Build Tools) + MSVC 14.44 (installed).
 
 ## Test plan
 1. Build the plugin, install it into MO2 as a **separate mod** (easy to switch off).
